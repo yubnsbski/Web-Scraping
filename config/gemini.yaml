@@ -1,0 +1,24 @@
+gemini:
+  enabled: true
+  model: gemini-1.5-flash
+  daily_request_limit: 40
+  monthly_request_limit: 1000
+  warning_threshold_ratio: 0.8
+  hard_stop_threshold_ratio: 0.95
+  usage_db_path: data/runtime/gemini_usage.sqlite
+  cache:
+    enabled: true
+    ttl_days: 30
+    db_path: data/runtime/llm_cache.sqlite
+  fallback:
+    on_daily_limit: local_summary
+    on_monthly_limit: skip_llm
+    on_error: cached_or_skip
+  allowed_tasks:
+    - rag_answer
+    - important_report_summary
+    - multimodal_chart_extraction
+  blocked_tasks:
+    - bulk_news_summary
+    - repeated_translation
+    - low_priority_sentiment
