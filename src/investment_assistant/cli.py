@@ -16,6 +16,7 @@ from investment_assistant.llm.factory import (
     load_gemini_runtime_config,
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
+from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.search import build_answer_context, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
@@ -183,6 +184,31 @@ def run_rag_answer_context(
     }
 
 
+def run_rag_answer(
+    *,
+    query: str,
+    config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    limit: int = 5,
+    call_real_api: bool = False,
+    client: TextGenerationClient | None = None,
+) -> dict[str, object]:
+    """Generate a citation-aware answer through the guarded LLM service path."""
+
+    chosen_client = (
+        client if client is not None else (None if call_real_api else LocalRagAnswerClient())
+    )
+    service = build_llm_service(config_path, client=chosen_client)
+    result = generate_rag_answer(
+        store=RagStore(db_path),
+        service=service,
+        query=query,
+        limit=limit,
+    )
+    result["call_real_api"] = call_real_api
+    return result
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI."""
 
@@ -245,6 +271,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     rag_context_parser.add_argument("--query", required=True)
     rag_context_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_context_parser.add_argument("--limit", type=int, default=5)
+
+    rag_answer_parser = subparsers.add_parser(
+        "rag-answer",
+        help="Generate a guarded citation-aware RAG answer; dry-run uses a local fake client",
+    )
+    rag_answer_parser.add_argument("--query", required=True)
+    rag_answer_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_answer_parser.add_argument("--limit", type=int, default=5)
+    rag_answer_parser.add_argument(
+        "--call-real-api",
+        action="store_true",
+        help="Use the real Gemini client through LlmService; omitted means local fake client",
+    )
 
     args = parser.parse_args(argv)
     config_path = str(args.config)
@@ -315,8 +354,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(context_result, ensure_ascii=False, indent=2))
         return 0
 
-    return 2
+    if args.command == "rag-answer":
+        answer_result = run_rag_answer(
+            query=str(args.query),
+            config_path=config_path,
+            db_path=str(args.db_path),
+            limit=int(args.limit),
+            call_real_api=bool(args.call_real_api),
+        )
+        print(json.dumps(answer_result, ensure_ascii=False, indent=2))
+        return 0
 
+    return 2
 
 def _format_budget_report(report: BudgetReport) -> str:
     return "\n".join(
