@@ -91,6 +91,25 @@ investment-assistant rag-answer-context --query "自動売買" --limit 5
 
 詳細は `docs/rag.md` を参照してください。
 
+## 投資スコアリングCLI（Phase 4）
+
+Gemini APIを呼ばずに、ユーザーが用意したローカルCSVを透明なルールで比較します。これは投資助言や売買推奨ではなく、最終判断はユーザー本人が行います。自動売買は行いません。
+
+```bash
+mkdir -p local_data
+cat > local_data/funds.csv <<'DATA'
+name,expense_ratio,annual_return,volatility,diversification_score
+低コスト全世界株式,0.12,0.065,0.18,0.95
+高コストテーマ型,1.20,0.080,0.35,0.45
+債券バランス型,0.35,0.030,0.08,0.80
+DATA
+
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3
+```
+
+詳細は `docs/scoring.md` を参照してください。
+
+
 ## LlmService factory
 
 `config/gemini.yaml` から、予算管理・キャッシュ・フォールバックを備えた `LlmService` を生成します。

@@ -21,6 +21,8 @@ data/
 artifacts/
 models/
 rag_index/
+local_docs/
+local_data/
 *.sqlite
 *.db
 

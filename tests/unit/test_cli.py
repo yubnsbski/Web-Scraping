@@ -167,3 +167,30 @@ def test_cli_rag_index_search_and_context(tmp_path, capsys):
     assert context_exit == 0
     context_output = json.loads(capsys.readouterr().out)
     assert "自動売買" in context_output["context"]
+
+def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    csv_path.write_text(
+        "name,expense_ratio,annual_return,volatility,diversification_score\n"
+        "低コスト全世界株式,0.12,0.065,0.18,0.95\n"
+        "高コストテーマ型,1.20,0.080,0.35,0.45\n"
+        "債券バランス型,0.35,0.030,0.08,0.80\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "scoring-rank",
+        "--path",
+        str(csv_path),
+        "--limit",
+        "2",
+    ])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
+    assert len(output["results"]) == 2
+    assert output["results"][0]["name"] == "低コスト全世界株式"
+    assert "投資助言" in output["disclaimer"]
+
