@@ -20,6 +20,8 @@ from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_a
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.search import build_answer_context, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
+from investment_assistant.scoring.models import ScoreWeights
+from investment_assistant.scoring.report import build_scoring_report
 
 
 @dataclass(frozen=True)
@@ -209,6 +211,27 @@ def run_rag_answer(
     return result
 
 
+
+def run_scoring_rank(
+    *,
+    path: str | Path,
+    limit: int = 10,
+    expense_weight: float = 0.30,
+    return_weight: float = 0.30,
+    volatility_weight: float = 0.25,
+    diversification_weight: float = 0.15,
+) -> dict[str, object]:
+    """Rank local CSV investment candidates without LLMs or trading actions."""
+
+    weights = ScoreWeights(
+        expense_ratio=expense_weight,
+        annual_return=return_weight,
+        volatility=volatility_weight,
+        diversification_score=diversification_weight,
+    )
+    return build_scoring_report(path=path, limit=limit, weights=weights)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI."""
 
@@ -284,6 +307,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Use the real Gemini client through LlmService; omitted means local fake client",
     )
+
+    scoring_parser = subparsers.add_parser(
+        "scoring-rank",
+        help="Rank local CSV investment candidates without Gemini or auto-trading",
+    )
+    scoring_parser.add_argument("--path", required=True)
+    scoring_parser.add_argument("--limit", type=int, default=10)
+    scoring_parser.add_argument("--expense-weight", type=float, default=0.30)
+    scoring_parser.add_argument("--return-weight", type=float, default=0.30)
+    scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
+    scoring_parser.add_argument("--diversification-weight", type=float, default=0.15)
 
     args = parser.parse_args(argv)
     config_path = str(args.config)
@@ -363,6 +397,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             call_real_api=bool(args.call_real_api),
         )
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "scoring-rank":
+        result = run_scoring_rank(
+            path=str(args.path),
+            limit=int(args.limit),
+            expense_weight=float(args.expense_weight),
+            return_weight=float(args.return_weight),
+            volatility_weight=float(args.volatility_weight),
+            diversification_weight=float(args.diversification_weight),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     return 2
