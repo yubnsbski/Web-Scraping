@@ -9,12 +9,16 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.ingestion.fetcher import SafeFetcher
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
     build_llm_service,
     load_gemini_runtime_config,
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
+from investment_assistant.rag.chunker import chunk_text, load_document
+from investment_assistant.rag.search import build_answer_context, search_chunks
+from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,75 @@ def run_gemini_live(
     }
 
 
+def run_fetch_url(
+    *,
+    url: str,
+    dry_run: bool = False,
+    preview_chars: int = 500,
+) -> dict[str, object]:
+    """Run a safe URL fetch with robots, rate limiting, and cache."""
+
+    fetcher = SafeFetcher()
+    result = fetcher.fetch(url, dry_run=dry_run, preview_chars=preview_chars)
+    return asdict(result)
+
+
+def run_rag_index(
+    *,
+    path: str | Path,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    max_chars: int = 800,
+    overlap_chars: int = 120,
+) -> dict[str, object]:
+    """Index a local text/Markdown file into the local RAG store."""
+
+    document = load_document(path)
+    chunks = chunk_text(
+        source=document.source,
+        text=document.text,
+        content_hash=document.content_hash,
+        max_chars=max_chars,
+        overlap_chars=overlap_chars,
+    )
+    store = RagStore(db_path)
+    chunk_count = store.upsert_document(document, chunks)
+    return {
+        "source": document.source,
+        "content_hash": document.content_hash,
+        "chunks_indexed": chunk_count,
+        "db_path": str(db_path),
+    }
+
+
+def run_rag_search(
+    *,
+    query: str,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    limit: int = 5,
+) -> list[dict[str, object]]:
+    """Search the local RAG store without calling an LLM."""
+
+    store = RagStore(db_path)
+    return [asdict(result) for result in search_chunks(store, query=query, limit=limit)]
+
+
+def run_rag_answer_context(
+    *,
+    query: str,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    limit: int = 5,
+) -> dict[str, object]:
+    """Return citation-friendly local context for a query without calling an LLM."""
+
+    store = RagStore(db_path)
+    results = search_chunks(store, query=query, limit=limit)
+    return {
+        "query": query,
+        "context": build_answer_context(results),
+        "results": [asdict(result) for result in results],
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI."""
 
@@ -135,6 +208,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Required safety acknowledgement because this consumes Gemini quota",
     )
+
+    fetch_parser = subparsers.add_parser(
+        "fetch-url",
+        help="Safely fetch an http(s) URL with robots.txt, cache, and rate limiting",
+    )
+    fetch_parser.add_argument("--url", required=True)
+    fetch_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only check robots.txt and planned fetch safety; do not fetch target URL",
+    )
+    fetch_parser.add_argument("--preview-chars", type=int, default=500)
+
+    rag_index_parser = subparsers.add_parser(
+        "rag-index",
+        help="Index a local text/Markdown file into the local RAG store",
+    )
+    rag_index_parser.add_argument("--path", required=True)
+    rag_index_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_index_parser.add_argument("--max-chars", type=int, default=800)
+    rag_index_parser.add_argument("--overlap-chars", type=int, default=120)
+
+    rag_search_parser = subparsers.add_parser(
+        "rag-search",
+        help="Search indexed local RAG chunks without calling an LLM",
+    )
+    rag_search_parser.add_argument("--query", required=True)
+    rag_search_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_search_parser.add_argument("--limit", type=int, default=5)
+
+    rag_context_parser = subparsers.add_parser(
+        "rag-answer-context",
+        help="Print citation-friendly local context for a query without calling an LLM",
+    )
+    rag_context_parser.add_argument("--query", required=True)
+    rag_context_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_context_parser.add_argument("--limit", type=int, default=5)
 
     args = parser.parse_args(argv)
     config_path = str(args.config)
@@ -166,6 +276,43 @@ def main(argv: Sequence[str] | None = None) -> int:
             prompt=str(args.prompt),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "fetch-url":
+        result = run_fetch_url(
+            url=str(args.url),
+            dry_run=bool(args.dry_run),
+            preview_chars=int(args.preview_chars),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "rag-index":
+        result = run_rag_index(
+            path=str(args.path),
+            db_path=str(args.db_path),
+            max_chars=int(args.max_chars),
+            overlap_chars=int(args.overlap_chars),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "rag-search":
+        search_result = run_rag_search(
+            query=str(args.query),
+            db_path=str(args.db_path),
+            limit=int(args.limit),
+        )
+        print(json.dumps(search_result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "rag-answer-context":
+        context_result = run_rag_answer_context(
+            query=str(args.query),
+            db_path=str(args.db_path),
+            limit=int(args.limit),
+        )
+        print(json.dumps(context_result, ensure_ascii=False, indent=2))
         return 0
 
     return 2

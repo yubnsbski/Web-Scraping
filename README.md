@@ -60,6 +60,37 @@ investment-assistant smoke --prompt "hello"
 python3 scripts/smoke_llm_service.py
 ```
 
+## 安全なURL取得CLI（Phase 2）
+
+`robots.txt` 確認、domain単位のレート制限、SQLiteキャッシュを通じてURLを安全に取得します。`--dry-run` では対象URL本体を取得せず、robots.txt確認だけを行います。
+
+```bash
+investment-assistant fetch-url --url https://example.com/funds --dry-run
+investment-assistant fetch-url --url https://example.com/funds --preview-chars 300
+```
+
+詳細は `docs/data_ingestion.md` を参照してください。
+
+## ローカルRAG CLI（Phase 3）
+
+Gemini APIを呼ばずに、ローカル文書をチャンク化してSQLiteに保存し、キーワード検索と引用用context作成を行います。
+
+```bash
+mkdir -p local_docs
+cat > local_docs/sample.md <<'EOF'
+# サンプル投資メモ
+
+投資判断はユーザー本人が行います。
+自動売買は行いません。
+EOF
+
+investment-assistant rag-index --path local_docs/sample.md
+investment-assistant rag-search --query "投資判断" --limit 5
+investment-assistant rag-answer-context --query "自動売買" --limit 5
+```
+
+詳細は `docs/rag.md` を参照してください。
+
 ## LlmService factory
 
 `config/gemini.yaml` から、予算管理・キャッシュ・フォールバックを備えた `LlmService` を生成します。

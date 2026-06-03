@@ -88,3 +88,82 @@ def test_cli_gemini_live_requires_explicit_acknowledgement(tmp_path, capsys):
 
     assert exit_code == 2
     assert "--call-real-api" in capsys.readouterr().out
+
+
+def test_cli_fetch_url_dry_run_outputs_json(monkeypatch, capsys):
+    class FakeFetcher:
+        def fetch(self, url: str, *, dry_run: bool, preview_chars: int):
+            from investment_assistant.ingestion.fetcher import FetchResult
+
+            assert url == "https://example.com/funds"
+            assert dry_run is True
+            assert preview_chars == 120
+            return FetchResult(
+                url=url,
+                status_code=None,
+                source="dry_run",
+                allowed_by_robots=True,
+                robots_url="https://example.com/robots.txt",
+                bytes_read=0,
+                content_type=None,
+                text_preview=None,
+                dry_run=True,
+            )
+
+    monkeypatch.setattr("investment_assistant.cli.SafeFetcher", FakeFetcher)
+
+    exit_code = main([
+        "fetch-url",
+        "--url",
+        "https://example.com/funds",
+        "--dry-run",
+        "--preview-chars",
+        "120",
+    ])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "dry_run"
+    assert output["allowed_by_robots"] is True
+
+
+def test_cli_rag_index_search_and_context(tmp_path, capsys):
+    db_path = tmp_path / "rag.sqlite"
+    doc_path = tmp_path / "memo.md"
+    doc_path.write_text(
+        "投資判断はユーザーが行います。\n自動売買は行いません。",
+        encoding="utf-8",
+    )
+
+    index_exit = main([
+        "rag-index",
+        "--path",
+        str(doc_path),
+        "--db-path",
+        str(db_path),
+    ])
+    assert index_exit == 0
+    index_output = json.loads(capsys.readouterr().out)
+    assert index_output["chunks_indexed"] == 1
+
+    search_exit = main([
+        "rag-search",
+        "--query",
+        "投資判断",
+        "--db-path",
+        str(db_path),
+    ])
+    assert search_exit == 0
+    search_output = json.loads(capsys.readouterr().out)
+    assert search_output[0]["source"] == str(doc_path)
+
+    context_exit = main([
+        "rag-answer-context",
+        "--query",
+        "自動売買",
+        "--db-path",
+        str(db_path),
+    ])
+    assert context_exit == 0
+    context_output = json.loads(capsys.readouterr().out)
+    assert "自動売買" in context_output["context"]

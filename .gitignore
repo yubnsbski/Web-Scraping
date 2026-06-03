@@ -16,6 +16,7 @@ venv/
 !.env.example
 
 # Runtime/data artifacts
+.cache/
 data/
 artifacts/
 models/

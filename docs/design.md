@@ -30,10 +30,13 @@ Codex中心で開発・保守を自動化し、ユーザーは commit、PR、本
 
 - 公式APIまたはrobots.txtと利用規約を尊重した取得を行う。
 - レート制限とキャッシュを実装する。
+- `investment_assistant.ingestion` に安全なfetcher、robots確認、domain別レート制限、SQLite HTTPキャッシュを置く。
+- 取得処理の単体テストでは実ネットワークを呼ばず、fake transportを使う。
 
 ### Phase 3: RAG
 
 - 文書チャンク、メタデータ、ローカル検索、引用付き回答を実装する。
+- まずはGemini APIを呼ばないローカルRAG基盤として、SQLite保存とキーワード検索を実装する。
 
 ### Phase 4: 投資スコアリング
 
