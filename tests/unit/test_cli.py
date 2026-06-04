@@ -16,11 +16,11 @@ gemini:
   monthly_request_limit: 20
   warning_threshold_ratio: 0.8
   hard_stop_threshold_ratio: 1.0
-  usage_db_path: {tmp_path / 'usage.sqlite'}
+  usage_db_path: {tmp_path / "usage.sqlite"}
   cache:
     enabled: true
     ttl_days: 30
-    db_path: {tmp_path / 'cache.sqlite'}
+    db_path: {tmp_path / "cache.sqlite"}
   fallback:
     on_daily_limit: local_summary
     on_monthly_limit: skip_llm
@@ -78,13 +78,15 @@ def test_cli_smoke_outputs_json(tmp_path, capsys):
 def test_cli_gemini_live_requires_explicit_acknowledgement(tmp_path, capsys):
     config_path = write_config(tmp_path)
 
-    exit_code = main([
-        "--config",
-        str(config_path),
-        "gemini-live",
-        "--prompt",
-        "hello",
-    ])
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "gemini-live",
+            "--prompt",
+            "hello",
+        ]
+    )
 
     assert exit_code == 2
     assert "--call-real-api" in capsys.readouterr().out
@@ -112,14 +114,16 @@ def test_cli_fetch_url_dry_run_outputs_json(monkeypatch, capsys):
 
     monkeypatch.setattr("investment_assistant.cli.SafeFetcher", FakeFetcher)
 
-    exit_code = main([
-        "fetch-url",
-        "--url",
-        "https://example.com/funds",
-        "--dry-run",
-        "--preview-chars",
-        "120",
-    ])
+    exit_code = main(
+        [
+            "fetch-url",
+            "--url",
+            "https://example.com/funds",
+            "--dry-run",
+            "--preview-chars",
+            "120",
+        ]
+    )
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
@@ -135,38 +139,45 @@ def test_cli_rag_index_search_and_context(tmp_path, capsys):
         encoding="utf-8",
     )
 
-    index_exit = main([
-        "rag-index",
-        "--path",
-        str(doc_path),
-        "--db-path",
-        str(db_path),
-    ])
+    index_exit = main(
+        [
+            "rag-index",
+            "--path",
+            str(doc_path),
+            "--db-path",
+            str(db_path),
+        ]
+    )
     assert index_exit == 0
     index_output = json.loads(capsys.readouterr().out)
     assert index_output["chunks_indexed"] == 1
 
-    search_exit = main([
-        "rag-search",
-        "--query",
-        "投資判断",
-        "--db-path",
-        str(db_path),
-    ])
+    search_exit = main(
+        [
+            "rag-search",
+            "--query",
+            "投資判断",
+            "--db-path",
+            str(db_path),
+        ]
+    )
     assert search_exit == 0
     search_output = json.loads(capsys.readouterr().out)
     assert search_output[0]["source"] == str(doc_path)
 
-    context_exit = main([
-        "rag-answer-context",
-        "--query",
-        "自動売買",
-        "--db-path",
-        str(db_path),
-    ])
+    context_exit = main(
+        [
+            "rag-answer-context",
+            "--query",
+            "自動売買",
+            "--db-path",
+            str(db_path),
+        ]
+    )
     assert context_exit == 0
     context_output = json.loads(capsys.readouterr().out)
     assert "自動売買" in context_output["context"]
+
 
 def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
     csv_path = tmp_path / "funds.csv"
@@ -178,13 +189,15 @@ def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
         encoding="utf-8",
     )
 
-    exit_code = main([
-        "scoring-rank",
-        "--path",
-        str(csv_path),
-        "--limit",
-        "2",
-    ])
+    exit_code = main(
+        [
+            "scoring-rank",
+            "--path",
+            str(csv_path),
+            "--limit",
+            "2",
+        ]
+    )
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
@@ -194,3 +207,56 @@ def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
     assert output["results"][0]["name"] == "低コスト全世界株式"
     assert "投資助言" in output["disclaimer"]
 
+
+def test_cli_scoring_validate_outputs_valid_json(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    csv_path.write_text(
+        "name,expense_ratio,annual_return,volatility,diversification_score\n"
+        "低コスト全世界株式,0.12,0.065,0.18,0.95\n"
+        "高コストテーマ型,1.20,0.080,0.35,0.45\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "scoring-validate",
+            "--path",
+            str(csv_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is True
+    assert output["rows"] == 2
+    assert output["warnings"] == []
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
+
+
+def test_cli_scoring_validate_outputs_errors_for_invalid_csv(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    csv_path.write_text(
+        "name,expense_ratio,annual_return,volatility,diversification_score\n"
+        ",0.12,0.065,0.18,0.95\n"
+        "BadDiversification,0.1,0.05,0.2,1.2\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "scoring-validate",
+            "--path",
+            str(csv_path),
+        ]
+    )
+
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is False
+    assert output["rows"] == 2
+    assert len(output["errors"]) == 2
+    assert any("name is required" in error for error in output["errors"])
+    assert any(
+        "diversification_score must be between 0 and 1" in error for error in output["errors"]
+    )

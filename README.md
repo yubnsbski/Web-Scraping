@@ -107,6 +107,8 @@ DATA
 investment-assistant scoring-rank --path local_data/funds.csv --limit 3
 ```
 
+`scoring-validate` はスコア計算前にCSVの入力検証だけを行い、成功時は `valid=true`、行数、警告一覧をJSONで返します。失敗時は `valid=false` とエラー一覧をJSONで返します。
+
 詳細は `docs/scoring.md` を参照してください。
 
 
