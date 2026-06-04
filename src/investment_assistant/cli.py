@@ -22,6 +22,7 @@ from investment_assistant.rag.search import build_answer_context, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
+from investment_assistant.scoring.scorer import validate_scoring_csv
 
 
 @dataclass(frozen=True)
@@ -211,7 +212,6 @@ def run_rag_answer(
     return result
 
 
-
 def run_scoring_rank(
     *,
     path: str | Path,
@@ -229,7 +229,14 @@ def run_scoring_rank(
         volatility=volatility_weight,
         diversification_score=diversification_weight,
     )
-    return build_scoring_report(path=path, limit=limit, weights=weights)
+    report: dict[str, object] = build_scoring_report(path=path, limit=limit, weights=weights)
+    return report
+
+
+def run_scoring_validate(*, path: str | Path) -> dict[str, object]:
+    """Validate a local scoring CSV without LLMs, scoring, or trading actions."""
+
+    return validate_scoring_csv(path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -319,6 +326,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
     scoring_parser.add_argument("--diversification-weight", type=float, default=0.15)
 
+    scoring_validate_parser = subparsers.add_parser(
+        "scoring-validate",
+        help="Validate a local scoring CSV without Gemini, scoring, or auto-trading",
+    )
+    scoring_validate_parser.add_argument("--path", required=True)
+
     args = parser.parse_args(argv)
     config_path = str(args.config)
 
@@ -399,6 +412,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "scoring-validate":
+        validation_result = run_scoring_validate(path=str(args.path))
+        print(json.dumps(validation_result, ensure_ascii=False, indent=2))
+        return 0 if bool(validation_result["valid"]) else 1
+
     if args.command == "scoring-rank":
         result = run_scoring_rank(
             path=str(args.path),
@@ -412,6 +430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     return 2
+
 
 def _format_budget_report(report: BudgetReport) -> str:
     return "\n".join(
