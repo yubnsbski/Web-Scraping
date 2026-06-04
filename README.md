@@ -104,7 +104,15 @@ name,expense_ratio,annual_return,volatility,diversification_score
 債券バランス型,0.35,0.030,0.08,0.80
 DATA
 
+investment-assistant scoring-validate --path local_data/funds.csv
 investment-assistant scoring-rank --path local_data/funds.csv --limit 3
+```
+
+ランキング結果をJSONファイルに保存する場合は `--output` を指定します。既存ファイルは誤上書きを防ぐため、デフォルトでは上書きしません。上書きする場合だけ `--overwrite` を明示します。
+
+```bash
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --output local_data/ranking.json
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --output local_data/ranking.json --overwrite
 ```
 
 詳細は `docs/scoring.md` を参照してください。
