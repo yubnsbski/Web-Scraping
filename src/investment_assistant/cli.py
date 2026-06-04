@@ -318,6 +318,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     scoring_parser.add_argument("--return-weight", type=float, default=0.30)
     scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
     scoring_parser.add_argument("--diversification-weight", type=float, default=0.15)
+    scoring_parser.add_argument(
+        "--output",
+        help="Write scoring-rank JSON result to this file instead of printing the full report",
+    )
 
     args = parser.parse_args(argv)
     config_path = str(args.config)
@@ -408,6 +412,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             volatility_weight=float(args.volatility_weight),
             diversification_weight=float(args.diversification_weight),
         )
+        output = getattr(args, "output", None)
+        if output:
+            output_path = Path(str(output))
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print(
+                json.dumps(
+                    {
+                        "output": str(output_path),
+                        "count": result["count"],
+                        "call_real_api": False,
+                        "auto_trading": False,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 

@@ -194,3 +194,45 @@ def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
     assert output["results"][0]["name"] == "低コスト全世界株式"
     assert "投資助言" in output["disclaimer"]
 
+
+
+def test_cli_scoring_rank_writes_output_file(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    output_path = tmp_path / "reports" / "ranking.json"
+    csv_path.write_text(
+        "name,expense_ratio,annual_return,volatility,diversification_score\n"
+        "低コスト全世界株式,0.12,0.065,0.18,0.95\n"
+        "高コストテーマ型,1.20,0.080,0.35,0.45\n"
+        "債券バランス型,0.35,0.030,0.08,0.80\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "scoring-rank",
+            "--path",
+            str(csv_path),
+            "--limit",
+            "2",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert output_path.exists()
+
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["source"] == str(csv_path)
+    assert saved["count"] == 3
+    assert len(saved["results"]) == 2
+    assert saved["call_real_api"] is False
+    assert saved["auto_trading"] is False
+
+    stdout = json.loads(capsys.readouterr().out)
+    assert stdout == {
+        "output": str(output_path),
+        "count": 3,
+        "call_real_api": False,
+        "auto_trading": False,
+    }
