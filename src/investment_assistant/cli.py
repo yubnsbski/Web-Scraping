@@ -325,6 +325,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     scoring_parser.add_argument("--return-weight", type=float, default=0.30)
     scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
     scoring_parser.add_argument("--diversification-weight", type=float, default=0.15)
+    scoring_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="json",
+        help="Output JSON by default, or print a compact local-only table",
+    )
+    scoring_parser.add_argument(
+        "--output",
+        help="Write scoring-rank JSON result to this file instead of printing the full report",
+    )
 
     scoring_validate_parser = subparsers.add_parser(
         "scoring-validate",
@@ -349,6 +359,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             task_type=str(args.task_type),
             prompt=str(args.prompt),
         )
+        if str(getattr(args, "format", "json")) == "table" and not getattr(args, "output", None):
+            print(_format_scoring_rank_table(result))
+            return 0
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
@@ -426,10 +439,72 @@ def main(argv: Sequence[str] | None = None) -> int:
             volatility_weight=float(args.volatility_weight),
             diversification_weight=float(args.diversification_weight),
         )
+        if getattr(args, "output", None):
+            output_path = Path(str(args.output))
+            output_path.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print(json.dumps({"output_path": str(output_path)}, ensure_ascii=False, indent=2))
+            return 0
+        if str(getattr(args, "format", "json")) == "table":
+            print(_format_scoring_rank_table(result))
+            return 0
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     return 2
+
+
+def _count_report_results(report: dict[str, object]) -> int:
+    """Return the number of result rows in a JSON-like report."""
+
+    results = report.get("results", [])
+    if isinstance(results, list):
+        return len(results)
+    return 0
+
+
+def _format_scoring_rank_table(report: dict[str, object]) -> str:
+    """Format a compact non-advisory scoring rank table for terminal output."""
+
+    header = "rank | name | total_score | expense | return | volatility | diversification"
+    separator = "-" * len(header)
+    lines = [header, separator]
+    results = report.get("results", [])
+    if not isinstance(results, list):
+        results = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics", {})
+        score = item.get("score", {})
+        if not isinstance(metrics, dict) or not isinstance(score, dict):
+            continue
+        lines.append(
+            " | ".join(
+                (
+                    str(item.get("rank", "")),
+                    str(item.get("name", "")),
+                    _format_table_number(score.get("total_score")),
+                    _format_table_number(metrics.get("expense_ratio")),
+                    _format_table_number(metrics.get("annual_return")),
+                    _format_table_number(metrics.get("volatility")),
+                    _format_table_number(metrics.get("diversification_score")),
+                )
+            )
+        )
+
+    disclaimer = report.get("disclaimer")
+    if disclaimer:
+        lines.extend(("", str(disclaimer)))
+    return "\n".join(lines)
+
+
+def _format_table_number(value: object) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:.6g}"
+    return str(value)
 
 
 def _format_budget_report(report: BudgetReport) -> str:

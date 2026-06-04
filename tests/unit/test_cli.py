@@ -208,6 +208,63 @@ def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
     assert "投資助言" in output["disclaimer"]
 
 
+def test_cli_scoring_rank_outputs_table_format(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    csv_path.write_text(
+        "name,expense_ratio,annual_return,volatility,diversification_score\n"
+        "低コスト全世界株式,0.12,0.065,0.18,0.95\n"
+        "高コストテーマ型,1.20,0.080,0.35,0.45\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "scoring-rank",
+            "--path",
+            str(csv_path),
+            "--format",
+            "table",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "rank | name | total_score" in output
+    assert "低コスト全世界株式" in output
+    assert "投資助言" in output
+
+
+def test_cli_scoring_rank_writes_json_output_file(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    output_path = tmp_path / "scoring-report.json"
+    csv_path.write_text(
+        "name,expense_ratio,annual_return,volatility,diversification_score\n"
+        "低コスト全世界株式,0.12,0.065,0.18,0.95\n"
+        "高コストテーマ型,1.20,0.080,0.35,0.45\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "scoring-rank",
+            "--path",
+            str(csv_path),
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output.get("output_path", output.get("output")) == str(output_path)
+    if "count" in output:
+        assert output["count"] == 2
+    assert written["call_real_api"] is False
+    assert written["auto_trading"] is False
+    assert written["results"][0]["name"] == "低コスト全世界株式"
+
+
 def test_cli_scoring_validate_outputs_valid_json(tmp_path, capsys):
     csv_path = tmp_path / "funds.csv"
     csv_path.write_text(
@@ -229,6 +286,7 @@ def test_cli_scoring_validate_outputs_valid_json(tmp_path, capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["valid"] is True
     assert output["rows"] == 2
+    assert output.get("errors", []) == []
     assert output["warnings"] == []
     assert output["call_real_api"] is False
     assert output["auto_trading"] is False
