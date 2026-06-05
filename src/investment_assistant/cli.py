@@ -321,6 +321,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     scoring_parser.add_argument("--path", required=True)
     scoring_parser.add_argument("--limit", type=int, default=10)
+    scoring_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="json",
+        help="Print scoring-rank output as JSON or a human-readable comparison table",
+    )
     scoring_parser.add_argument("--expense-weight", type=float, default=0.30)
     scoring_parser.add_argument("--return-weight", type=float, default=0.30)
     scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
