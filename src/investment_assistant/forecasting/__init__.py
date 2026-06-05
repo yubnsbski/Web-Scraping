@@ -20,6 +20,7 @@ from investment_assistant.forecasting.metrics import (
     root_mean_squared_error,
 )
 from investment_assistant.forecasting.models import ForecastPoint
+from investment_assistant.forecasting.report import build_backtest_report
 from investment_assistant.forecasting.validation import (
     ForecastValidationError,
     load_forecast_csv,
@@ -31,6 +32,7 @@ __all__ = [
     "ForecastValidationError",
     "backtest_moving_average",
     "backtest_naive",
+    "build_backtest_report",
     "load_forecast_csv",
     "mean_absolute_error",
     "mean_absolute_percentage_error",
