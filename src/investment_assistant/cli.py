@@ -38,6 +38,16 @@ FORECASTING_DISCLAIMER = (
 )
 
 
+def _forecasting_safety_fields() -> dict[str, object]:
+    """Return common Phase 5 safety metadata for forecasting CLI responses."""
+
+    return {
+        "call_real_api": False,
+        "auto_trading": False,
+        "disclaimer": FORECASTING_DISCLAIMER,
+    }
+
+
 @dataclass(frozen=True)
 class BudgetReport:
     """CLI-friendly budget report."""
@@ -297,6 +307,29 @@ def run_forecast_baseline(
     }
 
 
+def run_forecast_validate(*, path: str | Path) -> dict[str, object]:
+    """Validate a local forecasting CSV without Gemini or trading actions."""
+
+    try:
+        points = load_forecast_csv(path)
+    except ForecastValidationError as exc:
+        return {
+            "valid": False,
+            "errors": [str(exc)],
+            **_forecasting_safety_fields(),
+        }
+
+    symbols = sorted({point.symbol for point in points if point.symbol is not None})
+    return {
+        "valid": True,
+        "rows": len(points),
+        "start_date": points[0].date.isoformat(),
+        "end_date": points[-1].date.isoformat(),
+        "symbols": symbols,
+        **_forecasting_safety_fields(),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI."""
 
@@ -394,6 +427,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Write scoring-rank JSON result to this file instead of printing the full report",
     )
 
+    forecast_validate_parser = subparsers.add_parser(
+        "forecast-validate",
+        help="Validate a local forecasting CSV without Gemini or auto-trading",
+    )
+    forecast_validate_parser.add_argument("--path", required=True)
+
+    forecast_baseline_parser = subparsers.add_parser(
+        "forecast-baseline",
+        help="Run a local baseline forecast without Gemini or auto-trading",
+    )
+    forecast_baseline_parser.add_argument("--path", required=True)
+    forecast_baseline_parser.add_argument("--horizon", type=int, default=3)
+    forecast_baseline_parser.add_argument(
+        "--method",
+        choices=("naive", "moving-average"),
+        default="naive",
+    )
+    forecast_baseline_parser.add_argument("--window", type=int, default=3)
+
     args = parser.parse_args(argv)
     config_path = str(args.config)
 
@@ -473,6 +525,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "forecast-validate":
+        validation_result = run_forecast_validate(path=str(args.path))
+        print(json.dumps(validation_result, ensure_ascii=False, indent=2))
+        return 0 if bool(validation_result["valid"]) else 1
+
+    if args.command == "forecast-baseline":
+        baseline_result = run_forecast_baseline(
+            path=str(args.path),
+            horizon=int(args.horizon),
+            method=str(args.method),
+            window=int(args.window),
+        )
+        print(json.dumps(baseline_result, ensure_ascii=False, indent=2))
+        return 0 if bool(baseline_result["valid"]) else 1
 
     if args.command == "scoring-rank":
         result = run_scoring_rank(
