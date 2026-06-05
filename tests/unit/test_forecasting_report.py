@@ -16,6 +16,7 @@ def test_build_backtest_report_includes_metrics_safety_and_disclaimer():
         mae=1.0,
         rmse=1.0,
         mape=0.01,
+        directional_accuracy=0.5,
     )
 
     report = build_backtest_report(result)
@@ -30,6 +31,7 @@ def test_build_backtest_report_includes_metrics_safety_and_disclaimer():
         "mae": 1.0,
         "rmse": 1.0,
         "mape": 0.01,
+        "directional_accuracy": 0.5,
     }
     assert report["series"] == {
         "actual": [103.0, 105.0],
