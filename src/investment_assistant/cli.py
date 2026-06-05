@@ -9,6 +9,14 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.forecasting.baseline import (
+    moving_average_forecast,
+    naive_forecast,
+)
+from investment_assistant.forecasting.validation import (
+    ForecastValidationError,
+    load_forecast_csv,
+)
 from investment_assistant.ingestion.fetcher import SafeFetcher
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
@@ -23,6 +31,22 @@ from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
 from investment_assistant.scoring.scorer import validate_scoring_csv
+
+FORECASTING_DISCLAIMER = (
+    "この検証結果は、ユーザー提供データの形式確認です。投資助言、売買推奨、"
+    "将来リターンの保証ではありません。最終的な投資判断はユーザー本人が行います。"
+    "自動売買は行いません。"
+)
+
+
+def _forecasting_safety_fields() -> dict[str, object]:
+    """Return common Phase 5 safety metadata for forecasting CLI responses."""
+
+    return {
+        "call_real_api": False,
+        "auto_trading": False,
+        "disclaimer": FORECASTING_DISCLAIMER,
+    }
 
 
 @dataclass(frozen=True)
@@ -237,6 +261,58 @@ def run_scoring_validate(*, path: str | Path) -> dict[str, object]:
     """Validate a local scoring CSV without LLMs, scoring, or trading actions."""
 
     return validate_scoring_csv(path)
+
+
+def run_forecast_baseline(
+    *,
+    path: str | Path,
+    horizon: int,
+    method: str,
+    window: int,
+) -> dict[str, object]:
+    """Run a local baseline forecast without Gemini or trading actions."""
+
+    try:
+        points = load_forecast_csv(path)
+        if method == "naive":
+            forecast_values = naive_forecast(points, horizon=horizon)
+            selected_window: int | None = None
+        elif method == "moving-average":
+            forecast_values = moving_average_forecast(
+                points,
+                horizon=horizon,
+                window=window,
+            )
+            selected_window = window
+        else:
+            raise ValueError(f"unsupported forecast method: {method}")
+    except (ForecastValidationError, ValueError) as exc:
+        return {
+            "valid": False,
+            "errors": [str(exc)],
+            "call_real_api": False,
+            "auto_trading": False,
+            "disclaimer": FORECASTING_DISCLAIMER,
+        }
+
+    symbols = sorted({point.symbol for point in points if point.symbol is not None})
+    forecast = [
+        {"step": step, "value": value} for step, value in enumerate(forecast_values, start=1)
+    ]
+    return {
+        "valid": True,
+        "method": method,
+        "horizon": horizon,
+        "window": selected_window,
+        "input_rows": len(points),
+        "start_date": points[0].date.isoformat(),
+        "end_date": points[-1].date.isoformat(),
+        "symbols": symbols,
+        "forecast": forecast,
+        "call_real_api": False,
+        "auto_trading": False,
+        "disclaimer": FORECASTING_DISCLAIMER,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -469,8 +545,6 @@ def _count_report_results(report: dict[str, object]) -> int:
     if isinstance(results, list):
         return len(results)
     return 0
-
-
 def _format_scoring_rank_table(report: dict[str, object]) -> str:
     """Format a compact non-advisory scoring rank table for terminal output."""
 
