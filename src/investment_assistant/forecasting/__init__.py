@@ -14,7 +14,9 @@ from investment_assistant.forecasting.baseline import (
     moving_average_forecast,
     naive_forecast,
 )
+from investment_assistant.forecasting.diagnostics import forecast_input_warnings
 from investment_assistant.forecasting.metrics import (
+    directional_accuracy,
     mean_absolute_error,
     mean_absolute_percentage_error,
     root_mean_squared_error,
@@ -30,9 +32,11 @@ __all__ = [
     "BacktestResult",
     "ForecastPoint",
     "ForecastValidationError",
+    "forecast_input_warnings",
     "backtest_moving_average",
     "backtest_naive",
     "build_backtest_report",
+    "directional_accuracy",
     "load_forecast_csv",
     "mean_absolute_error",
     "mean_absolute_percentage_error",

@@ -25,6 +25,7 @@ def build_backtest_report(result: BacktestResult) -> dict[str, object]:
             "mae": result.mae,
             "rmse": result.rmse,
             "mape": result.mape,
+            "directional_accuracy": result.directional_accuracy,
         },
         "series": {
             "actual": result.actual,
@@ -39,6 +40,7 @@ def build_backtest_report(result: BacktestResult) -> dict[str, object]:
             "mae": result.mae,
             "rmse": result.rmse,
             "mape": result.mape,
+            "directional_accuracy": result.directional_accuracy,
             "disclaimer": result.disclaimer,
         },
         "uncertainty_notes": list(DEFAULT_UNCERTAINTY_NOTES),

@@ -10,6 +10,7 @@ from investment_assistant.forecasting.baseline import (
     naive_forecast,
 )
 from investment_assistant.forecasting.metrics import (
+    directional_accuracy,
     mean_absolute_error,
     mean_absolute_percentage_error,
     root_mean_squared_error,
@@ -35,6 +36,7 @@ class BacktestResult:
     mae: float
     rmse: float
     mape: float
+    directional_accuracy: float
     disclaimer: str = BACKTEST_DISCLAIMER
 
 
@@ -48,7 +50,10 @@ def split_train_test(
     if test_size <= 0:
         raise ValueError("test_size must be positive")
     if test_size >= len(points):
-        raise ValueError("test_size must be less than the number of points")
+        raise ValueError(
+            "test_size must be less than the number of points; "
+            f"got test_size={test_size} and rows={len(points)}"
+        )
 
     sorted_points = sorted(points, key=lambda point: point.date)
     split_index = len(sorted_points) - test_size
@@ -81,6 +86,11 @@ def backtest_moving_average(
     """Backtest a moving-average forecast using the training period."""
 
     train_points, test_points = split_train_test(points, test_size=test_size)
+    if window > len(train_points):
+        raise ValueError(
+            "window must be less than or equal to the training rows; "
+            f"got window={window} and train_rows={len(train_points)}"
+        )
     predicted = moving_average_forecast(
         train_points,
         horizon=len(test_points),
@@ -111,4 +121,5 @@ def _build_result(
         mae=mean_absolute_error(actual, predicted),
         rmse=root_mean_squared_error(actual, predicted),
         mape=mean_absolute_percentage_error(actual, predicted),
+        directional_accuracy=directional_accuracy(actual, predicted),
     )
