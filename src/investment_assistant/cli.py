@@ -314,6 +314,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     scoring_parser.add_argument("--path", required=True)
     scoring_parser.add_argument("--limit", type=int, default=10)
+    scoring_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="json",
+        help="Print scoring-rank output as JSON or a human-readable comparison table",
+    )
     scoring_parser.add_argument("--expense-weight", type=float, default=0.30)
     scoring_parser.add_argument("--return-weight", type=float, default=0.30)
     scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
@@ -412,6 +418,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             volatility_weight=float(args.volatility_weight),
             diversification_weight=float(args.diversification_weight),
         )
+        if str(getattr(args, "format", "json")) == "table" and not getattr(args, "output", None):
+            print(_format_scoring_rank_table(result))
+            return 0
+
         output = getattr(args, "output", None)
         if output:
             output_path = Path(str(output))
@@ -438,6 +448,77 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     return 2
+
+def _format_scoring_rank_table(report: dict[str, object]) -> str:
+    """Format scoring-rank JSON as a compact comparison table for humans."""
+
+    headers = (
+        "rank",
+        "name",
+        "total_score",
+        "expense_ratio",
+        "annual_return",
+        "volatility",
+        "diversification_score",
+    )
+    rows: list[tuple[str, ...]] = [headers]
+
+    results = report.get("results", [])
+    if not isinstance(results, list):
+        results = []
+
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics", {})
+        score = item.get("score", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+        if not isinstance(score, dict):
+            score = {}
+        rows.append(
+            (
+                _format_table_value(item.get("rank", "")),
+                _format_table_value(item.get("name", "")),
+                _format_table_value(score.get("total_score", "")),
+                _format_table_value(metrics.get("expense_ratio", "")),
+                _format_table_value(metrics.get("annual_return", "")),
+                _format_table_value(metrics.get("volatility", "")),
+                _format_table_value(metrics.get("diversification_score", "")),
+            )
+        )
+
+    widths = [max(len(row[index]) for row in rows) for index in range(len(headers))]
+    table_lines = [
+        " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
+        for row in rows
+    ]
+
+    metadata = [
+        f"source: {report.get('source', '')}",
+        f"limit: {report.get('limit', '')}",
+        f"schema_version: {report.get('schema_version', 'n/a')}",
+        f"generated_at: {report.get('generated_at', 'n/a')}",
+        f"call_real_api: {str(bool(report.get('call_real_api', False))).lower()}",
+        f"auto_trading: {str(bool(report.get('auto_trading', False))).lower()}",
+        "",
+        *table_lines,
+        "",
+        str(
+            report.get(
+                "disclaimer",
+                "投資助言・売買推奨ではありません。最終判断はユーザー本人が行います。",
+            )
+        ),
+    ]
+    return "\n".join(metadata)
+
+
+def _format_table_value(value: object) -> str:
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
 
 def _format_budget_report(report: BudgetReport) -> str:
     return "\n".join(
