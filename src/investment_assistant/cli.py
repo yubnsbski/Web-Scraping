@@ -9,6 +9,11 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.forecasting.backtest import (
+    BacktestResult,
+    backtest_moving_average,
+    backtest_naive,
+)
 from investment_assistant.forecasting.baseline import (
     moving_average_forecast,
     naive_forecast,
@@ -330,6 +335,65 @@ def run_forecast_validate(*, path: str | Path) -> dict[str, object]:
     }
 
 
+def _backtest_result_to_dict(result: BacktestResult) -> dict[str, object]:
+    """Convert a backtest result into a JSON-ready dictionary."""
+
+    return {
+        "method": result.method,
+        "train_rows": result.train_rows,
+        "test_rows": result.test_rows,
+        "actual": result.actual,
+        "predicted": result.predicted,
+        "mae": result.mae,
+        "rmse": result.rmse,
+        "mape": result.mape,
+        "disclaimer": result.disclaimer,
+    }
+
+
+def run_forecast_backtest(
+    *,
+    path: str | Path,
+    method: str,
+    test_size: int,
+    window: int,
+) -> dict[str, object]:
+    """Run a local baseline backtest without Gemini or trading actions."""
+
+    try:
+        points = load_forecast_csv(path)
+        if method == "naive":
+            result = backtest_naive(points, test_size=test_size)
+        elif method == "moving-average":
+            result = backtest_moving_average(
+                points,
+                test_size=test_size,
+                window=window,
+            )
+        else:
+            raise ValueError(f"unsupported forecast method: {method}")
+    except (ForecastValidationError, ValueError) as exc:
+        return {
+            "valid": False,
+            "errors": [str(exc)],
+            **_forecasting_safety_fields(),
+        }
+
+    output = _backtest_result_to_dict(result)
+    output.update(
+        {
+            "valid": True,
+            "input_rows": len(points),
+            "test_size": test_size,
+            "window": None if method == "naive" else window,
+            "start_date": points[0].date.isoformat(),
+            "end_date": points[-1].date.isoformat(),
+            **_forecasting_safety_fields(),
+        }
+    )
+    return output
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI."""
 
@@ -446,6 +510,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     forecast_baseline_parser.add_argument("--window", type=int, default=3)
 
+    forecast_backtest_parser = subparsers.add_parser(
+        "forecast-backtest",
+        help="Run a local forecast backtest without Gemini or auto-trading",
+    )
+    forecast_backtest_parser.add_argument("--path", required=True)
+    forecast_backtest_parser.add_argument(
+        "--method",
+        choices=("naive", "moving-average"),
+        default="naive",
+    )
+    forecast_backtest_parser.add_argument("--test-size", type=int, default=3)
+    forecast_backtest_parser.add_argument("--window", type=int, default=3)
+
     args = parser.parse_args(argv)
     config_path = str(args.config)
 
@@ -530,6 +607,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         validation_result = run_forecast_validate(path=str(args.path))
         print(json.dumps(validation_result, ensure_ascii=False, indent=2))
         return 0 if bool(validation_result["valid"]) else 1
+
+    if args.command == "forecast-backtest":
+        backtest_result = run_forecast_backtest(
+            path=str(args.path),
+            method=str(args.method),
+            test_size=int(args.test_size),
+            window=int(args.window),
+        )
+        print(json.dumps(backtest_result, ensure_ascii=False, indent=2))
+        return 0 if bool(backtest_result["valid"]) else 1
 
     if args.command == "forecast-baseline":
         baseline_result = run_forecast_baseline(

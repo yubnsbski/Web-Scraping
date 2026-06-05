@@ -16,11 +16,11 @@ gemini:
   monthly_request_limit: 20
   warning_threshold_ratio: 0.8
   hard_stop_threshold_ratio: 1.0
-  usage_db_path: {tmp_path / 'usage.sqlite'}
+  usage_db_path: {tmp_path / "usage.sqlite"}
   cache:
     enabled: true
     ttl_days: 30
-    db_path: {tmp_path / 'cache.sqlite'}
+    db_path: {tmp_path / "cache.sqlite"}
   fallback:
     on_daily_limit: local_summary
     on_monthly_limit: skip_llm
@@ -78,13 +78,15 @@ def test_cli_smoke_outputs_json(tmp_path, capsys):
 def test_cli_gemini_live_requires_explicit_acknowledgement(tmp_path, capsys):
     config_path = write_config(tmp_path)
 
-    exit_code = main([
-        "--config",
-        str(config_path),
-        "gemini-live",
-        "--prompt",
-        "hello",
-    ])
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "gemini-live",
+            "--prompt",
+            "hello",
+        ]
+    )
 
     assert exit_code == 2
     assert "--call-real-api" in capsys.readouterr().out
@@ -112,14 +114,16 @@ def test_cli_fetch_url_dry_run_outputs_json(monkeypatch, capsys):
 
     monkeypatch.setattr("investment_assistant.cli.SafeFetcher", FakeFetcher)
 
-    exit_code = main([
-        "fetch-url",
-        "--url",
-        "https://example.com/funds",
-        "--dry-run",
-        "--preview-chars",
-        "120",
-    ])
+    exit_code = main(
+        [
+            "fetch-url",
+            "--url",
+            "https://example.com/funds",
+            "--dry-run",
+            "--preview-chars",
+            "120",
+        ]
+    )
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
@@ -135,38 +139,45 @@ def test_cli_rag_index_search_and_context(tmp_path, capsys):
         encoding="utf-8",
     )
 
-    index_exit = main([
-        "rag-index",
-        "--path",
-        str(doc_path),
-        "--db-path",
-        str(db_path),
-    ])
+    index_exit = main(
+        [
+            "rag-index",
+            "--path",
+            str(doc_path),
+            "--db-path",
+            str(db_path),
+        ]
+    )
     assert index_exit == 0
     index_output = json.loads(capsys.readouterr().out)
     assert index_output["chunks_indexed"] == 1
 
-    search_exit = main([
-        "rag-search",
-        "--query",
-        "投資判断",
-        "--db-path",
-        str(db_path),
-    ])
+    search_exit = main(
+        [
+            "rag-search",
+            "--query",
+            "投資判断",
+            "--db-path",
+            str(db_path),
+        ]
+    )
     assert search_exit == 0
     search_output = json.loads(capsys.readouterr().out)
     assert search_output[0]["source"] == str(doc_path)
 
-    context_exit = main([
-        "rag-answer-context",
-        "--query",
-        "自動売買",
-        "--db-path",
-        str(db_path),
-    ])
+    context_exit = main(
+        [
+            "rag-answer-context",
+            "--query",
+            "自動売買",
+            "--db-path",
+            str(db_path),
+        ]
+    )
     assert context_exit == 0
     context_output = json.loads(capsys.readouterr().out)
     assert "自動売買" in context_output["context"]
+
 
 def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
     csv_path = tmp_path / "funds.csv"
@@ -178,13 +189,15 @@ def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
         encoding="utf-8",
     )
 
-    exit_code = main([
-        "scoring-rank",
-        "--path",
-        str(csv_path),
-        "--limit",
-        "2",
-    ])
+    exit_code = main(
+        [
+            "scoring-rank",
+            "--path",
+            str(csv_path),
+            "--limit",
+            "2",
+        ]
+    )
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
@@ -193,7 +206,6 @@ def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
     assert len(output["results"]) == 2
     assert output["results"][0]["name"] == "低コスト全世界株式"
     assert "投資助言" in output["disclaimer"]
-
 
 
 def test_cli_scoring_rank_writes_output_file(tmp_path, capsys):
@@ -317,8 +329,7 @@ def test_cli_forecast_baseline_outputs_moving_average_json(tmp_path, capsys):
 def test_cli_forecast_baseline_outputs_errors_for_invalid_window(tmp_path, capsys):
     csv_path = tmp_path / "prices.csv"
     csv_path.write_text(
-        "date,value,symbol\n"
-        "2026-01-01,100.0,SAMPLE\n",
+        "date,value,symbol\n2026-01-01,100.0,SAMPLE\n",
         encoding="utf-8",
     )
 
@@ -343,3 +354,108 @@ def test_cli_forecast_baseline_outputs_errors_for_invalid_window(tmp_path, capsy
     assert output["call_real_api"] is False
     assert output["auto_trading"] is False
     assert "自動売買" in output["disclaimer"]
+
+
+def test_cli_forecast_backtest_outputs_naive_json(tmp_path, capsys):
+    csv_path = tmp_path / "prices.csv"
+    csv_path.write_text(
+        "date,value,symbol\n"
+        "2026-01-01,100.0,SAMPLE\n"
+        "2026-01-02,102.0,SAMPLE\n"
+        "2026-01-03,104.0,SAMPLE\n"
+        "2026-01-04,103.0,SAMPLE\n"
+        "2026-01-05,105.0,SAMPLE\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "forecast-backtest",
+            "--path",
+            str(csv_path),
+            "--method",
+            "naive",
+            "--test-size",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is True
+    assert output["method"] == "naive"
+    assert output["input_rows"] == 5
+    assert output["test_size"] == 2
+    assert output["window"] is None
+    assert output["actual"] == [103.0, 105.0]
+    assert output["predicted"] == [104.0, 104.0]
+    assert output["mae"] == 1.0
+    assert output["rmse"] == 1.0
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
+    assert "投資助言" in output["disclaimer"]
+
+
+def test_cli_forecast_backtest_outputs_moving_average_json(tmp_path, capsys):
+    csv_path = tmp_path / "prices.csv"
+    csv_path.write_text(
+        "date,value,symbol\n"
+        "2026-01-01,100.0,SAMPLE\n"
+        "2026-01-02,102.0,SAMPLE\n"
+        "2026-01-03,104.0,SAMPLE\n"
+        "2026-01-04,103.0,SAMPLE\n"
+        "2026-01-05,105.0,SAMPLE\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "forecast-backtest",
+            "--path",
+            str(csv_path),
+            "--method",
+            "moving-average",
+            "--test-size",
+            "2",
+            "--window",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is True
+    assert output["method"] == "moving-average"
+    assert output["window"] == 2
+    assert output["actual"] == [103.0, 105.0]
+    assert output["predicted"] == [103.0, 103.0]
+    assert output["mae"] == 1.0
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
+
+
+def test_cli_forecast_backtest_outputs_errors_for_invalid_test_size(tmp_path, capsys):
+    csv_path = tmp_path / "prices.csv"
+    csv_path.write_text(
+        "date,value,symbol\n2026-01-01,100.0,SAMPLE\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "forecast-backtest",
+            "--path",
+            str(csv_path),
+            "--method",
+            "naive",
+            "--test-size",
+            "1",
+        ]
+    )
+
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is False
+    assert any("test_size must be less than" in error for error in output["errors"])
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
