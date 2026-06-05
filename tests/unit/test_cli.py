@@ -236,3 +236,110 @@ def test_cli_scoring_rank_writes_output_file(tmp_path, capsys):
         "call_real_api": False,
         "auto_trading": False,
     }
+
+
+def test_cli_forecast_baseline_outputs_naive_json(tmp_path, capsys):
+    csv_path = tmp_path / "prices.csv"
+    csv_path.write_text(
+        "date,value,symbol\n"
+        "2026-01-01,100.0,SAMPLE\n"
+        "2026-01-02,101.5,SAMPLE\n"
+        "2026-01-03,100.8,SAMPLE\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "forecast-baseline",
+            "--path",
+            str(csv_path),
+            "--horizon",
+            "2",
+            "--method",
+            "naive",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is True
+    assert output["method"] == "naive"
+    assert output["horizon"] == 2
+    assert output["window"] is None
+    assert output["input_rows"] == 3
+    assert output["symbols"] == ["SAMPLE"]
+    assert output["forecast"] == [
+        {"step": 1, "value": 100.8},
+        {"step": 2, "value": 100.8},
+    ]
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
+    assert "投資助言" in output["disclaimer"]
+
+
+def test_cli_forecast_baseline_outputs_moving_average_json(tmp_path, capsys):
+    csv_path = tmp_path / "prices.csv"
+    csv_path.write_text(
+        "date,value,symbol\n"
+        "2026-01-01,100.0,SAMPLE\n"
+        "2026-01-02,102.0,SAMPLE\n"
+        "2026-01-03,104.0,SAMPLE\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "forecast-baseline",
+            "--path",
+            str(csv_path),
+            "--horizon",
+            "2",
+            "--method",
+            "moving-average",
+            "--window",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is True
+    assert output["method"] == "moving-average"
+    assert output["window"] == 2
+    assert output["forecast"] == [
+        {"step": 1, "value": 103.0},
+        {"step": 2, "value": 103.0},
+    ]
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
+
+
+def test_cli_forecast_baseline_outputs_errors_for_invalid_window(tmp_path, capsys):
+    csv_path = tmp_path / "prices.csv"
+    csv_path.write_text(
+        "date,value,symbol\n"
+        "2026-01-01,100.0,SAMPLE\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "forecast-baseline",
+            "--path",
+            str(csv_path),
+            "--horizon",
+            "1",
+            "--method",
+            "moving-average",
+            "--window",
+            "2",
+        ]
+    )
+
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is False
+    assert any("window must be less than or equal" in error for error in output["errors"])
+    assert output["call_real_api"] is False
+    assert output["auto_trading"] is False
+    assert "自動売買" in output["disclaimer"]
