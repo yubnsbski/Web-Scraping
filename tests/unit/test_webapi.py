@@ -65,6 +65,38 @@ def test_orchestrate_endpoint_is_offline(tmp_path) -> None:
     assert "answer" in payload
 
 
+def test_manual_doc_save_indexes_pasted_text(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db = tmp_path / "rag.sqlite"
+    status, payload = handle_api(
+        "POST",
+        "/api/manual-doc/save",
+        {
+            "title": "配当方針メモ",
+            "source_url": "https://example.com/ir",
+            "text": "この会社はDOEと配当性向を重視する方針です。",
+            "db_path": str(db),
+        },
+    )
+    assert status == 200
+    assert Path(payload["saved_path"]).is_file()
+    assert payload["indexed"]["chunks_indexed"] >= 1
+
+    status, search_payload = handle_api(
+        "POST",
+        "/api/rag/search",
+        {"query": "DOE 配当性向", "db_path": str(db)},
+    )
+    assert status == 200
+    assert search_payload["results"]
+
+
+def test_manual_doc_save_requires_text() -> None:
+    status, payload = handle_api("POST", "/api/manual-doc/save", {"title": "empty"})
+    assert status == 400
+    assert "text" in payload["error"]
+
+
 def test_scoring_rank_from_csv_text() -> None:
     status, payload = handle_api("POST", "/api/scoring/rank", {"csv_text": SCORING_CSV, "limit": 2})
     assert status == 200
@@ -92,6 +124,7 @@ def test_available_routes_lists_endpoints() -> None:
     routes = available_routes()
     assert "GET /api/health" in routes
     assert "POST /api/rag/search" in routes
+    assert "POST /api/manual-doc/save" in routes
     assert "POST /api/fetch-job/dry-run" in routes
 
 
