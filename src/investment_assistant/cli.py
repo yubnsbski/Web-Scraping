@@ -10,7 +10,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from investment_assistant.config.loader import load_yaml
-from investment_assistant.ingestion.fetcher import SafeFetcher
+from investment_assistant.forecasting import service as forecast_service
+from investment_assistant.forecasting.dataset import DEFAULT_DATASET, download_dataset
+from investment_assistant.forecasting.timeseries import load_timeseries_csv
+from investment_assistant.ingestion.fetcher import SafeFetcher, reject_path_traversal
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
     build_llm_service,
@@ -19,17 +22,12 @@ from investment_assistant.llm.factory import (
 from investment_assistant.llm.gemini_client import TextGenerationClient
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
+from investment_assistant.rag.indexer import index_directory
 from investment_assistant.rag.search import build_answer_context, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
 from investment_assistant.scoring.scorer import validate_scoring_csv
-
-_RAG_INDEX_EXTENSIONS = frozenset({".md", ".markdown", ".txt"})
-_RAG_INDEX_EXCLUDED_DIRS = frozenset(
-    {".cache", ".git", "__pycache__", "artifacts", "data", "models", "rag_index"}
-)
-_RAG_INDEX_EXCLUDED_SUFFIXES = frozenset({".db", ".sqlite"})
 
 
 @dataclass(frozen=True)
@@ -165,7 +163,7 @@ def run_fetch_job(
         source_preview_chars = _int_or_default(source.get("preview_chars"), preview_chars)
         extract_text = _bool_or_default(source.get("extract_text"), True)
         include_metadata = _bool_or_default(source.get("include_metadata"), True)
-        output_path = str(source["output_path"])
+        output_path = str(reject_path_traversal(str(source["output_path"])))
         fetch_result = fetcher.fetch(
             str(source["url"]),
             dry_run=dry_run,
@@ -229,41 +227,12 @@ def run_rag_index_dir(
 ) -> dict[str, object]:
     """Recursively index local text/Markdown files into the local RAG store."""
 
-    root = Path(path)
-    if not root.is_dir():
-        msg = f"path must be a directory: {root}"
-        raise ValueError(msg)
-
-    store = RagStore(db_path)
-    files = _iter_rag_index_files(root)
-    skipped_paths = _iter_rag_skipped_files(root)
-    indexed_sources: list[str] = []
-    total_chunks = 0
-    for file_path in files:
-        try:
-            document = load_document(file_path)
-        except (OSError, UnicodeDecodeError):
-            skipped_paths.append(file_path)
-            continue
-        chunks = chunk_text(
-            source=document.source,
-            text=document.text,
-            content_hash=document.content_hash,
-            max_chars=max_chars,
-            overlap_chars=overlap_chars,
-        )
-        total_chunks += store.upsert_document(document, chunks)
-        indexed_sources.append(document.source)
-
-    skipped_files = [str(file_path) for file_path in skipped_paths]
-    return {
-        "source_dir": str(root),
-        "db_path": str(db_path),
-        "files_indexed": len(indexed_sources),
-        "chunks_indexed": total_chunks,
-        "indexed_sources": indexed_sources,
-        "skipped_files": skipped_files,
-    }
+    return index_directory(
+        path=path,
+        db_path=db_path,
+        max_chars=max_chars,
+        overlap_chars=overlap_chars,
+    )
 
 
 def run_rag_search(
@@ -424,6 +393,65 @@ def run_rag_answer(
     )
     result["call_real_api"] = call_real_api
     return result
+
+
+def run_forecast_fetch_data(
+    *,
+    dataset: str = DEFAULT_DATASET,
+    dest: str | Path,
+) -> dict[str, object]:
+    """Download a real financial dataset for forecasting (no auto-trading)."""
+
+    return download_dataset(dataset, dest=dest)
+
+
+def run_forecast_evaluate(
+    *,
+    path: str | Path,
+    value_column: str = "SP500",
+    date_column: str = "Date",
+    horizon: int = 1,
+    step: int = 1,
+    tail: int | None = None,
+    include_ml: bool = True,
+    ensemble_method: str = "weighted",
+    space: str = "returns",
+) -> dict[str, object]:
+    """Walk-forward backtest base models and the ensemble on a local CSV."""
+
+    series = load_timeseries_csv(path, date_column=date_column, value_column=value_column)
+    if tail is not None:
+        series = series.tail(tail)
+    return forecast_service.run_evaluation(
+        series,
+        horizon=horizon,
+        step=step,
+        include_ml=include_ml,
+        ensemble_method=ensemble_method,
+        space=space,
+    )
+
+
+def run_forecast_predict(
+    *,
+    path: str | Path,
+    value_column: str = "SP500",
+    date_column: str = "Date",
+    horizon: int = 1,
+    include_ml: bool = True,
+    ensemble_method: str = "weighted",
+    space: str = "returns",
+) -> dict[str, object]:
+    """Forecast the next horizon steps with the ensemble (research aid only)."""
+
+    series = load_timeseries_csv(path, date_column=date_column, value_column=value_column)
+    return forecast_service.run_forecast(
+        series,
+        horizon=horizon,
+        include_ml=include_ml,
+        ensemble_method=ensemble_method,
+        space=space,
+    )
 
 
 def run_scoring_rank(
@@ -617,6 +645,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Use the real Gemini client through LlmService; omitted means local fake client",
     )
 
+    forecast_fetch_parser = subparsers.add_parser(
+        "forecast-fetch-data",
+        help="Download a real financial dataset (GitHub-hosted) for forecasting",
+    )
+    forecast_fetch_parser.add_argument("--dataset", default=DEFAULT_DATASET)
+    forecast_fetch_parser.add_argument("--dest", required=True)
+
+    forecast_eval_parser = subparsers.add_parser(
+        "forecast-evaluate",
+        help="Walk-forward backtest of base models and the ensemble on a local CSV",
+    )
+    forecast_eval_parser.add_argument("--path", required=True)
+    forecast_eval_parser.add_argument("--value-column", default="SP500")
+    forecast_eval_parser.add_argument("--date-column", default="Date")
+    forecast_eval_parser.add_argument("--horizon", type=int, default=1)
+    forecast_eval_parser.add_argument("--step", type=int, default=1)
+    forecast_eval_parser.add_argument(
+        "--tail", type=int, default=None, help="Use only the last N observations."
+    )
+    forecast_eval_parser.add_argument(
+        "--space",
+        choices=("level", "returns"),
+        default="returns",
+        help="Model the price level directly or its log returns (recommended).",
+    )
+    forecast_eval_parser.add_argument(
+        "--ensemble-method", choices=("mean", "median", "weighted"), default="weighted"
+    )
+    forecast_eval_parser.add_argument(
+        "--no-ml",
+        action="store_true",
+        help="Skip optional scikit-learn ensemble members even if installed.",
+    )
+
+    forecast_predict_parser = subparsers.add_parser(
+        "forecast-predict",
+        help="Forecast the next horizon steps with the ensemble (research aid only)",
+    )
+    forecast_predict_parser.add_argument("--path", required=True)
+    forecast_predict_parser.add_argument("--value-column", default="SP500")
+    forecast_predict_parser.add_argument("--date-column", default="Date")
+    forecast_predict_parser.add_argument("--horizon", type=int, default=1)
+    forecast_predict_parser.add_argument(
+        "--space", choices=("level", "returns"), default="returns"
+    )
+    forecast_predict_parser.add_argument(
+        "--ensemble-method", choices=("mean", "median", "weighted"), default="weighted"
+    )
+    forecast_predict_parser.add_argument("--no-ml", action="store_true")
+
     scoring_parser = subparsers.add_parser(
         "scoring-rank",
         help="Rank local CSV investment candidates without Gemini or auto-trading",
@@ -772,6 +850,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "forecast-fetch-data":
+        result = run_forecast_fetch_data(dataset=str(args.dataset), dest=str(args.dest))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "forecast-evaluate":
+        result = run_forecast_evaluate(
+            path=str(args.path),
+            value_column=str(args.value_column),
+            date_column=str(args.date_column),
+            horizon=int(args.horizon),
+            step=int(args.step),
+            tail=None if args.tail is None else int(args.tail),
+            include_ml=not bool(args.no_ml),
+            ensemble_method=str(args.ensemble_method),
+            space=str(args.space),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "forecast-predict":
+        result = run_forecast_predict(
+            path=str(args.path),
+            value_column=str(args.value_column),
+            date_column=str(args.date_column),
+            horizon=int(args.horizon),
+            include_ml=not bool(args.no_ml),
+            ensemble_method=str(args.ensemble_method),
+            space=str(args.space),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "scoring-validate":
         validation_result = run_scoring_validate(path=str(args.path))
         print(json.dumps(validation_result, ensure_ascii=False, indent=2))
@@ -899,7 +1010,7 @@ def _fetch_job_sources(config: dict[str, object], job_path: Path) -> list[dict[s
 
 
 def _save_report(content: str, path: str | Path) -> str:
-    report_path = Path(path)
+    report_path = reject_path_traversal(path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(content, encoding="utf-8")
     return str(report_path)
@@ -932,37 +1043,6 @@ def _bool_or_default(value: object, default: bool) -> bool:
     if isinstance(value, str):
         return value.lower() in {"1", "true", "yes", "on"}
     return default
-
-
-def _iter_rag_index_files(root: Path) -> list[Path]:
-    return [
-        path
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and _is_supported_rag_file(root, path)
-    ]
-
-
-def _iter_rag_skipped_files(root: Path) -> list[Path]:
-    return [
-        path
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and not _is_supported_rag_file(root, path)
-    ]
-
-
-def _is_supported_rag_file(root: Path, path: Path) -> bool:
-    try:
-        relative = path.relative_to(root)
-    except ValueError:
-        return False
-    if any(part in _RAG_INDEX_EXCLUDED_DIRS for part in relative.parts[:-1]):
-        return False
-    if path.name.startswith(".env"):
-        return False
-    suffix = path.suffix.lower()
-    if suffix in _RAG_INDEX_EXCLUDED_SUFFIXES:
-        return False
-    return suffix in _RAG_INDEX_EXTENSIONS
 
 
 def _format_budget_report(report: BudgetReport) -> str:

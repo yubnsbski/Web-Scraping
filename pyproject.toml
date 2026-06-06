@@ -17,6 +17,10 @@ investment-assistant = "investment_assistant.cli:main"
 gemini = [
     "google-genai>=1.0.0",
 ]
+forecast = [
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5.0",

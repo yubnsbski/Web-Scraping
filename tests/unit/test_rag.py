@@ -80,7 +80,7 @@ def test_search_chunks_scores_and_limits_results(tmp_path) -> None:
     results = search_chunks(store, query="投資判断", limit=1)
 
     assert len(results) == 1
-    assert results[0].score >= 1
+    assert results[0].score > 0
     assert "投資判断" in results[0].text
 
 

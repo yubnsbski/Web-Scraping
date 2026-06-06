@@ -185,6 +185,26 @@ investment-assistant scoring-rank --path local_data/funds.csv --limit 3
 詳細は `docs/scoring.md` を参照してください。
 
 
+## アンサンブル予測CLI（Phase 5）
+
+実際の財務データ（Shiller S&P500 月次系列、GitHubホスト）を取得し、複数のベース予測器を
+組み合わせたアンサンブル予測を、取得・評価（ウォークフォワード・バックテスト）・予測まで
+一貫して行います。これは投資助言ではなく、自動売買も行いません。最終判断はユーザー本人です。
+
+```bash
+# ベース予測器（naive/drift/linear_trend/holt/AR）は標準ライブラリのみで動作。
+# 木アンサンブル（random_forest/gradient_boosting）を使う場合のみ追加依存を入れます。
+python -m pip install -e '.[forecast]'
+
+investment-assistant forecast-fetch-data --dest market/sp500.csv
+investment-assistant forecast-evaluate --path market/sp500.csv --tail 240 --space returns
+investment-assistant forecast-predict --path market/sp500.csv --horizon 1
+```
+
+ネットワークが無い場合は同梱の実データ小サンプル `examples/sp500_monthly_sample.csv` を
+`--path` に指定すれば同じ評価・予測を再現できます。評価で得られた知見（リターン空間化で
+アンサンブルが naive を上回る等）は `docs/forecasting.md` を参照してください。
+
 ## LlmService factory
 
 `config/gemini.yaml` から、予算管理・キャッシュ・フォールバックを備えた `LlmService` を生成します。
@@ -209,6 +229,13 @@ python3 scripts/manual_gemini_check.py --prompt "短く挨拶して" --call-real
 ```
 
 このコマンドも `LlmService` 経由なので、キャッシュ、予算ガード、使用量記録、フォールバックが適用されます。
+
+## プライバシーと個人情報に関する注意
+
+- `rag-answer --call-real-api` や `gemini-live` で**実Gemini APIを呼ぶと、プロンプトに含まれるローカル文書の内容（資産・口座などの個人情報を含む可能性があります）がGoogleに送信されます**。送信されて困る情報はローカル文書に含めないか、`--call-real-api` を付けずローカルのフェイククライアントで実行してください。
+- LLMの応答は `data/runtime/llm_cache.sqlite` に、取得したWebページ本文は `.cache/` 配下のSQLiteに平文で保存されます。いずれも `.gitignore` 済みですが、個人情報を含みうるため、不要になったら手動で削除してください。
+- スクレイピング時の `User-Agent` は環境変数 `INVESTMENT_ASSISTANT_USER_AGENT` で上書きできます。連絡先などを自分の運用に合わせて設定してください。
+- 安全対策として、取得対象URLが private / loopback / link-local などの非公開アドレス（クラウドメタデータ 169.254.169.254 を含む）に解決される場合は取得を拒否します（SSRF対策）。リダイレクト先も各ホップで同様に検証します。
 
 
 ## トラブルシューティング
