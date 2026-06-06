@@ -10,6 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from investment_assistant.config.loader import load_yaml
+from investment_assistant.forecasting import service as forecast_service
+from investment_assistant.forecasting.dataset import DEFAULT_DATASET, download_dataset
+from investment_assistant.forecasting.timeseries import load_timeseries_csv
 from investment_assistant.ingestion.fetcher import SafeFetcher, reject_path_traversal
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
@@ -392,6 +395,65 @@ def run_rag_answer(
     return result
 
 
+def run_forecast_fetch_data(
+    *,
+    dataset: str = DEFAULT_DATASET,
+    dest: str | Path,
+) -> dict[str, object]:
+    """Download a real financial dataset for forecasting (no auto-trading)."""
+
+    return download_dataset(dataset, dest=dest)
+
+
+def run_forecast_evaluate(
+    *,
+    path: str | Path,
+    value_column: str = "SP500",
+    date_column: str = "Date",
+    horizon: int = 1,
+    step: int = 1,
+    tail: int | None = None,
+    include_ml: bool = True,
+    ensemble_method: str = "weighted",
+    space: str = "returns",
+) -> dict[str, object]:
+    """Walk-forward backtest base models and the ensemble on a local CSV."""
+
+    series = load_timeseries_csv(path, date_column=date_column, value_column=value_column)
+    if tail is not None:
+        series = series.tail(tail)
+    return forecast_service.run_evaluation(
+        series,
+        horizon=horizon,
+        step=step,
+        include_ml=include_ml,
+        ensemble_method=ensemble_method,
+        space=space,
+    )
+
+
+def run_forecast_predict(
+    *,
+    path: str | Path,
+    value_column: str = "SP500",
+    date_column: str = "Date",
+    horizon: int = 1,
+    include_ml: bool = True,
+    ensemble_method: str = "weighted",
+    space: str = "returns",
+) -> dict[str, object]:
+    """Forecast the next horizon steps with the ensemble (research aid only)."""
+
+    series = load_timeseries_csv(path, date_column=date_column, value_column=value_column)
+    return forecast_service.run_forecast(
+        series,
+        horizon=horizon,
+        include_ml=include_ml,
+        ensemble_method=ensemble_method,
+        space=space,
+    )
+
+
 def run_scoring_rank(
     *,
     path: str | Path,
@@ -583,6 +645,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Use the real Gemini client through LlmService; omitted means local fake client",
     )
 
+    forecast_fetch_parser = subparsers.add_parser(
+        "forecast-fetch-data",
+        help="Download a real financial dataset (GitHub-hosted) for forecasting",
+    )
+    forecast_fetch_parser.add_argument("--dataset", default=DEFAULT_DATASET)
+    forecast_fetch_parser.add_argument("--dest", required=True)
+
+    forecast_eval_parser = subparsers.add_parser(
+        "forecast-evaluate",
+        help="Walk-forward backtest of base models and the ensemble on a local CSV",
+    )
+    forecast_eval_parser.add_argument("--path", required=True)
+    forecast_eval_parser.add_argument("--value-column", default="SP500")
+    forecast_eval_parser.add_argument("--date-column", default="Date")
+    forecast_eval_parser.add_argument("--horizon", type=int, default=1)
+    forecast_eval_parser.add_argument("--step", type=int, default=1)
+    forecast_eval_parser.add_argument(
+        "--tail", type=int, default=None, help="Use only the last N observations."
+    )
+    forecast_eval_parser.add_argument(
+        "--space",
+        choices=("level", "returns"),
+        default="returns",
+        help="Model the price level directly or its log returns (recommended).",
+    )
+    forecast_eval_parser.add_argument(
+        "--ensemble-method", choices=("mean", "median", "weighted"), default="weighted"
+    )
+    forecast_eval_parser.add_argument(
+        "--no-ml",
+        action="store_true",
+        help="Skip optional scikit-learn ensemble members even if installed.",
+    )
+
+    forecast_predict_parser = subparsers.add_parser(
+        "forecast-predict",
+        help="Forecast the next horizon steps with the ensemble (research aid only)",
+    )
+    forecast_predict_parser.add_argument("--path", required=True)
+    forecast_predict_parser.add_argument("--value-column", default="SP500")
+    forecast_predict_parser.add_argument("--date-column", default="Date")
+    forecast_predict_parser.add_argument("--horizon", type=int, default=1)
+    forecast_predict_parser.add_argument(
+        "--space", choices=("level", "returns"), default="returns"
+    )
+    forecast_predict_parser.add_argument(
+        "--ensemble-method", choices=("mean", "median", "weighted"), default="weighted"
+    )
+    forecast_predict_parser.add_argument("--no-ml", action="store_true")
+
     scoring_parser = subparsers.add_parser(
         "scoring-rank",
         help="Rank local CSV investment candidates without Gemini or auto-trading",
@@ -736,6 +848,39 @@ def main(argv: Sequence[str] | None = None) -> int:
             call_real_api=bool(args.call_real_api),
         )
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "forecast-fetch-data":
+        result = run_forecast_fetch_data(dataset=str(args.dataset), dest=str(args.dest))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "forecast-evaluate":
+        result = run_forecast_evaluate(
+            path=str(args.path),
+            value_column=str(args.value_column),
+            date_column=str(args.date_column),
+            horizon=int(args.horizon),
+            step=int(args.step),
+            tail=None if args.tail is None else int(args.tail),
+            include_ml=not bool(args.no_ml),
+            ensemble_method=str(args.ensemble_method),
+            space=str(args.space),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "forecast-predict":
+        result = run_forecast_predict(
+            path=str(args.path),
+            value_column=str(args.value_column),
+            date_column=str(args.date_column),
+            horizon=int(args.horizon),
+            include_ml=not bool(args.no_ml),
+            ensemble_method=str(args.ensemble_method),
+            space=str(args.space),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "scoring-validate":

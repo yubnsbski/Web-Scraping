@@ -45,3 +45,7 @@ Codex中心で開発・保守を自動化し、ユーザーは commit、PR、本
 ### Phase 5: 予測
 
 - 統計モデル、バックテスト、アンサンブル、RAG補助を段階的に導入する。
+- 実装済み: `investment_assistant.forecasting` に、実財務データ取得、ベース予測器
+  （naive/drift/linear_trend/holt/AR）、オプションML（RandomForest/GradientBoosting）、
+  アンサンブル結合（mean/median/weighted）、対数リターン空間オプション、ウォークフォワード
+  評価（MAE/RMSE/MAPE/方向的中率/skill）を配置。詳細と評価結果は `docs/forecasting.md`。
