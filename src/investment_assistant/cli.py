@@ -30,7 +30,7 @@ from investment_assistant.observability import configure_logging
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.indexer import index_directory
-from investment_assistant.rag.search import build_answer_context, search_chunks
+from investment_assistant.rag.search import build_answer_context, hybrid_search, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
@@ -247,11 +247,21 @@ def run_rag_search(
     query: str,
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     limit: int = 5,
+    hybrid: bool = False,
+    alpha: float = 0.5,
 ) -> list[dict[str, object]]:
-    """Search the local RAG store without calling an LLM."""
+    """Search the local RAG store without calling an LLM.
+
+    With ``hybrid=True`` the lexical BM25 ranking is blended with semantic
+    embedding similarity (``alpha`` weights the semantic part).
+    """
 
     store = RagStore(db_path)
-    return [asdict(result) for result in search_chunks(store, query=query, limit=limit)]
+    if hybrid:
+        results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
+    else:
+        results = search_chunks(store, query=query, limit=limit)
+    return [asdict(result) for result in results]
 
 
 
@@ -618,6 +628,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     rag_search_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_search_parser.add_argument("--limit", type=int, default=5)
     rag_search_parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Blend BM25 lexical and embedding semantic scores.",
+    )
+    rag_search_parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.5,
+        help="Hybrid weight for the semantic part (0=lexical only, 1=semantic only).",
+    )
+    rag_search_parser.add_argument(
         "--format",
         choices=("json", "table"),
         default="json",
@@ -850,6 +871,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             query=str(args.query),
             db_path=str(args.db_path),
             limit=int(args.limit),
+            hybrid=bool(args.hybrid),
+            alpha=float(args.alpha),
         )
         if str(args.format) == "table":
             print(
