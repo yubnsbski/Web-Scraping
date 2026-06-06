@@ -205,6 +205,28 @@ investment-assistant forecast-predict --path market/sp500.csv --horizon 1
 `--path` に指定すれば同じ評価・予測を再現できます。評価で得られた知見（リターン空間化で
 アンサンブルが naive を上回る等）は `docs/forecasting.md` を参照してください。
 
+## 複数AIオーケストレーションCLI
+
+複数のLLM役割（ドラフト→レビュー→統合）を協調させ、根拠の確かな回答を作ります。すべて
+ガード付き `LlmService` 経由で予算・キャッシュ・フォールバックが適用されます。`--call-real-api`
+を付けなければローカル擬似クライアントでオフライン実行できます。
+
+```bash
+investment-assistant orchestrate-answer --query "分散投資の要点" --drafts 2 --hybrid
+```
+
+役割別に異なるモデルを割り当てる設計や注意点は `docs/orchestration.md` を参照してください。
+
+## ハイブリッドRAG検索とキャッシュ整理
+
+```bash
+# BM25(語彙) + 埋め込み(意味) のハイブリッド検索（alphaで意味側の重み）
+investment-assistant rag-search --query "債券 リスク" --hybrid --alpha 0.5
+
+# キャッシュの期限切れ削除と件数上限の適用
+investment-assistant cache-maintenance --max-rows 1000
+```
+
 ## LlmService factory
 
 `config/gemini.yaml` から、予算管理・キャッシュ・フォールバックを備えた `LlmService` を生成します。

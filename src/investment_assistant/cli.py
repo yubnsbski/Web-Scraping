@@ -13,17 +13,26 @@ from investment_assistant.config.loader import load_yaml
 from investment_assistant.forecasting import service as forecast_service
 from investment_assistant.forecasting.dataset import DEFAULT_DATASET, download_dataset
 from investment_assistant.forecasting.timeseries import load_timeseries_csv
-from investment_assistant.ingestion.fetcher import SafeFetcher, reject_path_traversal
+from investment_assistant.ingestion.fetcher import (
+    DEFAULT_HTTP_CACHE_PATH,
+    SafeFetcher,
+    reject_path_traversal,
+)
+from investment_assistant.ingestion.http_cache import HttpCache
+from investment_assistant.llm.cache import LlmCache
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
     build_llm_service,
     load_gemini_runtime_config,
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
+from investment_assistant.observability import configure_logging
+from investment_assistant.orchestration.factory import build_orchestrator
+from investment_assistant.orchestration.orchestrator import OrchestrationConfig
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.indexer import index_directory
-from investment_assistant.rag.search import build_answer_context, search_chunks
+from investment_assistant.rag.search import build_answer_context, hybrid_search, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
@@ -240,11 +249,21 @@ def run_rag_search(
     query: str,
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     limit: int = 5,
+    hybrid: bool = False,
+    alpha: float = 0.5,
 ) -> list[dict[str, object]]:
-    """Search the local RAG store without calling an LLM."""
+    """Search the local RAG store without calling an LLM.
+
+    With ``hybrid=True`` the lexical BM25 ranking is blended with semantic
+    embedding similarity (``alpha`` weights the semantic part).
+    """
 
     store = RagStore(db_path)
-    return [asdict(result) for result in search_chunks(store, query=query, limit=limit)]
+    if hybrid:
+        results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
+    else:
+        results = search_chunks(store, query=query, limit=limit)
+    return [asdict(result) for result in results]
 
 
 
@@ -395,6 +414,85 @@ def run_rag_answer(
     return result
 
 
+def run_orchestrate_answer(
+    *,
+    query: str,
+    config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    limit: int = 5,
+    drafts: int = 1,
+    include_critique: bool = True,
+    hybrid: bool = False,
+    alpha: float = 0.5,
+    call_real_api: bool = False,
+) -> dict[str, object]:
+    """Run multi-model orchestration (draft->critique->synthesize) over RAG context."""
+
+    store = RagStore(db_path)
+    if hybrid:
+        results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
+    else:
+        results = search_chunks(store, query=query, limit=limit)
+    context = build_answer_context(results)
+    if not results:
+        return {
+            "query": query,
+            "answer": (
+                "関連するローカル文書チャンクがないため、"
+                "オーケストレーションをスキップしました。"
+            ),
+            "context": context,
+            "results": [],
+            "skipped": True,
+        }
+
+    orchestrator = build_orchestrator(
+        config_path,
+        config=OrchestrationConfig(n_drafts=drafts, include_critique=include_critique),
+        call_real_api=call_real_api,
+    )
+    outcome = orchestrator.run(query=query, context=context)
+    payload = outcome.to_dict()
+    payload["context"] = context
+    payload["results"] = [asdict(result) for result in results]
+    payload["call_real_api"] = call_real_api
+    return payload
+
+
+def run_cache_maintenance(
+    *,
+    config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
+    max_rows: int | None = None,
+) -> dict[str, object]:
+    """Purge expired entries and enforce row limits on the HTTP and LLM caches."""
+
+    runtime = load_gemini_runtime_config(config_path)
+    llm_cache = LlmCache(
+        runtime.cache_db_path,
+        ttl_days=runtime.cache_ttl_days,
+        enabled=True,
+        max_rows=max_rows,
+    )
+    http_cache = HttpCache(DEFAULT_HTTP_CACHE_PATH, max_rows=max_rows)
+    llm_expired = llm_cache.purge_expired()
+    llm_trimmed = llm_cache.enforce_max_rows() if max_rows is not None else 0
+    http_expired = http_cache.purge_expired()
+    http_trimmed = http_cache.enforce_max_rows() if max_rows is not None else 0
+    return {
+        "max_rows": max_rows,
+        "llm_cache": {
+            "db_path": str(runtime.cache_db_path),
+            "expired_removed": llm_expired,
+            "trimmed_removed": llm_trimmed,
+        },
+        "http_cache": {
+            "db_path": str(DEFAULT_HTTP_CACHE_PATH),
+            "expired_removed": http_expired,
+            "trimmed_removed": http_trimmed,
+        },
+    }
+
+
 def run_forecast_fetch_data(
     *,
     dataset: str = DEFAULT_DATASET,
@@ -416,6 +514,7 @@ def run_forecast_evaluate(
     include_ml: bool = True,
     ensemble_method: str = "weighted",
     space: str = "returns",
+    ma_windows: Sequence[int] = (),
 ) -> dict[str, object]:
     """Walk-forward backtest base models and the ensemble on a local CSV."""
 
@@ -429,6 +528,7 @@ def run_forecast_evaluate(
         include_ml=include_ml,
         ensemble_method=ensemble_method,
         space=space,
+        ma_windows=ma_windows,
     )
 
 
@@ -484,6 +584,7 @@ def run_scoring_validate(*, path: str | Path) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI."""
 
+    configure_logging()
     parser = argparse.ArgumentParser(prog="investment-assistant")
     parser.add_argument("--config", default=str(DEFAULT_GEMINI_CONFIG_PATH))
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -574,6 +675,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     rag_search_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_search_parser.add_argument("--limit", type=int, default=5)
     rag_search_parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Blend BM25 lexical and embedding semantic scores.",
+    )
+    rag_search_parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.5,
+        help="Hybrid weight for the semantic part (0=lexical only, 1=semantic only).",
+    )
+    rag_search_parser.add_argument(
         "--format",
         choices=("json", "table"),
         default="json",
@@ -645,6 +757,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Use the real Gemini client through LlmService; omitted means local fake client",
     )
 
+    orchestrate_parser = subparsers.add_parser(
+        "orchestrate-answer",
+        help="Multi-model draft->critique->synthesize answer over local RAG context",
+    )
+    orchestrate_parser.add_argument("--query", required=True)
+    orchestrate_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    orchestrate_parser.add_argument("--limit", type=int, default=5)
+    orchestrate_parser.add_argument(
+        "--drafts", type=int, default=1, help="Number of diversified drafts (self-consistency)."
+    )
+    orchestrate_parser.add_argument(
+        "--no-critique", action="store_true", help="Skip the critic stage."
+    )
+    orchestrate_parser.add_argument(
+        "--hybrid", action="store_true", help="Use hybrid lexical+semantic retrieval."
+    )
+    orchestrate_parser.add_argument("--alpha", type=float, default=0.5)
+    orchestrate_parser.add_argument(
+        "--call-real-api",
+        action="store_true",
+        help="Use real Gemini via LlmService; omitted uses a local fake client.",
+    )
+
+    cache_parser = subparsers.add_parser(
+        "cache-maintenance",
+        help="Purge expired entries and optionally cap rows in the HTTP/LLM caches",
+    )
+    cache_parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=None,
+        help="Keep only the newest N rows in each cache (omit to only purge expired).",
+    )
+
     forecast_fetch_parser = subparsers.add_parser(
         "forecast-fetch-data",
         help="Download a real financial dataset (GitHub-hosted) for forecasting",
@@ -677,6 +823,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--no-ml",
         action="store_true",
         help="Skip optional scikit-learn ensemble members even if installed.",
+    )
+    forecast_eval_parser.add_argument(
+        "--ma-windows",
+        default=None,
+        help="Comma-separated moving-average windows to compare, e.g. 3,6,12.",
     )
 
     forecast_predict_parser = subparsers.add_parser(
@@ -790,6 +941,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             query=str(args.query),
             db_path=str(args.db_path),
             limit=int(args.limit),
+            hybrid=bool(args.hybrid),
+            alpha=float(args.alpha),
         )
         if str(args.format) == "table":
             print(
@@ -850,6 +1003,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "orchestrate-answer":
+        result = run_orchestrate_answer(
+            query=str(args.query),
+            config_path=config_path,
+            db_path=str(args.db_path),
+            limit=int(args.limit),
+            drafts=int(args.drafts),
+            include_critique=not bool(args.no_critique),
+            hybrid=bool(args.hybrid),
+            alpha=float(args.alpha),
+            call_real_api=bool(args.call_real_api),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "cache-maintenance":
+        result = run_cache_maintenance(
+            config_path=config_path,
+            max_rows=None if args.max_rows is None else int(args.max_rows),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "forecast-fetch-data":
         result = run_forecast_fetch_data(dataset=str(args.dataset), dest=str(args.dest))
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -866,6 +1042,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_ml=not bool(args.no_ml),
             ensemble_method=str(args.ensemble_method),
             space=str(args.space),
+            ma_windows=_parse_int_list(args.ma_windows),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -1021,6 +1198,16 @@ def _query_from_fetch_job_source(source: dict[str, object]) -> str:
     if query_hint is not None and str(query_hint).strip():
         return str(query_hint)
     return str(source["name"])
+
+
+def _parse_int_list(value: str | None) -> tuple[int, ...]:
+    if not value:
+        return ()
+    windows = tuple(int(part.strip()) for part in str(value).split(",") if part.strip())
+    if any(window < 1 for window in windows):
+        msg = "moving-average windows must be positive integers"
+        raise ValueError(msg)
+    return windows
 
 
 def _int_or_default(value: object, default: int) -> int:

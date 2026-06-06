@@ -19,6 +19,7 @@ from investment_assistant.forecasting.models import (
     ARForecaster,
     DriftForecaster,
     LinearTrendForecaster,
+    MovingAverageForecaster,
     NaiveForecaster,
     ReturnsForecaster,
 )
@@ -72,6 +73,22 @@ def test_ar_recovers_simple_linear_recurrence() -> None:
     model.fit(series)
     forecast = model.predict(1)[0]
     assert forecast == pytest.approx(21.0, abs=1e-6)
+
+
+def test_moving_average_uses_window_mean() -> None:
+    model = MovingAverageForecaster(window=3)
+    model.fit([10.0, 20.0, 30.0, 40.0, 50.0])
+    assert model.predict(2) == pytest.approx([40.0, 40.0])  # mean of last 3 = 40
+
+
+def test_run_evaluation_includes_moving_average_windows() -> None:
+    series = load_timeseries_csv(SAMPLE_CSV, value_column="SP500")
+    report = service.run_evaluation(
+        series, include_ml=False, space="returns", ma_windows=(3, 6, 12)
+    )
+    names = {model["name"] for model in report["models"]}
+    assert {"ma3", "ma6", "ma12"} <= names
+    assert report["ma_windows"] == [3, 6, 12]
 
 
 def test_returns_forecaster_tracks_geometric_growth() -> None:

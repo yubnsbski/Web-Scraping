@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from investment_assistant.forecasting.backtest import ModelBuilder, evaluate_models
 from investment_assistant.forecasting.ensemble import EnsembleForecaster
 from investment_assistant.forecasting.ml_models import (
@@ -15,6 +17,7 @@ from investment_assistant.forecasting.models import (
     Forecaster,
     HoltLinearForecaster,
     LinearTrendForecaster,
+    MovingAverageForecaster,
     NaiveForecaster,
     ReturnsForecaster,
 )
@@ -49,8 +52,21 @@ def ml_builders(*, n_estimators: int = 200) -> dict[str, ModelBuilder]:
     }
 
 
+def moving_average_builders(windows: Sequence[int]) -> dict[str, ModelBuilder]:
+    """Build moving-average forecasters for each requested window."""
+
+    builders: dict[str, ModelBuilder] = {}
+    for window in windows:
+        builders[f"ma{window}"] = (lambda w=window: MovingAverageForecaster(window=w))  # type: ignore[misc]
+    return builders
+
+
 def member_builders(
-    *, ar_order: int = 3, include_ml: bool = True, space: str = "level"
+    *,
+    ar_order: int = 3,
+    include_ml: bool = True,
+    space: str = "level",
+    ma_windows: Sequence[int] = (),
 ) -> dict[str, ModelBuilder]:
     """Return the member forecasters that make up the ensemble.
 
@@ -62,6 +78,7 @@ def member_builders(
         msg = f"space must be 'level' or 'returns', got {space!r}"
         raise ValueError(msg)
     builders = classical_builders(ar_order=ar_order)
+    builders.update(moving_average_builders(ma_windows))
     if include_ml:
         builders.update(ml_builders())
     if space == "level":
@@ -88,10 +105,13 @@ def ensemble_builder(
     ar_order: int = 3,
     include_ml: bool = True,
     space: str = "level",
+    ma_windows: Sequence[int] = (),
 ) -> ModelBuilder:
     """Return a builder that constructs a fresh ensemble each call."""
 
-    members = member_builders(ar_order=ar_order, include_ml=include_ml, space=space)
+    members = member_builders(
+        ar_order=ar_order, include_ml=include_ml, space=space, ma_windows=ma_windows
+    )
 
     def build() -> EnsembleForecaster:
         return EnsembleForecaster([builder() for builder in members.values()], method=method)
@@ -109,13 +129,20 @@ def run_evaluation(
     include_ml: bool = True,
     ensemble_method: str = "weighted",
     space: str = "returns",
+    ma_windows: Sequence[int] = (),
 ) -> dict[str, object]:
     """Backtest base models and the ensemble, ranked by RMSE (best first)."""
 
-    builders = member_builders(ar_order=ar_order, include_ml=include_ml, space=space)
+    builders = member_builders(
+        ar_order=ar_order, include_ml=include_ml, space=space, ma_windows=ma_windows
+    )
     ensemble_name = f"ensemble_{ensemble_method}"
     builders[ensemble_name] = ensemble_builder(
-        method=ensemble_method, ar_order=ar_order, include_ml=include_ml, space=space
+        method=ensemble_method,
+        ar_order=ar_order,
+        include_ml=include_ml,
+        space=space,
+        ma_windows=ma_windows,
     )
 
     evaluations = evaluate_models(
@@ -132,6 +159,7 @@ def run_evaluation(
         "horizon": horizon,
         "step": step,
         "space": space,
+        "ma_windows": list(ma_windows),
         "ml_enabled": include_ml and sklearn_available(),
         "ensemble_method": ensemble_method,
         "best_model": best.name,
@@ -148,10 +176,13 @@ def run_forecast(
     include_ml: bool = True,
     ensemble_method: str = "weighted",
     space: str = "returns",
+    ma_windows: Sequence[int] = (),
 ) -> dict[str, object]:
     """Fit the ensemble on the full series and forecast the next ``horizon`` steps."""
 
-    members = member_builders(ar_order=ar_order, include_ml=include_ml, space=space)
+    members = member_builders(
+        ar_order=ar_order, include_ml=include_ml, space=space, ma_windows=ma_windows
+    )
     member_instances = {name: builder() for name, builder in members.items()}
     member_forecasts: dict[str, list[float]] = {}
     for name, model in member_instances.items():

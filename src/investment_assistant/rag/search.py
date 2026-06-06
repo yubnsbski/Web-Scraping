@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from investment_assistant.rag.embeddings import Embedder, HashingEmbedder, cosine
 from investment_assistant.rag.store import RagStore, StoredChunk
 from investment_assistant.rag.tokenize import tokenize
 
 _CONTEXT_METADATA_KEYS = ("source_url", "fetched_at", "status_code", "content_type")
 DEFAULT_MAX_CONTEXT_CHARS = 6000
+DEFAULT_HYBRID_ALPHA = 0.5
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,75 @@ def search_chunks(store: RagStore, *, query: str, limit: int = 5) -> list[Search
         results = _keyword_search(store, terms)
 
     return _dedupe_by_text(results)[:limit]
+
+
+def hybrid_search(
+    store: RagStore,
+    *,
+    query: str,
+    limit: int = 5,
+    embedder: Embedder | None = None,
+    alpha: float = DEFAULT_HYBRID_ALPHA,
+) -> list[SearchResult]:
+    """Combine lexical BM25 and semantic embedding scores.
+
+    Lexical and semantic scores are each min-max normalized to [0, 1] across the
+    candidate set, then blended as ``alpha * semantic + (1 - alpha) * lexical``.
+    ``alpha=0`` is pure lexical (BM25), ``alpha=1`` is pure semantic.
+    """
+
+    if not 0.0 <= alpha <= 1.0:
+        msg = "alpha must be between 0 and 1"
+        raise ValueError(msg)
+    terms = tokenize(query)
+    if not terms or limit <= 0:
+        return []
+    chosen_embedder = embedder if embedder is not None else HashingEmbedder()
+
+    lexical = {chunk.chunk_id: score for chunk, score in store.search_bm25(terms, limit=limit * 5)}
+    query_vector = chosen_embedder.embed([query])[0]
+    embedded = store.iter_embeddings()
+    semantic = {chunk.chunk_id: cosine(query_vector, vector) for chunk, vector in embedded}
+    chunks_by_id = {chunk.chunk_id: chunk for chunk, _ in embedded}
+
+    lexical_norm = _min_max_normalize(lexical)
+    semantic_norm = _min_max_normalize(semantic)
+    candidate_ids = set(lexical) | set(semantic)
+
+    results: list[SearchResult] = []
+    for chunk_id in candidate_ids:
+        chunk = chunks_by_id.get(chunk_id)
+        if chunk is None:
+            continue
+        combined = alpha * semantic_norm.get(chunk_id, 0.0) + (1 - alpha) * lexical_norm.get(
+            chunk_id, 0.0
+        )
+        if combined <= 0:
+            continue
+        results.append(
+            SearchResult(
+                chunk_id=chunk.chunk_id,
+                source=chunk.source,
+                chunk_index=chunk.chunk_index,
+                score=round(combined, 6),
+                text=chunk.text,
+                metadata=chunk.metadata,
+            )
+        )
+    ranked = sorted(results, key=lambda result: (-result.score, result.source, result.chunk_index))
+    return _dedupe_by_text(ranked)[:limit]
+
+
+def _min_max_normalize(scores: dict[str, float]) -> dict[str, float]:
+    if not scores:
+        return {}
+    values = scores.values()
+    lowest = min(values)
+    highest = max(values)
+    if highest == lowest:
+        return {key: 1.0 for key in scores}
+    span = highest - lowest
+    return {key: (value - lowest) / span for key, value in scores.items()}
 
 
 def _keyword_search(store: RagStore, terms: list[str]) -> list[SearchResult]:

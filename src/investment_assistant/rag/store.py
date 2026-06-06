@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from investment_assistant.rag.chunker import Document, TextChunk
+from investment_assistant.rag.embeddings import Embedder, HashingEmbedder
 from investment_assistant.rag.tokenize import tokens_to_index_text
 
 DEFAULT_RAG_DB_PATH = Path(".cache/investment_assistant/rag.sqlite")
@@ -30,9 +31,15 @@ class StoredChunk:
 class RagStore:
     """Persist documents and chunks in SQLite for local search."""
 
-    def __init__(self, db_path: str | Path = DEFAULT_RAG_DB_PATH) -> None:
+    def __init__(
+        self,
+        db_path: str | Path = DEFAULT_RAG_DB_PATH,
+        *,
+        embedder: Embedder | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.fts_enabled = False
+        self.embedder = embedder if embedder is not None else HashingEmbedder()
         self._ensure_schema()
 
     def upsert_document(self, document: Document, chunks: list[TextChunk]) -> int:
@@ -83,7 +90,37 @@ class RagStore:
                         for chunk in chunks
                     ],
                 )
+            conn.execute("DELETE FROM rag_embeddings WHERE source = ?", (document.source,))
+            if chunks:
+                vectors = self.embedder.embed([chunk.text for chunk in chunks])
+                conn.executemany(
+                    "INSERT INTO rag_embeddings (chunk_id, source, vector_json) VALUES (?, ?, ?)",
+                    [
+                        (chunk.chunk_id, chunk.source, json.dumps([round(v, 6) for v in vector]))
+                        for chunk, vector in zip(chunks, vectors, strict=True)
+                    ],
+                )
         return len(chunks)
+
+    def iter_embeddings(self) -> list[tuple[StoredChunk, list[float]]]:
+        """Return all stored chunks paired with their embedding vectors."""
+
+        sql = """
+            SELECT
+                rag_chunks.chunk_id,
+                rag_chunks.source,
+                rag_chunks.chunk_index,
+                rag_chunks.text,
+                rag_chunks.content_hash,
+                rag_documents.metadata_json,
+                rag_embeddings.vector_json
+            FROM rag_embeddings
+            JOIN rag_chunks ON rag_chunks.chunk_id = rag_embeddings.chunk_id
+            JOIN rag_documents ON rag_documents.source = rag_chunks.source
+        """
+        with self._connect() as conn:
+            rows = conn.execute(sql).fetchall()
+        return [(_stored_chunk(row), _vector_from_json(str(row[6]))) for row in rows]
 
     def search_bm25(
         self, query_tokens: list[str], *, limit: int
@@ -177,7 +214,20 @@ class RagStore:
                 ON rag_chunks(source, chunk_index)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rag_embeddings (
+                    chunk_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    vector_json TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rag_embeddings_source ON rag_embeddings(source)"
+            )
             self.fts_enabled = self._ensure_fts(conn)
+            self._backfill_embeddings(conn)
 
     def _ensure_fts(self, conn: sqlite3.Connection) -> bool:
         """Create the FTS5 search table, returning False if FTS5 is unavailable."""
@@ -216,8 +266,35 @@ class RagStore:
             [(str(row[0]), str(row[1]), tokens_to_index_text(str(row[2]))) for row in rows],
         )
 
+    def _backfill_embeddings(self, conn: sqlite3.Connection) -> None:
+        """Embed existing chunks when the embeddings table is empty."""
+
+        embedding_rows = conn.execute("SELECT COUNT(*) FROM rag_embeddings").fetchone()[0]
+        chunk_rows = conn.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()[0]
+        if int(embedding_rows) > 0 or int(chunk_rows) == 0:
+            return
+        rows = conn.execute("SELECT chunk_id, source, text FROM rag_chunks").fetchall()
+        vectors = self.embedder.embed([str(row[2]) for row in rows])
+        conn.executemany(
+            "INSERT INTO rag_embeddings (chunk_id, source, vector_json) VALUES (?, ?, ?)",
+            [
+                (str(row[0]), str(row[1]), json.dumps([round(v, 6) for v in vector]))
+                for row, vector in zip(rows, vectors, strict=True)
+            ],
+        )
+
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
+
+
+def _vector_from_json(value: str) -> list[float]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [float(item) for item in parsed]
 
 
 def _ensure_column(

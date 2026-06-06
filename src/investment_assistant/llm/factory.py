@@ -66,17 +66,20 @@ def build_llm_service(
     config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
     *,
     client: TextGenerationClient | None = None,
+    model: str | None = None,
 ) -> LlmService:
     """Build the single approved LLM service from ``config/gemini.yaml``.
 
     Tests and smoke checks can inject a fake ``client``. Production callers that
-    omit it receive the isolated ``GeminiClient`` wrapper.
+    omit it receive the isolated ``GeminiClient`` wrapper. ``model`` overrides the
+    configured model id, enabling role-based multi-model orchestration while
+    sharing the same budget guard and cache.
     """
 
     config = load_gemini_runtime_config(config_path)
     chosen_client = client or GeminiClient()
     return LlmService(
-        model=config.model,
+        model=model or config.model,
         client=chosen_client,
         cache=LlmCache(
             config.cache_db_path,

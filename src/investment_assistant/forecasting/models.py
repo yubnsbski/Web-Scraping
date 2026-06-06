@@ -64,6 +64,27 @@ class DriftForecaster:
         return [self._last + self._drift * step for step in range(1, horizon + 1)]
 
 
+class MovingAverageForecaster:
+    """Flat forecast equal to the mean of the last ``window`` observations."""
+
+    def __init__(self, window: int = 3) -> None:
+        if window < 1:
+            msg = "window must be at least 1"
+            raise ValueError(msg)
+        self.window = window
+        self.name = f"ma{window}"
+        self._value = 0.0
+
+    def fit(self, history: Sequence[float]) -> None:
+        _require_history(history, 1)
+        effective = min(self.window, len(history))
+        self._value = sum(float(value) for value in history[-effective:]) / effective
+
+    def predict(self, horizon: int) -> list[float]:
+        _require_horizon(horizon)
+        return [self._value] * horizon
+
+
 class LinearTrendForecaster:
     """Ordinary-least-squares fit of value against a time index."""
 
