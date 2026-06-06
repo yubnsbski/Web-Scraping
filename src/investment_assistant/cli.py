@@ -397,12 +397,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     scoring_parser.add_argument("--path", required=True)
     scoring_parser.add_argument("--limit", type=int, default=10)
-    scoring_parser.add_argument(
-        "--format",
-        choices=("json", "table"),
-        default="json",
-        help="Print scoring-rank output as JSON or a human-readable comparison table",
-    )
     scoring_parser.add_argument("--expense-weight", type=float, default=0.30)
     scoring_parser.add_argument("--return-weight", type=float, default=0.30)
     scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
@@ -415,7 +409,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     scoring_parser.add_argument(
         "--output",
-        help="Write scoring-rank JSON result to this file instead of printing the full report",
+        help="Write the JSON scoring report to this local path instead of stdout",
     )
 
     scoring_validate_parser = subparsers.add_parser(
@@ -545,6 +539,8 @@ def _count_report_results(report: dict[str, object]) -> int:
     if isinstance(results, list):
         return len(results)
     return 0
+
+
 def _format_scoring_rank_table(report: dict[str, object]) -> str:
     """Format a compact non-advisory scoring rank table for terminal output."""
 
