@@ -72,14 +72,15 @@ def test_service_falls_back_when_task_not_allowed(tmp_path):
     assert client.calls == 0
 
 
-def test_service_skips_on_client_error_by_default(tmp_path):
+def test_service_falls_back_to_local_summary_on_client_error_by_default(tmp_path):
     client = FailingClient()
     service = build_service(tmp_path, client)
 
     response = service.generate(task_type="rag_answer", prompt="hello")
 
-    assert response.skipped is True
-    assert response.source == "fallback:cached_or_skip:error"
+    assert response.skipped is False
+    assert response.source == "fallback:local_summary:error"
+    assert response.text == "hello"
     assert client.calls == 1
 
 

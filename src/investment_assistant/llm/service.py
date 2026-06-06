@@ -18,7 +18,7 @@ class FallbackConfig:
 
     on_daily_limit: str = "local_summary"
     on_monthly_limit: str = "skip_llm"
-    on_error: str = "cached_or_skip"
+    on_error: str = "local_summary"
 
 
 @dataclass(frozen=True)
