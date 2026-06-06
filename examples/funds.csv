@@ -1,0 +1,4 @@
+name,expense_ratio,annual_return,volatility,diversification_score
+低コスト全世界株式,0.12,0.065,0.18,0.95
+高コストテーマ型,1.20,0.080,0.35,0.45
+債券バランス型,0.35,0.030,0.08,0.80

@@ -16,10 +16,13 @@ venv/
 !.env.example
 
 # Runtime/data artifacts
+.cache/
 data/
 artifacts/
 models/
 rag_index/
+local_docs/
+local_data/
 *.sqlite
 *.db
 
@@ -27,3 +30,12 @@ rag_index/
 .DS_Store
 .vscode/
 .idea/
+
+# Local job definitions
+local_jobs/
+local_reports/
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+web/.vite/

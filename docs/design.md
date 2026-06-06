@@ -30,10 +30,13 @@ Codex中心で開発・保守を自動化し、ユーザーは commit、PR、本
 
 - 公式APIまたはrobots.txtと利用規約を尊重した取得を行う。
 - レート制限とキャッシュを実装する。
+- `investment_assistant.ingestion` に安全なfetcher、robots確認、domain別レート制限、SQLite HTTPキャッシュを置く。
+- 取得処理の単体テストでは実ネットワークを呼ばず、fake transportを使う。
 
 ### Phase 3: RAG
 
 - 文書チャンク、メタデータ、ローカル検索、引用付き回答を実装する。
+- まずはGemini APIを呼ばないローカルRAG基盤として、SQLite保存とキーワード検索を実装する。
 
 ### Phase 4: 投資スコアリング
 
@@ -42,3 +45,7 @@ Codex中心で開発・保守を自動化し、ユーザーは commit、PR、本
 ### Phase 5: 予測
 
 - 統計モデル、バックテスト、アンサンブル、RAG補助を段階的に導入する。
+- 実装済み: `investment_assistant.forecasting` に、実財務データ取得、ベース予測器
+  （naive/drift/linear_trend/holt/AR）、オプションML（RandomForest/GradientBoosting）、
+  アンサンブル結合（mean/median/weighted）、対数リターン空間オプション、ウォークフォワード
+  評価（MAE/RMSE/MAPE/方向的中率/skill）を配置。詳細と評価結果は `docs/forecasting.md`。

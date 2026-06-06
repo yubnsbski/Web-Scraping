@@ -1,0 +1,8 @@
+sources:
+  - name: example
+    url: https://example.com/
+    output_path: local_docs/example.txt
+    query_hint: Example Domain
+    extract_text: true
+    include_metadata: true
+    preview_chars: 500
