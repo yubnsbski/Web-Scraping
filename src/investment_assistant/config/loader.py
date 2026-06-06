@@ -85,7 +85,48 @@ def _parse_list(
             break
         if current_indent != indent or not content.startswith("- "):
             break
-        result.append(_parse_scalar(content[2:].strip()))
+
+        item_content = content[2:].strip()
+        index += 1
+        if _looks_like_inline_mapping(item_content):
+            item, index = _parse_list_mapping_item(lines, index, indent, item_content)
+            result.append(item)
+            continue
+        result.append(_parse_scalar(item_content))
+    return result, index
+
+
+def _looks_like_inline_mapping(content: str) -> bool:
+    if not content or ":" not in content:
+        return False
+    key, _raw_value = content.split(":", 1)
+    return bool(key.strip())
+
+
+def _parse_list_mapping_item(
+    lines: list[tuple[int, str]],
+    start_index: int,
+    list_indent: int,
+    first_entry: str,
+) -> tuple[dict[str, Any], int]:
+    result: dict[str, Any] = {}
+    key, raw_value = first_entry.split(":", 1)
+    result[key.strip()] = _parse_scalar(raw_value.strip()) if raw_value.strip() else {}
+
+    index = start_index
+    child_indent = list_indent + 2
+    while index < len(lines):
+        current_indent, content = lines[index]
+        if current_indent <= list_indent:
+            break
+        if current_indent != child_indent:
+            msg = f"Unexpected indentation at line {index + 1}"
+            raise ValueError(msg)
+        if ":" not in content:
+            msg = f"Expected mapping entry at line {index + 1}"
+            raise ValueError(msg)
+        key, raw_value = content.split(":", 1)
+        result[key.strip()] = _parse_scalar(raw_value.strip()) if raw_value.strip() else {}
         index += 1
     return result, index
 

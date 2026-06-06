@@ -26,8 +26,31 @@ cat > local_docs/sample.md <<'EOF'
 EOF
 
 investment-assistant rag-index --path local_docs/sample.md
+investment-assistant rag-index-dir --path local_docs
 investment-assistant rag-search --query "投資判断" --limit 5
 investment-assistant rag-answer-context --query "自動売買" --limit 5
+```
+
+## safe ingestion結果をRAGに渡す
+
+`fetch-url --extract-text --save-text` で保存したローカルファイルは、そのまま `rag-index` の入力にできる。
+Gemini APIは呼ばず、保存済みテキストをローカルSQLiteへチャンク保存する。
+
+```bash
+mkdir -p local_docs
+TARGET_URL="https://example.com/"
+OUTPUT_PATH="local_docs/example.txt"
+
+investment-assistant fetch-url \
+  --url "$TARGET_URL" \
+  --preview-chars 500 \
+  --extract-text \
+  --include-metadata \
+  --save-text "$OUTPUT_PATH"
+
+investment-assistant rag-index-dir --path local_docs
+investment-assistant rag-search --query "Example Domain" --limit 5
+investment-assistant rag-answer-context --query "Example Domain" --limit 5
 ```
 
 ## CLI
@@ -46,17 +69,58 @@ investment-assistant rag-index --path local_docs/sample.md
 - `--max-chars`: 1チャンクの最大文字数。
 - `--overlap-chars`: 隣接チャンクの重なり文字数。
 
+
+### `rag-index-dir`
+
+ディレクトリ配下の `.txt`、`.md`、`.markdown` を再帰的にまとめてSQLiteに保存する。
+`.env`、SQLite DB、`.cache/`、`data/`、`artifacts/`、`models/` などは対象外にする。
+
+```bash
+investment-assistant rag-index-dir --path local_docs
+```
+
+主なオプション:
+
+- `--db-path`: SQLite DBの保存先。デフォルトは `.cache/investment_assistant/rag.sqlite`。
+- `--max-chars`: 1チャンクの最大文字数。
+- `--overlap-chars`: 隣接チャンクの重なり文字数。
+
+戻り値はJSONで、`files_indexed`、`chunks_indexed`、`indexed_sources`、`skipped_files` を含む。
+
 ### `rag-search`
 
-保存済みチャンクをローカルキーワード検索する。
+保存済みチャンクをローカルキーワード検索する。`--include-metadata` 付きで保存したfront matterは本文チャンクから除外し、検索結果JSONの `metadata` として返す。ターミナルで読みやすく確認したい場合は `--format table` を使い、必要な列だけに絞る場合は `--columns` を使う。
 
 ```bash
 investment-assistant rag-search --query "投資判断" --limit 5
+investment-assistant rag-search --query "投資判断" --limit 5 --format table
+investment-assistant rag-search \
+  --query "投資判断" \
+  --limit 5 \
+  --format table \
+  --columns rank,source_url,fetched_at,text_preview
+```
+
+### `rag-search-job`
+
+`fetch-job` の `query_hint` を使って、ジョブ内の各sourceをまとめてRAG検索確認する。`query_hint` がないsourceは `name` を検索語に使う。Gemini APIは呼ばない。`--save-report` を指定すると、tableはMarkdown、jsonはJSONとして保存する。
+
+```bash
+investment-assistant rag-search-job --path local_jobs/fetch_job.yaml
+investment-assistant rag-search-job \
+  --path local_jobs/fetch_job.yaml \
+  --format table \
+  --columns rank,source_url,fetched_at,text_preview \
+  --save-report local_reports/rag_search_job.md
+investment-assistant rag-search-job \
+  --path local_jobs/fetch_job.yaml \
+  --format json \
+  --save-report local_reports/rag_search_job.json
 ```
 
 ### `rag-answer-context`
 
-LLMを呼ばずに、引用付き回答の材料になるcontextを返す。
+LLMを呼ばずに、引用付き回答の材料になるcontextを返す。front matterに `source_url`、`fetched_at`、`status_code`、`content_type` がある場合は、context見出しに並べて表示する。
 
 ```bash
 investment-assistant rag-answer-context --query "自動売買" --limit 5
@@ -70,7 +134,7 @@ investment-assistant rag-answer-context --query "自動売買" --limit 5
 
 ## 次の拡張候補
 
-- ディレクトリ単位の再帰index。
-- HTML抽出結果やsafe ingestion結果との連携。
+- UIチャット画面で想定質問ボタンと自由質問入力を両立する設計。
+- HTML抽出結果やsafe ingestion結果との連携強化。
 - BM25やベクトル検索への差し替え。
 - LlmService経由の引用付き回答生成。

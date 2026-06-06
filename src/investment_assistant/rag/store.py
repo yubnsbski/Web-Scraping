@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +23,7 @@ class StoredChunk:
     chunk_index: int
     text: str
     content_hash: str
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 class RagStore:
@@ -35,16 +37,18 @@ class RagStore:
         """Replace chunks for a document and return the number stored."""
 
         now = datetime.now(UTC).isoformat()
+        metadata_json = json.dumps(document.metadata, ensure_ascii=False, sort_keys=True)
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO rag_documents (source, content_hash, indexed_at)
-                VALUES (?, ?, ?)
+                INSERT INTO rag_documents (source, content_hash, indexed_at, metadata_json)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(source) DO UPDATE SET
                     content_hash = excluded.content_hash,
-                    indexed_at = excluded.indexed_at
+                    indexed_at = excluded.indexed_at,
+                    metadata_json = excluded.metadata_json
                 """,
-                (document.source, document.content_hash, now),
+                (document.source, document.content_hash, now, metadata_json),
             )
             conn.execute("DELETE FROM rag_chunks WHERE source = ?", (document.source,))
             conn.executemany(
@@ -69,9 +73,16 @@ class RagStore:
         """Return stored chunks in source/index order."""
 
         sql = """
-            SELECT chunk_id, source, chunk_index, text, content_hash
+            SELECT
+                rag_chunks.chunk_id,
+                rag_chunks.source,
+                rag_chunks.chunk_index,
+                rag_chunks.text,
+                rag_chunks.content_hash,
+                rag_documents.metadata_json
             FROM rag_chunks
-            ORDER BY source, chunk_index
+            JOIN rag_documents ON rag_documents.source = rag_chunks.source
+            ORDER BY rag_chunks.source, rag_chunks.chunk_index
         """
         params: tuple[int, ...] = ()
         if limit is not None:
@@ -89,9 +100,16 @@ class RagStore:
                 CREATE TABLE IF NOT EXISTS rag_documents (
                     source TEXT PRIMARY KEY,
                     content_hash TEXT NOT NULL,
-                    indexed_at TEXT NOT NULL
+                    indexed_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
                 )
                 """
+            )
+            _ensure_column(
+                conn,
+                table="rag_documents",
+                column="metadata_json",
+                definition="TEXT NOT NULL DEFAULT '{}'",
             )
             conn.execute(
                 """
@@ -116,6 +134,18 @@ class RagStore:
         return sqlite3.connect(self.db_path)
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _stored_chunk(row: sqlite3.Row | tuple[object, ...]) -> StoredChunk:
     return StoredChunk(
         chunk_id=str(row[0]),
@@ -123,4 +153,15 @@ def _stored_chunk(row: sqlite3.Row | tuple[object, ...]) -> StoredChunk:
         chunk_index=int(cast(Any, row[2])),
         text=str(row[3]),
         content_hash=str(row[4]),
+        metadata=_metadata_from_json(str(row[5])),
     )
+
+
+def _metadata_from_json(value: str) -> dict[str, str]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): str(item) for key, item in parsed.items()}

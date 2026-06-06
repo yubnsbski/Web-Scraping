@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -14,6 +14,7 @@ class Document:
     source: str
     text: str
     content_hash: str
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -28,12 +29,18 @@ class TextChunk:
 
 
 def load_document(path: str | Path) -> Document:
-    """Load a local UTF-8 text/Markdown document."""
+    """Load a local UTF-8 text/Markdown document and optional front matter."""
 
     document_path = Path(path)
-    text = document_path.read_text(encoding="utf-8")
-    content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return Document(source=str(document_path), text=text, content_hash=content_hash)
+    raw_text = document_path.read_text(encoding="utf-8")
+    text, metadata = split_front_matter(raw_text)
+    content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+    return Document(
+        source=str(document_path),
+        text=text,
+        content_hash=content_hash,
+        metadata=metadata,
+    )
 
 
 def chunk_text(
@@ -98,3 +105,48 @@ def _normalize_text(text: str) -> str:
 def _chunk_id(source: str, content_hash: str, chunk_index: int, text: str) -> str:
     raw = f"{source}\0{content_hash}\0{chunk_index}\0{text}".encode()
     return hashlib.sha256(raw).hexdigest()
+
+
+def split_front_matter(text: str) -> tuple[str, dict[str, str]]:
+    """Return body text and simple YAML-like front matter metadata."""
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.startswith("---\n"):
+        return text, {}
+
+    lines = normalized.split("\n")
+    end_index = _front_matter_end_index(lines)
+    if end_index is None:
+        return text, {}
+
+    metadata = _parse_front_matter_lines(lines[1:end_index])
+    body = "\n".join(lines[end_index + 1 :])
+    if body.startswith("\n"):
+        body = body[1:]
+    return body, metadata
+
+
+def _front_matter_end_index(lines: list[str]) -> int | None:
+    for index, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            return index
+    return None
+
+
+def _parse_front_matter_lines(lines: list[str]) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for line in lines:
+        key, separator, raw_value = line.partition(":")
+        if not separator:
+            continue
+        normalized_key = key.strip()
+        if not normalized_key:
+            continue
+        metadata[normalized_key] = _unquote_front_matter_value(raw_value.strip())
+    return metadata
+
+
+def _unquote_front_matter_value(value: str) -> str:
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        return value[1:-1].replace('\\"', '"')
+    return value

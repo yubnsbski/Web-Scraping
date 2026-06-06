@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.config.loader import load_yaml
 from investment_assistant.ingestion.fetcher import SafeFetcher
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
@@ -23,6 +24,12 @@ from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
 from investment_assistant.scoring.scorer import validate_scoring_csv
+
+_RAG_INDEX_EXTENSIONS = frozenset({".md", ".markdown", ".txt"})
+_RAG_INDEX_EXCLUDED_DIRS = frozenset(
+    {".cache", ".git", "__pycache__", "artifacts", "data", "models", "rag_index"}
+)
+_RAG_INDEX_EXCLUDED_SUFFIXES = frozenset({".db", ".sqlite"})
 
 
 @dataclass(frozen=True)
@@ -123,12 +130,67 @@ def run_fetch_url(
     url: str,
     dry_run: bool = False,
     preview_chars: int = 500,
+    save_text: str | Path | None = None,
+    extract_text: bool = False,
+    include_metadata: bool = False,
 ) -> dict[str, object]:
-    """Run a safe URL fetch with robots, rate limiting, and cache."""
+    """Run a safe URL fetch with robots, rate limiting, cache, and optional text saving."""
 
     fetcher = SafeFetcher()
-    result = fetcher.fetch(url, dry_run=dry_run, preview_chars=preview_chars)
+    result = fetcher.fetch(
+        url,
+        dry_run=dry_run,
+        preview_chars=preview_chars,
+        save_text=save_text,
+        extract_text=extract_text,
+        include_metadata=include_metadata,
+    )
     return asdict(result)
+
+
+def run_fetch_job(
+    *,
+    path: str | Path,
+    dry_run: bool = False,
+    preview_chars: int = 500,
+) -> dict[str, object]:
+    """Run a YAML-defined batch of safe fetches without LLMs or trading actions."""
+
+    job_path = Path(path)
+    config = load_yaml(job_path)
+    sources = _fetch_job_sources(config, job_path)
+    fetcher = SafeFetcher()
+    results: list[dict[str, object]] = []
+    for source in sources:
+        source_preview_chars = _int_or_default(source.get("preview_chars"), preview_chars)
+        extract_text = _bool_or_default(source.get("extract_text"), True)
+        include_metadata = _bool_or_default(source.get("include_metadata"), True)
+        output_path = str(source["output_path"])
+        fetch_result = fetcher.fetch(
+            str(source["url"]),
+            dry_run=dry_run,
+            preview_chars=source_preview_chars,
+            save_text=None if dry_run else output_path,
+            extract_text=extract_text,
+            include_metadata=include_metadata,
+        )
+        results.append(
+            {
+                "name": str(source["name"]),
+                "url": str(source["url"]),
+                "output_path": output_path,
+                "query_hint": None
+                if source.get("query_hint") is None
+                else str(source.get("query_hint")),
+                "fetch": asdict(fetch_result),
+            }
+        )
+    return {
+        "job_path": str(job_path),
+        "dry_run": dry_run,
+        "sources_count": len(results),
+        "results": results,
+    }
 
 
 def run_rag_index(
@@ -158,6 +220,52 @@ def run_rag_index(
     }
 
 
+def run_rag_index_dir(
+    *,
+    path: str | Path,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    max_chars: int = 800,
+    overlap_chars: int = 120,
+) -> dict[str, object]:
+    """Recursively index local text/Markdown files into the local RAG store."""
+
+    root = Path(path)
+    if not root.is_dir():
+        msg = f"path must be a directory: {root}"
+        raise ValueError(msg)
+
+    store = RagStore(db_path)
+    files = _iter_rag_index_files(root)
+    skipped_paths = _iter_rag_skipped_files(root)
+    indexed_sources: list[str] = []
+    total_chunks = 0
+    for file_path in files:
+        try:
+            document = load_document(file_path)
+        except (OSError, UnicodeDecodeError):
+            skipped_paths.append(file_path)
+            continue
+        chunks = chunk_text(
+            source=document.source,
+            text=document.text,
+            content_hash=document.content_hash,
+            max_chars=max_chars,
+            overlap_chars=overlap_chars,
+        )
+        total_chunks += store.upsert_document(document, chunks)
+        indexed_sources.append(document.source)
+
+    skipped_files = [str(file_path) for file_path in skipped_paths]
+    return {
+        "source_dir": str(root),
+        "db_path": str(db_path),
+        "files_indexed": len(indexed_sources),
+        "chunks_indexed": total_chunks,
+        "indexed_sources": indexed_sources,
+        "skipped_files": skipped_files,
+    }
+
+
 def run_rag_search(
     *,
     query: str,
@@ -168,6 +276,112 @@ def run_rag_search(
 
     store = RagStore(db_path)
     return [asdict(result) for result in search_chunks(store, query=query, limit=limit)]
+
+
+
+
+def format_rag_search_table(
+    results: list[dict[str, object]],
+    *,
+    text_preview_chars: int = 120,
+    columns: Sequence[str] | None = None,
+) -> str:
+    """Format RAG search results as a compact Markdown table for terminal review."""
+
+    if not results:
+        return "No RAG search results."
+
+    selected_columns = _parse_table_columns(columns)
+    rows = [
+        "| " + " | ".join(selected_columns) + " |",
+        "| " + " | ".join("---" for _ in selected_columns) + " |",
+    ]
+    for rank, result in enumerate(results, 1):
+        rows.append(
+            "| "
+            + " | ".join(
+                _table_cell(
+                    _rag_table_value(
+                        column,
+                        rank=rank,
+                        result=result,
+                        text_preview_chars=text_preview_chars,
+                    )
+                )
+                for column in selected_columns
+            )
+            + " |"
+        )
+    return "\n".join(rows)
+
+
+
+
+def run_rag_search_job(
+    *,
+    path: str | Path,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    limit: int = 5,
+) -> dict[str, object]:
+    """Search the local RAG store for each query_hint in a fetch-job file."""
+
+    job_path = Path(path)
+    config = load_yaml(job_path)
+    sources = _fetch_job_sources(config, job_path)
+    results: list[dict[str, object]] = []
+    for source in sources:
+        query = _query_from_fetch_job_source(source)
+        results.append(
+            {
+                "name": str(source["name"]),
+                "url": str(source["url"]),
+                "output_path": str(source["output_path"]),
+                "query": query,
+                "query_hint": None
+                if source.get("query_hint") is None
+                else str(source.get("query_hint")),
+                "results": run_rag_search(query=query, db_path=db_path, limit=limit),
+            }
+        )
+    return {
+        "job_path": str(job_path),
+        "db_path": str(db_path),
+        "sources_count": len(results),
+        "results": results,
+    }
+
+
+def format_rag_search_job_table(
+    search_job_result: dict[str, object],
+    *,
+    text_preview_chars: int = 120,
+    columns: Sequence[str] | None = None,
+) -> str:
+    """Format fetch-job query_hint search results for terminal review."""
+
+    raw_results = search_job_result.get("results")
+    if not isinstance(raw_results, list) or not raw_results:
+        return "No fetch-job RAG search results."
+
+    blocks: list[str] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", ""))
+        query = str(item.get("query", ""))
+        url = str(item.get("url", ""))
+        blocks.append(f"## {name} | query={query} | url={url}")
+        raw_search_results = item.get("results")
+        search_results = raw_search_results if isinstance(raw_search_results, list) else []
+        table_rows = [row for row in search_results if isinstance(row, dict)]
+        blocks.append(
+            format_rag_search_table(
+                table_rows,
+                text_preview_chars=text_preview_chars,
+                columns=columns,
+            )
+        )
+    return "\n\n".join(blocks)
 
 
 def run_rag_answer_context(
@@ -276,6 +490,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Only check robots.txt and planned fetch safety; do not fetch target URL",
     )
     fetch_parser.add_argument("--preview-chars", type=int, default=500)
+    fetch_parser.add_argument(
+        "--save-text",
+        help=(
+            "Save the fetched response text to this local path, for example "
+            "local_docs/page.txt. Dry-runs and robots-blocked URLs are not saved."
+        ),
+    )
+    fetch_parser.add_argument(
+        "--extract-text",
+        action="store_true",
+        help="Normalize HTML into readable text before previewing and saving.",
+    )
+    fetch_parser.add_argument(
+        "--include-metadata",
+        action="store_true",
+        help="Prefix saved text with source URL, fetch time, status, and content-type metadata.",
+    )
+
+    fetch_job_parser = subparsers.add_parser(
+        "fetch-job",
+        help="Run a YAML-defined batch of safe fetch-url jobs",
+    )
+    fetch_job_parser.add_argument("--path", required=True)
+    fetch_job_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Check robots.txt for each source without fetching or saving target pages",
+    )
+    fetch_job_parser.add_argument("--preview-chars", type=int, default=500)
 
     rag_index_parser = subparsers.add_parser(
         "rag-index",
@@ -286,6 +529,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     rag_index_parser.add_argument("--max-chars", type=int, default=800)
     rag_index_parser.add_argument("--overlap-chars", type=int, default=120)
 
+    rag_index_dir_parser = subparsers.add_parser(
+        "rag-index-dir",
+        help="Recursively index local .txt/.md/.markdown files into the local RAG store",
+    )
+    rag_index_dir_parser.add_argument("--path", required=True)
+    rag_index_dir_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_index_dir_parser.add_argument("--max-chars", type=int, default=800)
+    rag_index_dir_parser.add_argument("--overlap-chars", type=int, default=120)
+
     rag_search_parser = subparsers.add_parser(
         "rag-search",
         help="Search indexed local RAG chunks without calling an LLM",
@@ -293,6 +545,56 @@ def main(argv: Sequence[str] | None = None) -> int:
     rag_search_parser.add_argument("--query", required=True)
     rag_search_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_search_parser.add_argument("--limit", type=int, default=5)
+    rag_search_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="json",
+        help="Output JSON for automation or a compact Markdown table for terminal review.",
+    )
+    rag_search_parser.add_argument(
+        "--text-preview-chars",
+        type=int,
+        default=120,
+        help="Maximum result text characters shown in --format table output.",
+    )
+    rag_search_parser.add_argument(
+        "--columns",
+        help=(
+            "Comma-separated columns for --format table. Available: "
+            "rank,score,source,chunk,source_url,fetched_at,status_code,content_type,metadata,text_preview."
+        ),
+    )
+
+    rag_search_job_parser = subparsers.add_parser(
+        "rag-search-job",
+        help="Search local RAG chunks using query_hint values from a fetch-job YAML file",
+    )
+    rag_search_job_parser.add_argument("--path", required=True)
+    rag_search_job_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_search_job_parser.add_argument("--limit", type=int, default=5)
+    rag_search_job_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="json",
+        help="Output JSON for automation or compact Markdown tables for terminal review.",
+    )
+    rag_search_job_parser.add_argument(
+        "--text-preview-chars",
+        type=int,
+        default=120,
+        help="Maximum result text characters shown in --format table output.",
+    )
+    rag_search_job_parser.add_argument(
+        "--columns",
+        help=(
+            "Comma-separated columns for --format table. Available: "
+            "rank,score,source,chunk,source_url,fetched_at,status_code,content_type,metadata,text_preview."
+        ),
+    )
+    rag_search_job_parser.add_argument(
+        "--save-report",
+        help="Save rag-search-job output to this local .md or .json report path.",
+    )
 
     rag_context_parser = subparsers.add_parser(
         "rag-answer-context",
@@ -369,6 +671,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             url=str(args.url),
             dry_run=bool(args.dry_run),
             preview_chars=int(args.preview_chars),
+            save_text=None if args.save_text is None else str(args.save_text),
+            extract_text=bool(args.extract_text),
+            include_metadata=bool(args.include_metadata),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "fetch-job":
+        result = run_fetch_job(
+            path=str(args.path),
+            dry_run=bool(args.dry_run),
+            preview_chars=int(args.preview_chars),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -383,13 +697,59 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "rag-index-dir":
+        result = run_rag_index_dir(
+            path=str(args.path),
+            db_path=str(args.db_path),
+            max_chars=int(args.max_chars),
+            overlap_chars=int(args.overlap_chars),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "rag-search":
         search_result = run_rag_search(
             query=str(args.query),
             db_path=str(args.db_path),
             limit=int(args.limit),
         )
-        print(json.dumps(search_result, ensure_ascii=False, indent=2))
+        if str(args.format) == "table":
+            print(
+                format_rag_search_table(
+                    search_result,
+                    text_preview_chars=int(args.text_preview_chars),
+                    columns=None if args.columns is None else str(args.columns).split(","),
+                )
+            )
+        else:
+            print(json.dumps(search_result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "rag-search-job":
+        search_job_result = run_rag_search_job(
+            path=str(args.path),
+            db_path=str(args.db_path),
+            limit=int(args.limit),
+        )
+        save_report_path = None if args.save_report is None else str(args.save_report)
+        if str(args.format) == "table":
+            table_output = format_rag_search_job_table(
+                search_job_result,
+                text_preview_chars=int(args.text_preview_chars),
+                columns=None if args.columns is None else str(args.columns).split(","),
+            )
+            print(table_output)
+            if save_report_path is not None:
+                saved_report_path = _save_report(table_output, save_report_path)
+                print(f"saved_report_path: {saved_report_path}")
+        else:
+            if save_report_path is not None:
+                search_job_result["saved_report_path"] = str(Path(save_report_path))
+                _save_report(
+                    json.dumps(search_job_result, ensure_ascii=False, indent=2),
+                    save_report_path,
+                )
+            print(json.dumps(search_job_result, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "rag-answer-context":
@@ -430,6 +790,179 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     return 2
+
+
+
+
+
+_DEFAULT_RAG_TABLE_COLUMNS = ("rank", "score", "source", "chunk", "metadata", "text_preview")
+_ALLOWED_RAG_TABLE_COLUMNS = frozenset(
+    {
+        "rank",
+        "score",
+        "source",
+        "chunk",
+        "source_url",
+        "fetched_at",
+        "status_code",
+        "content_type",
+        "metadata",
+        "text_preview",
+    }
+)
+
+
+def _parse_table_columns(columns: Sequence[str] | None) -> tuple[str, ...]:
+    if columns is None:
+        return _DEFAULT_RAG_TABLE_COLUMNS
+    parsed = tuple(column.strip() for column in columns if column.strip())
+    if not parsed:
+        return _DEFAULT_RAG_TABLE_COLUMNS
+    unknown = [column for column in parsed if column not in _ALLOWED_RAG_TABLE_COLUMNS]
+    if unknown:
+        msg = f"unknown rag-search table column(s): {', '.join(unknown)}"
+        raise ValueError(msg)
+    return parsed
+
+
+def _rag_table_value(
+    column: str,
+    *,
+    rank: int,
+    result: dict[str, object],
+    text_preview_chars: int,
+) -> str:
+    metadata = result.get("metadata")
+    if column == "rank":
+        return str(rank)
+    if column == "score":
+        return str(result.get("score", ""))
+    if column == "source":
+        return str(result.get("source", ""))
+    if column == "chunk":
+        return str(result.get("chunk_index", ""))
+    if column == "metadata":
+        return _metadata_summary(metadata)
+    if column == "text_preview":
+        return _preview_text(str(result.get("text", "")), text_preview_chars)
+    return _metadata_value(metadata, column)
+
+
+def _metadata_value(value: object, key: str) -> str:
+    if not isinstance(value, dict):
+        return ""
+    raw_value = value.get(key)
+    return "" if raw_value is None else str(raw_value)
+
+
+def _metadata_summary(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    keys = ("source_url", "fetched_at", "status_code", "content_type")
+    parts = [f"{key}={value[key]}" for key in keys if value.get(key)]
+    return " ".join(parts)
+
+
+def _preview_text(text: str, max_chars: int) -> str:
+    normalized = " ".join(text.split())
+    if max_chars <= 0 or len(normalized) <= max_chars:
+        return normalized
+    return f"{normalized[: max(0, max_chars - 1)]}…"
+
+
+def _table_cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
+
+
+def _fetch_job_sources(config: dict[str, object], job_path: Path) -> list[dict[str, object]]:
+    raw_sources = config.get("sources")
+    if not isinstance(raw_sources, list):
+        msg = f"fetch job must contain a sources list: {job_path}"
+        raise ValueError(msg)
+
+    sources: list[dict[str, object]] = []
+    for index, raw_source in enumerate(raw_sources, start=1):
+        if not isinstance(raw_source, dict):
+            msg = f"fetch job source #{index} must be a mapping"
+            raise ValueError(msg)
+        source = {str(key): value for key, value in raw_source.items()}
+        for field in ("name", "url", "output_path"):
+            if not source.get(field):
+                msg = f"fetch job source #{index} is missing required field: {field}"
+                raise ValueError(msg)
+        sources.append(source)
+    return sources
+
+
+
+
+
+
+def _save_report(content: str, path: str | Path) -> str:
+    report_path = Path(path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(content, encoding="utf-8")
+    return str(report_path)
+
+
+def _query_from_fetch_job_source(source: dict[str, object]) -> str:
+    query_hint = source.get("query_hint")
+    if query_hint is not None and str(query_hint).strip():
+        return str(query_hint)
+    return str(source["name"])
+
+
+def _int_or_default(value: object, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    return default
+
+
+def _bool_or_default(value: object, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def _iter_rag_index_files(root: Path) -> list[Path]:
+    return [
+        path
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and _is_supported_rag_file(root, path)
+    ]
+
+
+def _iter_rag_skipped_files(root: Path) -> list[Path]:
+    return [
+        path
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and not _is_supported_rag_file(root, path)
+    ]
+
+
+def _is_supported_rag_file(root: Path, path: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    if any(part in _RAG_INDEX_EXCLUDED_DIRS for part in relative.parts[:-1]):
+        return False
+    if path.name.startswith(".env"):
+        return False
+    suffix = path.suffix.lower()
+    if suffix in _RAG_INDEX_EXCLUDED_SUFFIXES:
+        return False
+    return suffix in _RAG_INDEX_EXTENSIONS
 
 
 def _format_budget_report(report: BudgetReport) -> str:
