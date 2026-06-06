@@ -28,10 +28,12 @@ class HttpCache:
         *,
         ttl_seconds: int = 3600,
         enabled: bool = True,
+        max_rows: int | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.ttl = timedelta(seconds=ttl_seconds)
         self.enabled = enabled
+        self.max_rows = max_rows
         self._ensure_schema()
 
     def get(self, url: str, *, now: datetime | None = None) -> CachedHttpResponse | None:
@@ -89,6 +91,38 @@ class HttpCache:
                 """,
                 (url, status_code, headers_json, body, current.isoformat()),
             )
+        if self.max_rows is not None:
+            self.enforce_max_rows()
+
+    def purge_expired(self, *, now: datetime | None = None) -> int:
+        """Delete cached responses older than the TTL. Returns the number removed."""
+
+        if not self.enabled:
+            return 0
+        cutoff = (now or datetime.now(UTC)) - self.ttl
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM http_cache WHERE fetched_at < ?", (cutoff.isoformat(),)
+            )
+            return int(cursor.rowcount)
+
+    def enforce_max_rows(self, max_rows: int | None = None) -> int:
+        """Keep only the newest ``max_rows`` cached responses. Returns removed count."""
+
+        limit = max_rows if max_rows is not None else self.max_rows
+        if limit is None:
+            return 0
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM http_cache
+                WHERE url NOT IN (
+                    SELECT url FROM http_cache ORDER BY fetched_at DESC LIMIT ?
+                )
+                """,
+                (max(0, limit),),
+            )
+            return int(cursor.rowcount)
 
     def _ensure_schema(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

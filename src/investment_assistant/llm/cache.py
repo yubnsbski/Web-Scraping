@@ -11,10 +11,18 @@ from pathlib import Path
 class LlmCache:
     """Persist prompt responses to avoid repeated Gemini API calls."""
 
-    def __init__(self, db_path: str | Path, *, ttl_days: int = 30, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        ttl_days: int = 30,
+        enabled: bool = True,
+        max_rows: int | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.ttl = timedelta(days=ttl_days)
         self.enabled = enabled
+        self.max_rows = max_rows
         self._ensure_schema()
 
     @staticmethod
@@ -60,6 +68,38 @@ class LlmCache:
                 """,
                 (key, response, current.isoformat()),
             )
+        if self.max_rows is not None:
+            self.enforce_max_rows()
+
+    def purge_expired(self, *, now: datetime | None = None) -> int:
+        """Delete cache rows older than the TTL. Returns the number removed."""
+
+        if not self.enabled:
+            return 0
+        cutoff = (now or datetime.now(UTC)) - self.ttl
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM llm_cache WHERE created_at < ?", (cutoff.isoformat(),)
+            )
+            return int(cursor.rowcount)
+
+    def enforce_max_rows(self, max_rows: int | None = None) -> int:
+        """Keep only the newest ``max_rows`` rows. Returns the number removed."""
+
+        limit = max_rows if max_rows is not None else self.max_rows
+        if limit is None:
+            return 0
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM llm_cache
+                WHERE cache_key NOT IN (
+                    SELECT cache_key FROM llm_cache ORDER BY created_at DESC LIMIT ?
+                )
+                """,
+                (max(0, limit),),
+            )
+            return int(cursor.rowcount)
 
     def _ensure_schema(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

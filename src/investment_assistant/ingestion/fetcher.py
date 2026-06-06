@@ -18,6 +18,9 @@ from investment_assistant.ingestion.transport import (
     HttpTransport,
     UrlLibHttpTransport,
 )
+from investment_assistant.observability import get_logger
+
+_logger = get_logger("ingestion.fetcher")
 
 DEFAULT_USER_AGENT = "investment-assistant/0.1 (+safe-ingestion; contact: local-user)"
 USER_AGENT_ENV_VAR = "INVESTMENT_ASSISTANT_USER_AGENT"
@@ -85,6 +88,7 @@ class SafeFetcher:
 
         decision = self.robots.can_fetch(url)
         if not decision.allowed:
+            _logger.info("fetch blocked url_host=%s reason=%s", _host(url), decision.reason)
             return FetchResult(
                 url=url,
                 status_code=None,
@@ -133,6 +137,12 @@ class SafeFetcher:
             url,
             timeout_seconds=self.timeout_seconds,
             user_agent=self.user_agent,
+        )
+        _logger.info(
+            "fetch ok url_host=%s status=%s bytes=%d source=network",
+            _host(url),
+            response.status_code,
+            len(response.body),
         )
         self.cache.set(
             url=url,
@@ -193,6 +203,14 @@ def _result_from_response(
         extracted_text=extract_text,
         metadata_included=include_metadata and save_text is not None,
     )
+
+
+def _host(url: str) -> str:
+    """Return just the host for logging, avoiding path/query leakage."""
+
+    from urllib.parse import urlparse
+
+    return urlparse(url).hostname or "<unknown>"
 
 
 def _header_value(headers: dict[str, str], name: str) -> str | None:

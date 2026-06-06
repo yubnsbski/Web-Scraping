@@ -13,13 +13,20 @@ from investment_assistant.config.loader import load_yaml
 from investment_assistant.forecasting import service as forecast_service
 from investment_assistant.forecasting.dataset import DEFAULT_DATASET, download_dataset
 from investment_assistant.forecasting.timeseries import load_timeseries_csv
-from investment_assistant.ingestion.fetcher import SafeFetcher, reject_path_traversal
+from investment_assistant.ingestion.fetcher import (
+    DEFAULT_HTTP_CACHE_PATH,
+    SafeFetcher,
+    reject_path_traversal,
+)
+from investment_assistant.ingestion.http_cache import HttpCache
+from investment_assistant.llm.cache import LlmCache
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
     build_llm_service,
     load_gemini_runtime_config,
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
+from investment_assistant.observability import configure_logging
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.indexer import index_directory
@@ -395,6 +402,40 @@ def run_rag_answer(
     return result
 
 
+def run_cache_maintenance(
+    *,
+    config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
+    max_rows: int | None = None,
+) -> dict[str, object]:
+    """Purge expired entries and enforce row limits on the HTTP and LLM caches."""
+
+    runtime = load_gemini_runtime_config(config_path)
+    llm_cache = LlmCache(
+        runtime.cache_db_path,
+        ttl_days=runtime.cache_ttl_days,
+        enabled=True,
+        max_rows=max_rows,
+    )
+    http_cache = HttpCache(DEFAULT_HTTP_CACHE_PATH, max_rows=max_rows)
+    llm_expired = llm_cache.purge_expired()
+    llm_trimmed = llm_cache.enforce_max_rows() if max_rows is not None else 0
+    http_expired = http_cache.purge_expired()
+    http_trimmed = http_cache.enforce_max_rows() if max_rows is not None else 0
+    return {
+        "max_rows": max_rows,
+        "llm_cache": {
+            "db_path": str(runtime.cache_db_path),
+            "expired_removed": llm_expired,
+            "trimmed_removed": llm_trimmed,
+        },
+        "http_cache": {
+            "db_path": str(DEFAULT_HTTP_CACHE_PATH),
+            "expired_removed": http_expired,
+            "trimmed_removed": http_trimmed,
+        },
+    }
+
+
 def run_forecast_fetch_data(
     *,
     dataset: str = DEFAULT_DATASET,
@@ -484,6 +525,7 @@ def run_scoring_validate(*, path: str | Path) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI."""
 
+    configure_logging()
     parser = argparse.ArgumentParser(prog="investment-assistant")
     parser.add_argument("--config", default=str(DEFAULT_GEMINI_CONFIG_PATH))
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -643,6 +685,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--call-real-api",
         action="store_true",
         help="Use the real Gemini client through LlmService; omitted means local fake client",
+    )
+
+    cache_parser = subparsers.add_parser(
+        "cache-maintenance",
+        help="Purge expired entries and optionally cap rows in the HTTP/LLM caches",
+    )
+    cache_parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=None,
+        help="Keep only the newest N rows in each cache (omit to only purge expired).",
     )
 
     forecast_fetch_parser = subparsers.add_parser(
@@ -848,6 +901,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             call_real_api=bool(args.call_real_api),
         )
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "cache-maintenance":
+        result = run_cache_maintenance(
+            config_path=config_path,
+            max_rows=None if args.max_rows is None else int(args.max_rows),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "forecast-fetch-data":
