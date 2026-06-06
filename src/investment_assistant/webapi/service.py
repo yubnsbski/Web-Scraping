@@ -14,8 +14,10 @@ Design notes:
 
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +115,42 @@ def _rag_index_dir(body: JsonDict) -> JsonDict:
     )
 
 
+def _manual_doc_save(body: JsonDict) -> JsonDict:
+    """Save pasted text into local_docs/manual and index it into the RAG store."""
+
+    text = _require_str(body, "text")
+    if len(text) > _MAX_MANUAL_TEXT_CHARS:
+        raise ApiError(f"text is too long: max {_MAX_MANUAL_TEXT_CHARS} characters")
+
+    title = str(body.get("title") or "manual-note").strip() or "manual-note"
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+    raw_source_url = body.get("source_url")
+    source_url = raw_source_url.strip() if isinstance(raw_source_url, str) else ""
+
+    manual_dir = Path("local_docs") / "manual"
+    manual_dir.mkdir(parents=True, exist_ok=True)
+    save_path = _unique_path(manual_dir / _safe_manual_doc_filename(title))
+
+    saved_at = datetime.now(UTC).isoformat()
+    metadata = [
+        "# Manual imported investment document",
+        f"title: {title}",
+        f"saved_at: {saved_at}",
+    ]
+    if source_url:
+        metadata.append(f"source_url: {source_url}")
+    content = "\n".join(metadata) + "\n\n" + text.strip() + "\n"
+    save_path.write_text(content, encoding="utf-8")
+
+    indexed = cli.run_rag_index(path=save_path, db_path=db_path)
+    return {
+        "saved_path": str(save_path),
+        "chars": len(text),
+        "source_url": source_url or None,
+        "indexed": indexed,
+    }
+
+
 def _scoring_rank(body: JsonDict) -> JsonDict:
     csv_text = body.get("csv_text")
     if csv_text:
@@ -188,6 +226,7 @@ def _fetch_job(body: JsonDict, *, dry_run: bool) -> JsonDict:
 _SAMPLE_SP500 = str(
     Path(__file__).resolve().parents[3] / "examples" / "sp500_monthly_sample.csv"
 )
+_MAX_MANUAL_TEXT_CHARS = 200_000
 
 
 def _require_str(body: JsonDict, key: str) -> str:
@@ -219,6 +258,19 @@ def _as_int_tuple(value: object) -> tuple[int, ...]:
     if not isinstance(value, list):
         return ()
     return tuple(_as_int(item, 0) for item in value if _as_int(item, 0) > 0)
+
+
+def _safe_manual_doc_filename(title: str) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z一-龯ぁ-んァ-ンー_-]+", "-", title).strip("-_")
+    safe = normalized[:80] if normalized else "manual-note"
+    return f"{safe}.txt"
+
+
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    return path.with_name(f"{path.stem}-{stamp}{path.suffix}")
 
 
 def _sources_to_yaml(sources: list[Any]) -> str:
@@ -255,6 +307,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/rag/answer"): _rag_answer,
     ("POST", "/api/orchestrate"): _orchestrate,
     ("POST", "/api/rag/index-dir"): _rag_index_dir,
+    ("POST", "/api/manual-doc/save"): _manual_doc_save,
     ("POST", "/api/scoring/rank"): _scoring_rank,
     ("POST", "/api/forecast/evaluate"): _forecast_evaluate,
     ("POST", "/api/forecast/predict"): _forecast_predict,
