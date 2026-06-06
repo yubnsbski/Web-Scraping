@@ -178,6 +178,13 @@ name,expense_ratio,annual_return,volatility,diversification_score
 DATA
 
 investment-assistant scoring-rank --path local_data/funds.csv --limit 3
+
+# 人間向けの比較テーブル表示
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --format table
+
+# 結果をJSONファイルへ保存（既存ファイルは誤上書き防止。上書きは --overwrite を明示）
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --output local_data/ranking.json
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --output local_data/ranking.json --overwrite
 ```
 
 `scoring-validate` はスコア計算前にCSVの入力検証だけを行い、成功時は `valid=true`、行数、警告一覧をJSONで返します。失敗時は `valid=false` とエラー一覧をJSONで返します。

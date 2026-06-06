@@ -852,6 +852,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     scoring_parser.add_argument("--path", required=True)
     scoring_parser.add_argument("--limit", type=int, default=10)
+    scoring_parser.add_argument(
+        "--format",
+        choices=("json", "table"),
+        default="json",
+        help="Print scoring-rank output as JSON or a human-readable comparison table",
+    )
+    scoring_parser.add_argument(
+        "--output",
+        help="Write the scoring-rank JSON result to this file instead of printing it",
+    )
+    scoring_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow overwriting an existing --output file (refused by default)",
+    )
     scoring_parser.add_argument("--expense-weight", type=float, default=0.30)
     scoring_parser.add_argument("--return-weight", type=float, default=0.30)
     scoring_parser.add_argument("--volatility-weight", type=float, default=0.25)
@@ -1074,7 +1089,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             volatility_weight=float(args.volatility_weight),
             diversification_weight=float(args.diversification_weight),
         )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        output = None if args.output is None else str(args.output)
+        if output is not None:
+            return _write_scoring_output(result, output, overwrite=bool(args.overwrite))
+        if str(args.format) == "table":
+            print(_format_scoring_rank_table(result))
+        else:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     return 2
@@ -1230,6 +1251,102 @@ def _bool_or_default(value: object, default: bool) -> bool:
     if isinstance(value, str):
         return value.lower() in {"1", "true", "yes", "on"}
     return default
+
+
+def _write_scoring_output(result: dict[str, object], output: str, *, overwrite: bool) -> int:
+    """Write a scoring-rank result to a file, refusing to overwrite by default."""
+
+    output_path = reject_path_traversal(output)
+    if output_path.exists() and not overwrite:
+        print(
+            json.dumps(
+                {
+                    "error": "output file already exists; pass --overwrite to replace it",
+                    "output": str(output_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        json.dumps(
+            {
+                "output": str(output_path),
+                "count": result.get("count"),
+                "call_real_api": False,
+                "auto_trading": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _format_scoring_rank_table(report: dict[str, object]) -> str:
+    """Format scoring-rank JSON as a compact comparison table for humans."""
+
+    headers = (
+        "rank",
+        "name",
+        "total_score",
+        "expense_ratio",
+        "annual_return",
+        "volatility",
+        "diversification_score",
+    )
+    rows: list[tuple[str, ...]] = [headers]
+    raw_results = report.get("results", [])
+    results = raw_results if isinstance(raw_results, list) else []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics", {})
+        score = item.get("score", {})
+        metrics = metrics if isinstance(metrics, dict) else {}
+        score = score if isinstance(score, dict) else {}
+        rows.append(
+            (
+                _format_table_value(item.get("rank", "")),
+                _format_table_value(item.get("name", "")),
+                _format_table_value(score.get("total_score", "")),
+                _format_table_value(metrics.get("expense_ratio", "")),
+                _format_table_value(metrics.get("annual_return", "")),
+                _format_table_value(metrics.get("volatility", "")),
+                _format_table_value(metrics.get("diversification_score", "")),
+            )
+        )
+    widths = [max(len(row[index]) for row in rows) for index in range(len(headers))]
+    table_lines = [
+        " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
+        for row in rows
+    ]
+    lines = [
+        f"source: {report.get('source', '')}",
+        f"limit: {report.get('limit', '')}",
+        f"call_real_api: {str(bool(report.get('call_real_api', False))).lower()}",
+        f"auto_trading: {str(bool(report.get('auto_trading', False))).lower()}",
+        "",
+        *table_lines,
+        "",
+        str(
+            report.get(
+                "disclaimer", "投資助言・売買推奨ではありません。最終判断はユーザー本人が行います。"
+            )
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def _format_table_value(value: object) -> str:
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
 
 
 def _format_budget_report(report: BudgetReport) -> str:

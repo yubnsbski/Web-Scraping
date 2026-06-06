@@ -518,6 +518,69 @@ def test_cli_scoring_rank_outputs_guarded_report(tmp_path, capsys):
     assert "投資助言" in output["disclaimer"]
 
 
+def _write_funds_csv(path) -> None:
+    path.write_text(
+        "name,expense_ratio,annual_return,volatility,diversification_score\n"
+        "低コスト全世界株式,0.12,0.065,0.18,0.95\n"
+        "高コストテーマ型,1.20,0.080,0.35,0.45\n"
+        "債券バランス型,0.35,0.030,0.08,0.80\n",
+        encoding="utf-8",
+    )
+
+
+def test_cli_scoring_rank_writes_output_file(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    output_path = tmp_path / "reports" / "ranking.json"
+    _write_funds_csv(csv_path)
+
+    exit_code = main(
+        ["scoring-rank", "--path", str(csv_path), "--limit", "2", "--output", str(output_path)]
+    )
+
+    assert exit_code == 0
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["source"] == str(csv_path)
+    assert saved["count"] == 3
+    assert len(saved["results"]) == 2
+    assert saved["call_real_api"] is False
+    assert saved["auto_trading"] is False
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["output"] == str(output_path)
+    assert summary["count"] == 3
+
+
+def test_cli_scoring_rank_refuses_overwrite_without_flag(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    output_path = tmp_path / "ranking.json"
+    _write_funds_csv(csv_path)
+    output_path.write_text("existing", encoding="utf-8")
+
+    exit_code = main(
+        ["scoring-rank", "--path", str(csv_path), "--output", str(output_path)]
+    )
+    assert exit_code == 1
+    assert output_path.read_text(encoding="utf-8") == "existing"  # not overwritten
+    assert "already exists" in capsys.readouterr().out
+
+    exit_code = main(
+        ["scoring-rank", "--path", str(csv_path), "--output", str(output_path), "--overwrite"]
+    )
+    assert exit_code == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["count"] == 3
+
+
+def test_cli_scoring_rank_table_format(tmp_path, capsys):
+    csv_path = tmp_path / "funds.csv"
+    _write_funds_csv(csv_path)
+    exit_code = main(["scoring-rank", "--path", str(csv_path), "--limit", "3", "--format", "table"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "rank | name" in out
+    assert "低コスト全世界株式" in out
+    assert "投資助言" in out
+
+
 def test_cli_scoring_validate_outputs_valid_json(tmp_path, capsys):
     csv_path = tmp_path / "funds.csv"
     csv_path.write_text(

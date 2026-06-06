@@ -36,7 +36,19 @@ DATA
 
 investment-assistant scoring-validate --path local_data/funds.csv
 investment-assistant scoring-rank --path local_data/funds.csv --limit 3
+
+# 比較テーブル表示 / JSON保存（上書きは --overwrite を明示）
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --format table
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --output local_data/ranking.json
+investment-assistant scoring-rank --path local_data/funds.csv --limit 3 --output local_data/ranking.json --overwrite
 ```
+
+## 出力オプション
+
+- `--format table`: 順位・名称・総合スコア・各指標を人間向けの比較表で表示します（既定は `json`）。
+- `--output PATH`: ランキングJSONをファイルへ保存し、標準出力には保存先と件数の要約を返します。
+- `--overwrite`: `--output` 先が既に存在する場合の上書きを許可します（既定は誤上書き防止のため拒否）。
+- 出力パスは `..` によるディレクトリ脱出を拒否します。
 
 ## CSV形式
 
