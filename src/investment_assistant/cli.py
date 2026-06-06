@@ -457,6 +457,7 @@ def run_forecast_evaluate(
     include_ml: bool = True,
     ensemble_method: str = "weighted",
     space: str = "returns",
+    ma_windows: Sequence[int] = (),
 ) -> dict[str, object]:
     """Walk-forward backtest base models and the ensemble on a local CSV."""
 
@@ -470,6 +471,7 @@ def run_forecast_evaluate(
         include_ml=include_ml,
         ensemble_method=ensemble_method,
         space=space,
+        ma_windows=ma_windows,
     )
 
 
@@ -731,6 +733,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Skip optional scikit-learn ensemble members even if installed.",
     )
+    forecast_eval_parser.add_argument(
+        "--ma-windows",
+        default=None,
+        help="Comma-separated moving-average windows to compare, e.g. 3,6,12.",
+    )
 
     forecast_predict_parser = subparsers.add_parser(
         "forecast-predict",
@@ -927,6 +934,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_ml=not bool(args.no_ml),
             ensemble_method=str(args.ensemble_method),
             space=str(args.space),
+            ma_windows=_parse_int_list(args.ma_windows),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -1082,6 +1090,16 @@ def _query_from_fetch_job_source(source: dict[str, object]) -> str:
     if query_hint is not None and str(query_hint).strip():
         return str(query_hint)
     return str(source["name"])
+
+
+def _parse_int_list(value: str | None) -> tuple[int, ...]:
+    if not value:
+        return ()
+    windows = tuple(int(part.strip()) for part in str(value).split(",") if part.strip())
+    if any(window < 1 for window in windows):
+        msg = "moving-average windows must be positive integers"
+        raise ValueError(msg)
+    return windows
 
 
 def _int_or_default(value: object, default: int) -> int:
