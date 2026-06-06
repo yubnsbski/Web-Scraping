@@ -15,6 +15,7 @@ from investment_assistant.llm.factory import (
     load_gemini_runtime_config,
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
+from investment_assistant.server import run_server
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Required safety acknowledgement because this consumes Gemini quota",
     )
 
+    serve_parser = subparsers.add_parser("serve", help="Run the web UI server")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Host for the web server")
+    serve_parser.add_argument("--port", type=int, default=8080, help="Port for the web server")
+
     args = parser.parse_args(argv)
     config_path = str(args.config)
 
@@ -166,6 +171,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             prompt=str(args.prompt),
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "serve":
+        run_server(host=args.host, port=args.port)
         return 0
 
     return 2

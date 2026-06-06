@@ -13,7 +13,7 @@ gemini:
   fallback:
     on_daily_limit: local_summary
     on_monthly_limit: skip_llm
-    on_error: cached_or_skip
+    on_error: local_summary
   allowed_tasks:
     - rag_answer
     - important_report_summary

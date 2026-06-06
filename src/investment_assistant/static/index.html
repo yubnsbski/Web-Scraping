@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Investment Assistant - Chat</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="page-container">
+    <!-- ヘッダー -->
+    <header class="header">
+      <div class="header-content">
+        <h1>💼 Investment Assistant</h1>
+        <p class="tagline">AI駆動型投資支援チャット</p>
+      </div>
+    </header>
+
+    <!-- メインコンテナ -->
+    <main class="main-content">
+      <!-- チャットエリア -->
+      <div class="chat-container">
+        <div id="chatBox" class="chat-box">
+          <!-- メッセージはここに挿入される -->
+          <div class="chat-message system">
+            <div class="message-content">
+              こんにちは。投資支援AIアシスタントです。S&P 500の予測、市場データ取得、投資分析などの質問をどうぞ。
+            </div>
+          </div>
+        </div>
+
+        <!-- 入力フォーム -->
+        <div class="chat-input-area">
+          <form id="chatForm">
+            <div class="input-group">
+              <input
+                type="text"
+                id="messageInput"
+                class="message-input"
+                placeholder="質問を入力... （例：S&P 500 の予測をして、最新データを取得）"
+                autocomplete="off"
+              />
+              <button type="submit" class="send-btn">送信</button>
+            </div>
+          </form>
+
+          <!-- サンプルプロンプト -->
+          <div class="sample-prompts">
+            <span class="sample-label">提案:</span>
+            <button class="sample-btn" data-prompt="S&P 500 の来月のリターン予測をしてください">📈 予測実行</button>
+            <button class="sample-btn" data-prompt="最新の市場データを取得してください">🌐 データ取得</button>
+            <button class="sample-btn" data-prompt="過去3ヶ月の成長分析をしてください">📊 分析実行</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- サイドパネル -->
+      <aside class="side-panel">
+        <div class="panel-section">
+          <h3>💡 利用可能な機能</h3>
+          <ul class="feature-list">
+            <li>📈 <strong>アンサンブル予測</strong> - S&P 500 月次リターン</li>
+            <li>🌐 <strong>Web スクレイピング</strong> - 法令範囲内のデータ取得</li>
+            <li>📊 <strong>市場分析</strong> - 投資データ解析</li>
+            <li>💬 <strong>自由質問</strong> - 投資相談</li>
+          </ul>
+        </div>
+
+        <div class="panel-section">
+          <h3>📌 用語説明</h3>
+          <dl class="glossary">
+            <dt>Monthly Return</dt>
+            <dd>月次リターン = (当月終値 - 前月終値) / 前月終値 × 100 (%)</dd>
+            <dt>S&P 500</dt>
+            <dd>米国主要500企業で構成される指数</dd>
+            <dt>RMSE</dt>
+            <dd>予測誤差の平均二乗平方根</dd>
+          </dl>
+        </div>
+
+        <div class="panel-section disclaimer">
+          <strong>⚠️ 免責事項</strong>
+          <p>このサービスは教育・調査目的であり、投資助言ではありません。</p>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

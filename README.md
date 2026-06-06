@@ -60,6 +60,28 @@ investment-assistant smoke --prompt "hello"
 python3 scripts/smoke_llm_service.py
 ```
 
+## Web UI サーバー
+
+シンプルなフロントエンドを提供するWebサーバーを起動できます。
+
+```bash
+investment-assistant serve --host 127.0.0.1 --port 8080
+```
+
+起動後にブラウザで `http://127.0.0.1:8080` を開くと、プロンプト入力と生成結果の確認ができます。
+
+### 使い方
+
+1. タスクタイプを選択
+2. 質問・命令を入力
+3. 「生成」ボタンを押す
+
+### 予備動作
+
+- 成功時は `gemini` か `cache` のソースが表示されます
+- エラー発生時は `fallback:local_summary:error` で入力の要約を返します
+- 予算上限に近い場合は警告表示し、上限到達時はキャッシュ / ローカル要約 / スキップにフォールバックします
+
 ## LlmService factory
 
 `config/gemini.yaml` から、予算管理・キャッシュ・フォールバックを備えた `LlmService` を生成します。
