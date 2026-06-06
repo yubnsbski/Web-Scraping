@@ -34,3 +34,8 @@ local_data/
 # Local job definitions
 local_jobs/
 local_reports/
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+web/.vite/
