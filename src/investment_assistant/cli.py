@@ -27,6 +27,8 @@ from investment_assistant.llm.factory import (
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
 from investment_assistant.observability import configure_logging
+from investment_assistant.orchestration.factory import build_orchestrator
+from investment_assistant.orchestration.orchestrator import OrchestrationConfig
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.indexer import index_directory
@@ -412,6 +414,51 @@ def run_rag_answer(
     return result
 
 
+def run_orchestrate_answer(
+    *,
+    query: str,
+    config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    limit: int = 5,
+    drafts: int = 1,
+    include_critique: bool = True,
+    hybrid: bool = False,
+    alpha: float = 0.5,
+    call_real_api: bool = False,
+) -> dict[str, object]:
+    """Run multi-model orchestration (draft->critique->synthesize) over RAG context."""
+
+    store = RagStore(db_path)
+    if hybrid:
+        results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
+    else:
+        results = search_chunks(store, query=query, limit=limit)
+    context = build_answer_context(results)
+    if not results:
+        return {
+            "query": query,
+            "answer": (
+                "関連するローカル文書チャンクがないため、"
+                "オーケストレーションをスキップしました。"
+            ),
+            "context": context,
+            "results": [],
+            "skipped": True,
+        }
+
+    orchestrator = build_orchestrator(
+        config_path,
+        config=OrchestrationConfig(n_drafts=drafts, include_critique=include_critique),
+        call_real_api=call_real_api,
+    )
+    outcome = orchestrator.run(query=query, context=context)
+    payload = outcome.to_dict()
+    payload["context"] = context
+    payload["results"] = [asdict(result) for result in results]
+    payload["call_real_api"] = call_real_api
+    return payload
+
+
 def run_cache_maintenance(
     *,
     config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
@@ -710,6 +757,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Use the real Gemini client through LlmService; omitted means local fake client",
     )
 
+    orchestrate_parser = subparsers.add_parser(
+        "orchestrate-answer",
+        help="Multi-model draft->critique->synthesize answer over local RAG context",
+    )
+    orchestrate_parser.add_argument("--query", required=True)
+    orchestrate_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    orchestrate_parser.add_argument("--limit", type=int, default=5)
+    orchestrate_parser.add_argument(
+        "--drafts", type=int, default=1, help="Number of diversified drafts (self-consistency)."
+    )
+    orchestrate_parser.add_argument(
+        "--no-critique", action="store_true", help="Skip the critic stage."
+    )
+    orchestrate_parser.add_argument(
+        "--hybrid", action="store_true", help="Use hybrid lexical+semantic retrieval."
+    )
+    orchestrate_parser.add_argument("--alpha", type=float, default=0.5)
+    orchestrate_parser.add_argument(
+        "--call-real-api",
+        action="store_true",
+        help="Use real Gemini via LlmService; omitted uses a local fake client.",
+    )
+
     cache_parser = subparsers.add_parser(
         "cache-maintenance",
         help="Purge expired entries and optionally cap rows in the HTTP/LLM caches",
@@ -931,6 +1001,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             call_real_api=bool(args.call_real_api),
         )
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "orchestrate-answer":
+        result = run_orchestrate_answer(
+            query=str(args.query),
+            config_path=config_path,
+            db_path=str(args.db_path),
+            limit=int(args.limit),
+            drafts=int(args.drafts),
+            include_critique=not bool(args.no_critique),
+            hybrid=bool(args.hybrid),
+            alpha=float(args.alpha),
+            call_real_api=bool(args.call_real_api),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "cache-maintenance":
