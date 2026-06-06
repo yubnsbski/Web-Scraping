@@ -182,6 +182,64 @@ investment-assistant rag-search-job \
 investment-assistant rag-answer-context --query "Example Domain" --limit 5
 ```
 
+## 3.6 日経225サンプル（3社）でfetch-job→RAG→レポートを確認する
+
+日経225を対象にしたWeb-Scraping特化の確認フロー。まずは全225社ではなく**3社サンプル**で、
+`fetch-job --dry-run`（robots.txt確認）→ 許可時のみ取得 → RAG index → レポート保存 → 引用context、
+の一連を通す。**売買推奨・自動売買・証券口座連携は行わず、Gemini APIも呼ばない。**
+
+サンプル対象（3社）:
+
+- 9432 NTT
+- 2914 日本たばこ産業（JT）
+- 8306 三菱UFJフィナンシャル・グループ（MUFG）
+
+雛形は `examples/nikkei225_sources_sample.yaml`。各社の公式IRページURLは事前確認のうえ設定すること
+（URLが不確実な場合は雛形内の `TODO` を解消してから本取得へ進む）。生成物（`local_docs/`,
+`local_jobs/`, `local_reports/`）はコミットしない。
+
+```bash
+if test -f pyproject.toml; then
+  REPO_DIR="$PWD"
+else
+  REPO_MARKER="$(find "$HOME" -name pyproject.toml -path "*/Web-Scraping/pyproject.toml" -print 2>/dev/null | head -n 1)"
+  REPO_DIR="$(dirname "$REPO_MARKER")"
+fi
+cd "$REPO_DIR"
+test -f pyproject.toml
+source .venv/bin/activate
+
+# 作業ディレクトリ（いずれもコミットしない）
+mkdir -p local_jobs local_docs/nikkei225 local_reports
+
+# サンプルjobを雛形からコピー（URLは公式IRページを確認のうえ調整する）
+cp examples/nikkei225_sources_sample.yaml local_jobs/nikkei225_sources.yaml
+
+# 1) まず必ず dry-run で robots.txt の許可状態だけを確認する（本文は取得しない）
+investment-assistant fetch-job --path local_jobs/nikkei225_sources.yaml --dry-run
+
+# 2) dry-runで許可された場合のみ、本文を取得してローカル保存する
+investment-assistant fetch-job --path local_jobs/nikkei225_sources.yaml
+
+# 3) 取得テキストをRAGへindex
+investment-assistant rag-index-dir --path local_docs/nikkei225
+
+# 4) query_hintごとに検索し、Markdown表でレポート保存
+investment-assistant rag-search-job \
+  --path local_jobs/nikkei225_sources.yaml \
+  --format table \
+  --columns rank,source_url,fetched_at,text_preview \
+  --save-report local_reports/nikkei225_rag_search.md
+
+# 5) 配当方針などの引用contextをLLM非使用で確認
+investment-assistant rag-answer-context --query "配当 方針 DOE 配当性向" --limit 5
+```
+
+robotsで `blocked_by_robots` / `robots_unavailable` となったソースは取得・index対象外。許可されたソース
+だけが `local_docs/nikkei225/<コード>/ir.txt` に保存され、レポート `local_reports/nikkei225_rag_search.md`
+に `rank / source_url / fetched_at / text_preview` 列でまとまる。3社で流れを確認できたら、同じ雛形に
+銘柄を追加して段階的に広げる（225社一括取得はしない）。
+
 ## 4. ローカル文書だけでRAGを試す
 
 ネットワークを使わずにRAGの動作確認をする。
