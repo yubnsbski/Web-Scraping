@@ -757,6 +757,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Use the real Gemini client through LlmService; omitted means local fake client",
     )
 
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Run the local web dashboard API (no auto-trading, no real Gemini calls)",
+    )
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+
     orchestrate_parser = subparsers.add_parser(
         "orchestrate-answer",
         help="Multi-model draft->critique->synthesize answer over local RAG context",
@@ -1016,6 +1023,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             call_real_api=bool(args.call_real_api),
         )
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "serve":
+        from investment_assistant.webapi.server import serve
+
+        serve(host=str(args.host), port=int(args.port))
         return 0
 
     if args.command == "orchestrate-answer":

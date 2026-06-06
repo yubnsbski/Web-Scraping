@@ -212,6 +212,25 @@ investment-assistant forecast-predict --path market/sp500.csv --horizon 1
 `--path` に指定すれば同じ評価・予測を再現できます。評価で得られた知見（リターン空間化で
 アンサンブルが naive を上回る等）は `docs/forecasting.md` を参照してください。
 
+## Webダッシュボード（React + Vite / Python API）
+
+ブラウザから RAG検索・AI回答・スコアリング・予測・安全な取得・予算/キャッシュを操作できる
+ローカルUIです。バックエンドは依存追加なしのPython標準ライブラリ製JSON API、フロントは React + Vite。
+**投資助言・自動売買・証券口座連携は行わず、UIから実Gemini APIは呼びません。**
+
+```bash
+# バックエンド（リポジトリルート・.venv有効化）
+investment-assistant serve --port 8000
+
+# フロント開発サーバ（別ターミナル、web/ で）
+cd web && npm install && npm run dev   # http://localhost:5173
+
+# 本番配信（ビルドして同一ポートでUI+API）
+cd web && npm run build && cd .. && investment-assistant serve --port 8000  # http://localhost:8000
+```
+
+詳細は `web/README.md` を参照してください。
+
 ## 複数AIオーケストレーションCLI
 
 複数のLLM役割（ドラフト→レビュー→統合）を協調させ、根拠の確かな回答を作ります。すべて
