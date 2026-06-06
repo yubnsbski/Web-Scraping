@@ -210,6 +210,13 @@ python3 scripts/manual_gemini_check.py --prompt "短く挨拶して" --call-real
 
 このコマンドも `LlmService` 経由なので、キャッシュ、予算ガード、使用量記録、フォールバックが適用されます。
 
+## プライバシーと個人情報に関する注意
+
+- `rag-answer --call-real-api` や `gemini-live` で**実Gemini APIを呼ぶと、プロンプトに含まれるローカル文書の内容（資産・口座などの個人情報を含む可能性があります）がGoogleに送信されます**。送信されて困る情報はローカル文書に含めないか、`--call-real-api` を付けずローカルのフェイククライアントで実行してください。
+- LLMの応答は `data/runtime/llm_cache.sqlite` に、取得したWebページ本文は `.cache/` 配下のSQLiteに平文で保存されます。いずれも `.gitignore` 済みですが、個人情報を含みうるため、不要になったら手動で削除してください。
+- スクレイピング時の `User-Agent` は環境変数 `INVESTMENT_ASSISTANT_USER_AGENT` で上書きできます。連絡先などを自分の運用に合わせて設定してください。
+- 安全対策として、取得対象URLが private / loopback / link-local などの非公開アドレス（クラウドメタデータ 169.254.169.254 を含む）に解決される場合は取得を拒否します（SSRF対策）。リダイレクト先も各ホップで同様に検証します。
+
 
 ## トラブルシューティング
 

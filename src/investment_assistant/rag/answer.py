@@ -41,10 +41,14 @@ def build_rag_answer_prompt(*, query: str, context: str) -> str:
         (
             "あなたは投資調査メモ作成を補助するアシスタントです。",
             "以下のローカル文書コンテキストだけを根拠に回答してください。",
+            "コンテキストに無い情報は推測せず、"
+            "不足する場合は「コンテキスト不足のため回答できません」と述べてください。",
+            "各主張の文末に必ず [1] のような根拠コンテキスト番号を付けてください。"
+            "番号は提示順に対応します。",
+            "事実と解釈を分け、冗長な前置きを避けて簡潔かつ緻密に書いてください。",
             "個別商品の売買を断定的に推奨しないでください。",
             "自動売買、実注文、確定的な投資判断は行わないでください。",
-            "根拠、不確実性、免責を必ず含めてください。",
-            "引用は [1] のようなコンテキスト番号で示してください。",
+            "回答全体の信頼度を 高 / 中 / 低 のいずれかで明示してください。",
             "",
             "質問",
             query,
@@ -53,9 +57,10 @@ def build_rag_answer_prompt(*, query: str, context: str) -> str:
             context,
             "",
             "出力要件",
-            "- 要点",
+            "- 要点（各文に [n] 引用）",
             "- 根拠と引用",
-            "- 不確実性",
+            "- 不確実性（コンテキストで確認できない点）",
+            "- 信頼度: 高 / 中 / 低",
             f"- 免責: {DISCLAIMER}",
         )
     )
@@ -106,6 +111,14 @@ def _response_to_dict(response: LlmResponse) -> dict[str, object]:
 
 
 def _extract_section(text: str, start_heading: str, end_heading: str) -> str:
-    _, _, remainder = text.partition(start_heading)
-    section, _, _ = remainder.partition(end_heading)
+    """Extract the body between two standalone heading lines.
+
+    Headings are matched as whole lines (``\\n<heading>\\n``) so instruction
+    text that merely mentions a heading word does not start the section early.
+    """
+
+    _, separator, remainder = text.partition(f"\n{start_heading}\n")
+    if not separator:
+        _, _, remainder = text.partition(start_heading)
+    section, _, _ = remainder.partition(f"\n{end_heading}\n")
     return section.strip()

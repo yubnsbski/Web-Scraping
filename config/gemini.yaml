@@ -1,6 +1,8 @@
 gemini:
   enabled: true
-  model: gemini-1.5-flash
+  # 解答精度を優先する場合は、無料枠で利用できる新しめのモデルに更新します。
+  # 環境で利用可能なモデル名に合わせて変更してください（実API利用は手動承認が前提）。
+  model: gemini-2.0-flash
   daily_request_limit: 40
   monthly_request_limit: 1000
   warning_threshold_ratio: 0.8

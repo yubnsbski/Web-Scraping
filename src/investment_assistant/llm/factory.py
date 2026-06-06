@@ -41,7 +41,7 @@ def load_gemini_runtime_config(
 
     return GeminiRuntimeConfig(
         enabled=bool(gemini.get("enabled", True)),
-        model=str(gemini.get("model", "gemini-1.5-flash")),
+        model=str(gemini.get("model", "gemini-2.0-flash")),
         usage_db_path=Path(str(gemini.get("usage_db_path", "data/runtime/gemini_usage.sqlite"))),
         cache_db_path=Path(str(cache.get("db_path", "data/runtime/llm_cache.sqlite"))),
         cache_enabled=bool(cache.get("enabled", True)),

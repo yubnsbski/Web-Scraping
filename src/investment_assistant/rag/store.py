@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from investment_assistant.rag.chunker import Document, TextChunk
+from investment_assistant.rag.tokenize import tokens_to_index_text
 
 DEFAULT_RAG_DB_PATH = Path(".cache/investment_assistant/rag.sqlite")
 
@@ -31,6 +32,7 @@ class RagStore:
 
     def __init__(self, db_path: str | Path = DEFAULT_RAG_DB_PATH) -> None:
         self.db_path = Path(db_path)
+        self.fts_enabled = False
         self._ensure_schema()
 
     def upsert_document(self, document: Document, chunks: list[TextChunk]) -> int:
@@ -67,7 +69,53 @@ class RagStore:
                     for chunk in chunks
                 ],
             )
+            if self.fts_enabled:
+                conn.execute(
+                    "DELETE FROM rag_chunks_fts WHERE source = ?", (document.source,)
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO rag_chunks_fts (chunk_id, source, tokens)
+                    VALUES (?, ?, ?)
+                    """,
+                    [
+                        (chunk.chunk_id, chunk.source, tokens_to_index_text(chunk.text))
+                        for chunk in chunks
+                    ],
+                )
         return len(chunks)
+
+    def search_bm25(
+        self, query_tokens: list[str], *, limit: int
+    ) -> list[tuple[StoredChunk, float]]:
+        """Return chunks ranked by FTS5 BM25 relevance (most relevant first).
+
+        Relevance is reported as ``-bm25`` so that larger numbers mean a better
+        match. Returns an empty list when FTS is unavailable or no tokens match.
+        """
+
+        if not self.fts_enabled or not query_tokens or limit <= 0:
+            return []
+        match_expr = " OR ".join(_fts_quote(token) for token in query_tokens)
+        sql = """
+            SELECT
+                rag_chunks.chunk_id,
+                rag_chunks.source,
+                rag_chunks.chunk_index,
+                rag_chunks.text,
+                rag_chunks.content_hash,
+                rag_documents.metadata_json,
+                bm25(rag_chunks_fts) AS score
+            FROM rag_chunks_fts
+            JOIN rag_chunks ON rag_chunks.chunk_id = rag_chunks_fts.chunk_id
+            JOIN rag_documents ON rag_documents.source = rag_chunks.source
+            WHERE rag_chunks_fts MATCH ?
+            ORDER BY score, rag_chunks.source, rag_chunks.chunk_index
+            LIMIT ?
+        """
+        with self._connect() as conn:
+            rows = conn.execute(sql, (match_expr, limit)).fetchall()
+        return [(_stored_chunk(row), round(-float(row[6]), 6)) for row in rows]
 
     def list_chunks(self, *, limit: int | None = None) -> list[StoredChunk]:
         """Return stored chunks in source/index order."""
@@ -129,6 +177,44 @@ class RagStore:
                 ON rag_chunks(source, chunk_index)
                 """
             )
+            self.fts_enabled = self._ensure_fts(conn)
+
+    def _ensure_fts(self, conn: sqlite3.Connection) -> bool:
+        """Create the FTS5 search table, returning False if FTS5 is unavailable."""
+
+        try:
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
+                    chunk_id UNINDEXED,
+                    source UNINDEXED,
+                    tokens,
+                    tokenize='unicode61'
+                )
+                """
+            )
+        except sqlite3.OperationalError:
+            return False
+        self._backfill_fts(conn)
+        return True
+
+    @staticmethod
+    def _backfill_fts(conn: sqlite3.Connection) -> None:
+        """Populate the FTS table from existing chunks when it is empty.
+
+        Lets databases indexed before FTS existed become searchable without a
+        manual re-index.
+        """
+
+        fts_rows = conn.execute("SELECT COUNT(*) FROM rag_chunks_fts").fetchone()[0]
+        chunk_rows = conn.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()[0]
+        if int(fts_rows) > 0 or int(chunk_rows) == 0:
+            return
+        rows = conn.execute("SELECT chunk_id, source, text FROM rag_chunks").fetchall()
+        conn.executemany(
+            "INSERT INTO rag_chunks_fts (chunk_id, source, tokens) VALUES (?, ?, ?)",
+            [(str(row[0]), str(row[1]), tokens_to_index_text(str(row[2]))) for row in rows],
+        )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
@@ -155,6 +241,13 @@ def _stored_chunk(row: sqlite3.Row | tuple[object, ...]) -> StoredChunk:
         content_hash=str(row[4]),
         metadata=_metadata_from_json(str(row[5])),
     )
+
+
+def _fts_quote(token: str) -> str:
+    """Quote a token as an FTS5 string literal so it is matched verbatim."""
+
+    escaped = token.replace('"', '""')
+    return f'"{escaped}"'
 
 
 def _metadata_from_json(value: str) -> dict[str, str]:

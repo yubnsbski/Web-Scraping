@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.ingestion.encoding import decode_body
 from investment_assistant.ingestion.html_extract import extract_text_from_html
 from investment_assistant.ingestion.http_cache import HttpCache
 from investment_assistant.ingestion.rate_limit import DomainRateLimiter
@@ -18,7 +20,14 @@ from investment_assistant.ingestion.transport import (
 )
 
 DEFAULT_USER_AGENT = "investment-assistant/0.1 (+safe-ingestion; contact: local-user)"
+USER_AGENT_ENV_VAR = "INVESTMENT_ASSISTANT_USER_AGENT"
 DEFAULT_HTTP_CACHE_PATH = Path(".cache/investment_assistant/http_cache.sqlite")
+
+
+def _default_user_agent() -> str:
+    """Return the configured ingestion User-Agent, overridable via env var."""
+
+    return os.getenv(USER_AGENT_ENV_VAR, "").strip() or DEFAULT_USER_AGENT
 
 
 @dataclass(frozen=True)
@@ -48,17 +57,17 @@ class SafeFetcher:
         transport: HttpTransport | None = None,
         cache: HttpCache | None = None,
         rate_limiter: DomainRateLimiter | None = None,
-        user_agent: str = DEFAULT_USER_AGENT,
+        user_agent: str | None = None,
         timeout_seconds: float = 10.0,
     ) -> None:
         self.transport = transport or UrlLibHttpTransport()
         self.cache = cache or HttpCache(DEFAULT_HTTP_CACHE_PATH)
         self.rate_limiter = rate_limiter or DomainRateLimiter()
-        self.user_agent = user_agent
+        self.user_agent = user_agent or _default_user_agent()
         self.timeout_seconds = timeout_seconds
         self.robots = RobotsChecker(
             self.transport,
-            user_agent=user_agent,
+            user_agent=self.user_agent,
             timeout_seconds=timeout_seconds,
         )
 
@@ -155,7 +164,7 @@ def _result_from_response(
     include_metadata: bool = False,
 ) -> FetchResult:
     content_type = _header_value(response.headers, "content-type")
-    raw_text = response.body.decode("utf-8", errors="replace")
+    raw_text = decode_body(response.body, content_type)
     text = extract_text_from_html(raw_text) if extract_text else raw_text
     preview = text[: max(0, preview_chars)]
     saved_text = (
@@ -195,10 +204,24 @@ def _header_value(headers: dict[str, str], name: str) -> str | None:
 
 
 def _save_text(text: str, save_text: str | Path) -> str:
-    path = Path(save_text)
+    path = reject_path_traversal(save_text)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return str(path)
+
+
+def reject_path_traversal(path: str | Path) -> Path:
+    """Reject ``..`` components that could escape the intended output location.
+
+    Used for user-typed output paths (``--save-text``/``--save-report``): an
+    absolute path is the caller's explicit choice, but ``..`` traversal is not.
+    """
+
+    candidate = Path(path)
+    if any(part == ".." for part in candidate.parts):
+        msg = f"Path traversal ('..') is not allowed in output path: {path}"
+        raise ValueError(msg)
+    return candidate
 
 
 def _with_metadata(
