@@ -39,7 +39,14 @@ class RobotsChecker:
         robots_url = self.robots_url_for(url)
         parser = self._parsers.get(robots_url)
         if parser is None:
-            parser = self._load_parser(robots_url)
+            try:
+                parser = self._load_parser(robots_url)
+            except OSError:
+                return RobotsDecision(
+                    allowed=False,
+                    robots_url=robots_url,
+                    reason="robots_unavailable",
+                )
             self._parsers[robots_url] = parser
         allowed = bool(parser.can_fetch(self.user_agent, url))
         reason = "allowed_by_robots" if allowed else "blocked_by_robots"

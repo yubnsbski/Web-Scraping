@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.ingestion.html_extract import extract_text_from_html
 from investment_assistant.ingestion.http_cache import HttpCache
 from investment_assistant.ingestion.rate_limit import DomainRateLimiter
 from investment_assistant.ingestion.robots import RobotsChecker
@@ -32,6 +34,9 @@ class FetchResult:
     content_type: str | None
     text_preview: str | None
     dry_run: bool
+    saved_path: str | None = None
+    extracted_text: bool = False
+    metadata_included: bool = False
 
 
 class SafeFetcher:
@@ -57,7 +62,16 @@ class SafeFetcher:
             timeout_seconds=timeout_seconds,
         )
 
-    def fetch(self, url: str, *, dry_run: bool = False, preview_chars: int = 500) -> FetchResult:
+    def fetch(
+        self,
+        url: str,
+        *,
+        dry_run: bool = False,
+        preview_chars: int = 500,
+        save_text: str | Path | None = None,
+        extract_text: bool = False,
+        include_metadata: bool = False,
+    ) -> FetchResult:
         """Fetch a URL unless dry-run is requested or robots.txt blocks it."""
 
         decision = self.robots.can_fetch(url)
@@ -100,6 +114,9 @@ class SafeFetcher:
                 source="cache",
                 robots_url=decision.robots_url,
                 preview_chars=preview_chars,
+                save_text=save_text,
+                extract_text=extract_text,
+                include_metadata=include_metadata,
             )
 
         self.rate_limiter.wait_for_url(url)
@@ -120,6 +137,9 @@ class SafeFetcher:
             source="network",
             robots_url=decision.robots_url,
             preview_chars=preview_chars,
+            save_text=save_text,
+            extract_text=extract_text,
+            include_metadata=include_metadata,
         )
 
 
@@ -130,9 +150,26 @@ def _result_from_response(
     source: str,
     robots_url: str,
     preview_chars: int,
+    save_text: str | Path | None = None,
+    extract_text: bool = False,
+    include_metadata: bool = False,
 ) -> FetchResult:
     content_type = _header_value(response.headers, "content-type")
-    preview = response.body[: max(0, preview_chars)].decode("utf-8", errors="replace")
+    raw_text = response.body.decode("utf-8", errors="replace")
+    text = extract_text_from_html(raw_text) if extract_text else raw_text
+    preview = text[: max(0, preview_chars)]
+    saved_text = (
+        _with_metadata(
+            text,
+            url=url,
+            response=response,
+            content_type=content_type,
+            extracted_text=extract_text,
+        )
+        if include_metadata
+        else text
+    )
+    saved_path = _save_text(saved_text, save_text) if save_text is not None else None
     return FetchResult(
         url=url,
         status_code=response.status_code,
@@ -143,6 +180,9 @@ def _result_from_response(
         content_type=content_type,
         text_preview=preview,
         dry_run=False,
+        saved_path=saved_path,
+        extracted_text=extract_text,
+        metadata_included=include_metadata and save_text is not None,
     )
 
 
@@ -152,3 +192,36 @@ def _header_value(headers: dict[str, str], name: str) -> str | None:
         if key.lower() == target:
             return value
     return None
+
+
+def _save_text(text: str, save_text: str | Path) -> str:
+    path = Path(save_text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def _with_metadata(
+    text: str,
+    *,
+    url: str,
+    response: HttpResponse,
+    content_type: str | None,
+    extracted_text: bool,
+) -> str:
+    fetched_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    metadata = (
+        "---\n"
+        f"source_url: {_quote_metadata_value(url)}\n"
+        f"fetched_at: {fetched_at}\n"
+        f"status_code: {response.status_code}\n"
+        f"content_type: {_quote_metadata_value(content_type or '')}\n"
+        f"extracted_text: {str(extracted_text).lower()}\n"
+        "---\n\n"
+    )
+    return f"{metadata}{text}"
+
+
+def _quote_metadata_value(value: str) -> str:
+    escaped = value.replace('"', '\\"')
+    return f'"{escaped}"'

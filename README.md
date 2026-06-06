@@ -9,13 +9,42 @@ Codex中心で開発・保守を自動化する、家庭向け自動化・投資
 - Codexは実装、テスト、ドキュメント更新を進め、commit / PR / 本番反映前にユーザー承認を挟む運用を基本にします。
 - 自動売買は実装せず、投資判断の最終責任はユーザーに残します。
 
+
+## ターミナルにコピペできる運用Runbook
+
+AI伴奏型で作業するときは、セットアップ、スクレイピング、RAG、スコアリング、品質チェックをターミナルへそのまま貼り付けられる形で進めます。
+
+```bash
+if test -f pyproject.toml; then
+  REPO_DIR="$PWD"
+else
+  REPO_MARKER="$(find "$HOME" -name pyproject.toml -path "*/Web-Scraping/pyproject.toml" -print 2>/dev/null | head -n 1)"
+  REPO_DIR="$(dirname "$REPO_MARKER")"
+fi
+cd "$REPO_DIR"
+test -f pyproject.toml
+source .venv/bin/activate
+python -m pytest -q
+ruff check .
+mypy src
+```
+
+詳細なコピペ用コマンド集は `docs/terminal_runbook.md` を参照してください。
+
 ## セットアップ
 
 このプロジェクトは Python 3.11以上が必須です。`python --version` が Python 2.7.x を指す環境では、必ず `python3` または `python3.11` を使ってください。
 
 ```bash
 # まず、pyproject.toml があるリポジトリルートへ移動します。
-cd /path/to/Web-Scraping
+if test -f pyproject.toml; then
+  REPO_DIR="$PWD"
+else
+  REPO_MARKER="$(find "$HOME" -name pyproject.toml -path "*/Web-Scraping/pyproject.toml" -print 2>/dev/null | head -n 1)"
+  REPO_DIR="$(dirname "$REPO_MARKER")"
+fi
+cd "$REPO_DIR"
+test -f pyproject.toml
 pwd
 ls pyproject.toml
 
@@ -60,16 +89,58 @@ investment-assistant smoke --prompt "hello"
 python3 scripts/smoke_llm_service.py
 ```
 
-## 安全なURL取得CLI（Phase 2）
+## 安全なURL取得・スクレイピングCLI（Phase 2）
 
-`robots.txt` 確認、domain単位のレート制限、SQLiteキャッシュを通じてURLを安全に取得します。`--dry-run` では対象URL本体を取得せず、robots.txt確認だけを行います。
+`robots.txt` 確認、domain単位のレート制限、SQLiteキャッシュを通じてURLを安全に取得します。`--dry-run` では対象URL本体を取得せず、robots.txt確認だけを行います。Webサイトを確認するときは、まずdry-runで許可状態を確認してから本文取得に進んでください。
 
 ```bash
+# robots.txt確認だけ
 investment-assistant fetch-url --url https://example.com/funds --dry-run
+
+# 許可される場合だけ本文を取得し、SQLiteキャッシュに保存
 investment-assistant fetch-url --url https://example.com/funds --preview-chars 300
 ```
 
-詳細は `docs/data_ingestion.md` を参照してください。
+取得本文をローカルファイルへ保存し、そのままRAGへindexする場合は `--save-text` を使います。HTMLページは `--extract-text` を付けると、タグ、script、styleを除いた本文テキストに正規化してから保存します。`--include-metadata` を付けると、保存ファイルの先頭に取得元URLや取得時刻も付与します。
+
+```bash
+mkdir -p local_docs
+TARGET_URL="https://example.com/"
+OUTPUT_PATH="local_docs/example.txt"
+
+investment-assistant fetch-url \
+  --url "$TARGET_URL" \
+  --preview-chars 500 \
+  --extract-text \
+  --include-metadata \
+  --save-text "$OUTPUT_PATH"
+
+investment-assistant rag-index-dir --path local_docs
+investment-assistant rag-search --query "Example Domain" --limit 5
+investment-assistant rag-search --query "Example Domain" --limit 5 --format table
+investment-assistant rag-search \
+  --query "Example Domain" \
+  --limit 5 \
+  --format table \
+  --columns rank,source_url,fetched_at,text_preview
+investment-assistant rag-answer-context --query "Example Domain" --limit 5
+```
+
+
+複数URLをまとめて保存する場合は、ジョブ定義ファイルを使います。
+
+```bash
+investment-assistant fetch-job --path examples/fetch_job.yaml --dry-run
+investment-assistant fetch-job --path examples/fetch_job.yaml
+investment-assistant rag-index-dir --path local_docs
+investment-assistant rag-search-job \
+  --path examples/fetch_job.yaml \
+  --format table \
+  --columns rank,source_url,fetched_at,text_preview \
+  --save-report local_reports/rag_search_job.md
+```
+
+ローカルでコピペ実行する手順と注意点は `docs/data_ingestion.md` を参照してください。
 
 ## ローカルRAG CLI（Phase 3）
 
@@ -85,7 +156,9 @@ cat > local_docs/sample.md <<'EOF'
 EOF
 
 investment-assistant rag-index --path local_docs/sample.md
+investment-assistant rag-index-dir --path local_docs
 investment-assistant rag-search --query "投資判断" --limit 5
+investment-assistant rag-search --query "投資判断" --limit 5 --format table
 investment-assistant rag-answer-context --query "自動売買" --limit 5
 ```
 
@@ -140,6 +213,87 @@ python3 scripts/manual_gemini_check.py --prompt "短く挨拶して" --call-real
 
 ## トラブルシューティング
 
+
+### `fatal: not a git repository` または Python 2.7 の `No module named pytest` が出る
+
+ホームディレクトリなど、リポジトリ外でコマンドを実行しています。次をそのまま貼り付けて、`pyproject.toml` がある場所へ移動してから再実行してください。
+
+```bash
+if test -f pyproject.toml; then
+  REPO_DIR="$PWD"
+else
+  REPO_MARKER="$(find "$HOME" -name pyproject.toml -path "*/Web-Scraping/pyproject.toml" -print 2>/dev/null | head -n 1)"
+  REPO_DIR="$(dirname "$REPO_MARKER")"
+fi
+cd "$REPO_DIR"
+pwd
+test -f pyproject.toml
+git status --short
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+```
+
+
+### `invalid choice: fetch-job` / `rag-index-dir` / `rag-search-job` が出る
+
+仮想環境内の `investment-assistant` コマンドが古い版を指しています。新しいCLIは `pyproject.toml` のconsole scriptから `investment_assistant.cli:main` を呼び出すため、リポジトリルートで editable install を更新してください。
+
+```bash
+if test -f pyproject.toml; then
+  REPO_DIR="$PWD"
+else
+  REPO_MARKER="$(find "$HOME" -name pyproject.toml -path "*/Web-Scraping/pyproject.toml" -print 2>/dev/null | head -n 1)"
+  REPO_DIR="$(dirname "$REPO_MARKER")"
+fi
+cd "$REPO_DIR"
+test -f pyproject.toml
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]' --force-reinstall
+hash -r
+
+investment-assistant --help
+investment-assistant fetch-job --help
+investment-assistant rag-index-dir --help
+investment-assistant rag-search-job --help
+```
+
+それでも同じエラーが出る場合は、インストール済みconsole scriptではなく、現在の作業ツリーを直接指定して実行してください。
+
+```bash
+PYTHONPATH=src python -m investment_assistant.cli fetch-job --help
+PYTHONPATH=src python -m investment_assistant.cli rag-index-dir --help
+PYTHONPATH=src python -m investment_assistant.cli rag-search-job --help
+```
+
+`PYTHONPATH=src python -m ...` でも同じ `invalid choice` が出る場合は、ローカルの作業ツリー自体が古い可能性が高いです。まず現在読み込まれているファイルと、ソース内に新コマンドが存在するか確認してください。
+
+```bash
+python - <<'PY'
+import investment_assistant.cli as cli
+print(cli.__file__)
+PY
+rg -n 'fetch-job|rag-index-dir|rag-search-job' src/investment_assistant/cli.py
+git status --short --branch
+git log --oneline -3
+```
+
+`rg` で新コマンドが出ない場合は、最新コミットがローカルに入っていません。未保存の作業がないことを確認してから、次で更新してください。
+
+```bash
+git fetch --all --prune
+git pull --ff-only
+python -m pip install -e '.[dev]' --force-reinstall
+hash -r
+PYTHONPATH=src python -m investment_assistant.cli fetch-job --help
+PYTHONPATH=src python -m investment_assistant.cli rag-index-dir --help
+PYTHONPATH=src python -m investment_assistant.cli rag-search-job --help
+```
+
 ### `does not appear to be a Python project` と表示される
 
 次のようなエラーが出る場合:
@@ -151,7 +305,14 @@ ERROR: file:///Users/Ikimono0526 does not appear to be a Python project: neither
 `pip install -e '.[dev]'` を `pyproject.toml` が存在しないディレクトリで実行しています。`cd` でリポジトリルートへ移動してから再実行してください。
 
 ```bash
-cd /path/to/Web-Scraping
+if test -f pyproject.toml; then
+  REPO_DIR="$PWD"
+else
+  REPO_MARKER="$(find "$HOME" -name pyproject.toml -path "*/Web-Scraping/pyproject.toml" -print 2>/dev/null | head -n 1)"
+  REPO_DIR="$(dirname "$REPO_MARKER")"
+fi
+cd "$REPO_DIR"
+test -f pyproject.toml
 ls pyproject.toml
 python3 -m venv .venv
 source .venv/bin/activate
@@ -167,7 +328,7 @@ python -m pip install -e '.[dev]'
 まず、ホームディレクトリ配下で `pyproject.toml` を探してください。
 
 ```bash
-find ~ -maxdepth 4 -name pyproject.toml -path '*Web-Scraping*' 2>/dev/null
+find "$HOME" -name pyproject.toml -path "*/Web-Scraping/pyproject.toml" -print 2>/dev/null | head -n 1
 ```
 
 見つかったパスの親ディレクトリがリポジトリルートです。例えば `/Users/Ikimono0526/Web-Scraping/pyproject.toml` が見つかった場合は、次を実行します。

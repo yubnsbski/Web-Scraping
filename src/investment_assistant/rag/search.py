@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from investment_assistant.rag.store import RagStore, StoredChunk
 
 _TOKEN_RE = re.compile(r"[\w一-龯ぁ-んァ-ン]+", re.UNICODE)
+_CONTEXT_METADATA_KEYS = ("source_url", "fetched_at", "status_code", "content_type")
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class SearchResult:
     chunk_index: int
     score: int
     text: str
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 def search_chunks(store: RagStore, *, query: str, limit: int = 5) -> list[SearchResult]:
@@ -38,6 +40,7 @@ def search_chunks(store: RagStore, *, query: str, limit: int = 5) -> list[Search
                     chunk_index=chunk.chunk_index,
                     score=score,
                     text=chunk.text,
+                    metadata=chunk.metadata,
                 )
             )
     return sorted(results, key=lambda result: (-result.score, result.source, result.chunk_index))[
@@ -55,15 +58,22 @@ def build_answer_context(results: list[SearchResult]) -> str:
         blocks.append(
             "\n".join(
                 (
-                    (
-                        f"[{index}] source={result.source} "
-                        f"chunk={result.chunk_index} score={result.score}"
-                    ),
+                    _format_context_header(index, result),
                     result.text,
                 )
             )
         )
     return "\n\n".join(blocks)
+
+
+def _format_context_header(index: int, result: SearchResult) -> str:
+    base = f"[{index}] source={result.source} chunk={result.chunk_index} score={result.score}"
+    metadata = " ".join(
+        f"{key}={result.metadata[key]}"
+        for key in _CONTEXT_METADATA_KEYS
+        if result.metadata.get(key)
+    )
+    return f"{base} {metadata}" if metadata else base
 
 
 def _tokenize(text: str) -> list[str]:
