@@ -25,6 +25,7 @@ class LocalOrchestrationClient:
     def generate(self, prompt: str, *, model: str) -> str:
         _ = model
         query = _section(prompt, "質問", "ローカル文書コンテキスト")
+        query = _normalize_query(query)
         context_preview = " ".join(_section(prompt, "ローカル文書コンテキスト", "出力要件").split())
         context_preview = context_preview or " ".join(
             _section(prompt, "ローカル文書コンテキスト", "ドラフト").split()
@@ -91,3 +92,14 @@ def _section(text: str, start_heading: str, end_heading: str) -> str:
     if not section:
         section, _, _ = remainder.partition(f"\n{end_heading}")
     return section.strip()
+
+
+def _normalize_query(query: str) -> str:
+    for marker in ("最後の質問:", "最後の質問", "最新の質問:", "最新質問:"):
+        if marker in query:
+            query = query.rsplit(marker, 1)[-1]
+            break
+    compact = " ".join(query.split())
+    if len(compact) > 220:
+        return compact[:220].rstrip() + "..."
+    return compact
