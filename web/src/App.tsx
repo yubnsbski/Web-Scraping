@@ -242,7 +242,7 @@ function SearchTab() {
   const { loading, error, data, run } = useAsync<Json>();
 
   const search = () =>
-    run(() => api("/api/rag/search", { query, db_path: dbPath, limit, hybrid, alpha }));
+    run(() => api<Json>("/api/rag/search", { query, db_path: dbPath, limit, hybrid, alpha }));
 
   const results: Json[] = data?.results ?? [];
   return (
@@ -496,7 +496,7 @@ function ScoringTab() {
   const [limit, setLimit] = useState(10);
   const { loading, error, data, run } = useAsync<Json>();
 
-  const rank = () => run(() => api("/api/scoring/rank", { csv_text: csv, limit }));
+  const rank = () => run(() => api<Json>("/api/scoring/rank", { csv_text: csv, limit }));
   const results: Json[] = data?.results ?? [];
   return (
     <section className="tool-section">
@@ -568,10 +568,10 @@ function ForecastTab() {
 
   const evaluate = () =>
     evalState.run(() =>
-      api("/api/forecast/evaluate", { space, ma_windows: parseWindows(), include_ml: false }),
+      api<Json>("/api/forecast/evaluate", { space, ma_windows: parseWindows(), include_ml: false }),
     );
   const predict = () =>
-    predictState.run(() => api("/api/forecast/predict", { horizon: 1, space }));
+    predictState.run(() => api<Json>("/api/forecast/predict", { horizon: 1, space }));
 
   const models: Json[] = evalState.data?.models ?? [];
   return (
@@ -714,7 +714,7 @@ function ScrapeTab() {
 
   const saveManual = () =>
     manualState.run(() =>
-      api("/api/manual-doc/save", {
+      api<Json>("/api/manual-doc/save", {
         title: manualTitle,
         source_url: manualSourceUrl,
         text: manualText,
@@ -876,7 +876,7 @@ function OpsTab() {
   const budget = useAsync<Json>();
   const cache = useAsync<Json>();
   useEffect(() => {
-    budget.run(() => api("/api/budget"));
+    budget.run(() => api<Json>("/api/budget"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
@@ -902,7 +902,7 @@ function OpsTab() {
         </ul>
       )}
       <div className="form">
-        <button onClick={() => cache.run(() => api("/api/cache/maintenance", { max_rows: 1000 }))}>
+        <button onClick={() => cache.run(() => api<Json>("/api/cache/maintenance", { max_rows: 1000 }))}>
           キャッシュ整理（期限切れ削除＋上限1000）
         </button>
       </div>
