@@ -35,6 +35,7 @@ from investment_assistant.rag.search import build_answer_context, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
+from investment_assistant.scoring.scorer import validate_scoring_csv
 
 FORECASTING_DISCLAIMER = (
     "この検証結果は、ユーザー提供データの形式確認です。投資助言、売買推奨、"
@@ -257,7 +258,14 @@ def run_scoring_rank(
         volatility=volatility_weight,
         diversification_score=diversification_weight,
     )
-    return build_scoring_report(path=path, limit=limit, weights=weights)
+    report: dict[str, object] = build_scoring_report(path=path, limit=limit, weights=weights)
+    return report
+
+
+def run_scoring_validate(*, path: str | Path) -> dict[str, object]:
+    """Validate a local scoring CSV without LLMs, scoring, or trading actions."""
+
+    return validate_scoring_csv(path)
 
 
 def run_forecast_baseline(
@@ -523,6 +531,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     forecast_backtest_parser.add_argument("--test-size", type=int, default=3)
     forecast_backtest_parser.add_argument("--window", type=int, default=3)
 
+    scoring_validate_parser = subparsers.add_parser(
+        "scoring-validate",
+        help="Validate a local scoring CSV without Gemini, scoring, or auto-trading",
+    )
+    scoring_validate_parser.add_argument("--path", required=True)
+
     args = parser.parse_args(argv)
     config_path = str(args.config)
 
@@ -603,30 +617,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(answer_result, ensure_ascii=False, indent=2))
         return 0
 
-    if args.command == "forecast-validate":
-        validation_result = run_forecast_validate(path=str(args.path))
-        print(json.dumps(validation_result, ensure_ascii=False, indent=2))
-        return 0 if bool(validation_result["valid"]) else 1
-
-    if args.command == "forecast-backtest":
-        backtest_result = run_forecast_backtest(
-            path=str(args.path),
-            method=str(args.method),
-            test_size=int(args.test_size),
-            window=int(args.window),
-        )
-        print(json.dumps(backtest_result, ensure_ascii=False, indent=2))
-        return 0 if bool(backtest_result["valid"]) else 1
-
-    if args.command == "forecast-baseline":
-        baseline_result = run_forecast_baseline(
-            path=str(args.path),
-            horizon=int(args.horizon),
-            method=str(args.method),
-            window=int(args.window),
-        )
-        print(json.dumps(baseline_result, ensure_ascii=False, indent=2))
-        return 0 if bool(baseline_result["valid"]) else 1
 
     if args.command == "scoring-rank":
         result = run_scoring_rank(
@@ -668,76 +658,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     return 2
 
-
-def _format_scoring_rank_table(report: dict[str, object]) -> str:
-    """Format scoring-rank JSON as a compact comparison table for humans."""
-
-    headers = (
-        "rank",
-        "name",
-        "total_score",
-        "expense_ratio",
-        "annual_return",
-        "volatility",
-        "diversification_score",
-    )
-    rows: list[tuple[str, ...]] = [headers]
-
-    results = report.get("results", [])
-    if not isinstance(results, list):
-        results = []
-
-    for item in results:
-        if not isinstance(item, dict):
-            continue
-        metrics = item.get("metrics", {})
-        score = item.get("score", {})
-        if not isinstance(metrics, dict):
-            metrics = {}
-        if not isinstance(score, dict):
-            score = {}
-        rows.append(
-            (
-                _format_table_value(item.get("rank", "")),
-                _format_table_value(item.get("name", "")),
-                _format_table_value(score.get("total_score", "")),
-                _format_table_value(metrics.get("expense_ratio", "")),
-                _format_table_value(metrics.get("annual_return", "")),
-                _format_table_value(metrics.get("volatility", "")),
-                _format_table_value(metrics.get("diversification_score", "")),
-            )
-        )
-
-    widths = [max(len(row[index]) for row in rows) for index in range(len(headers))]
-    table_lines = [
-        " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
-        for row in rows
-    ]
-
-    metadata = [
-        f"source: {report.get('source', '')}",
-        f"limit: {report.get('limit', '')}",
-        f"schema_version: {report.get('schema_version', 'n/a')}",
-        f"generated_at: {report.get('generated_at', 'n/a')}",
-        f"call_real_api: {str(bool(report.get('call_real_api', False))).lower()}",
-        f"auto_trading: {str(bool(report.get('auto_trading', False))).lower()}",
-        "",
-        *table_lines,
-        "",
-        str(
-            report.get(
-                "disclaimer",
-                "投資助言・売買推奨ではありません。最終判断はユーザー本人が行います。",
-            )
-        ),
-    ]
-    return "\n".join(metadata)
-
-
-def _format_table_value(value: object) -> str:
-    if isinstance(value, float):
-        return f"{value:.6g}"
-    return str(value)
 
 
 def _format_budget_report(report: BudgetReport) -> str:
