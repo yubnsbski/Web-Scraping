@@ -112,14 +112,16 @@ textarea {
   border-color: rgba(245, 158, 11, 0.5);
 }
 
-.metric-grid {
+.metric-grid,
+.guide-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin: 16px 0;
 }
 
-.metric-card {
+.metric-card,
+.guide-card {
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -139,6 +141,20 @@ textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 20px;
   letter-spacing: -0.02em;
+}
+
+.guide-card b {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.guide-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .tabs {
@@ -360,6 +376,11 @@ button:disabled {
   line-height: 1.7;
 }
 
+.warn-callout {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.1);
+}
+
 .workflow {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -501,6 +522,7 @@ details summary {
   }
 
   .metric-grid,
+  .guide-grid,
   .workflow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -521,6 +543,7 @@ details summary {
   }
 
   .metric-grid,
+  .guide-grid,
   .workflow {
     grid-template-columns: 1fr;
   }
