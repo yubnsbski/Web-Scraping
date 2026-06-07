@@ -111,7 +111,11 @@ class TestChatEndpoints:
 
     def test_chat_forecast_intent(self):
         """POST /api/chat with forecast keyword should detect forecast feature."""
-        result = make_request("/api/chat", method="POST", body={"message": "S&P 500 の予測をして"})
+        result = make_request(
+            "/api/chat",
+            method="POST",
+            body={"message": "S&P 500 の予測をして"},
+        )
 
         assert "role" in result
         assert result["role"] == "assistant"
@@ -122,14 +126,22 @@ class TestChatEndpoints:
 
     def test_chat_scraping_intent(self):
         """POST /api/chat with scraping keyword should detect scraping feature."""
-        result = make_request("/api/chat", method="POST", body={"message": "NTT のデータを取得"})
+        result = make_request(
+            "/api/chat",
+            method="POST",
+            body={"message": "NTT のデータを取得"},
+        )
 
         assert result["feature"] == "scraping"
         assert "available_sources" in result
 
     def test_chat_investment_analysis_intent(self):
         """POST /api/chat with investment keyword should detect analysis feature."""
-        result = make_request("/api/chat", method="POST", body={"message": "S&P 500 について説明"})
+        result = make_request(
+            "/api/chat",
+            method="POST",
+            body={"message": "S&P 500 について説明"},
+        )
 
         assert result["feature"] == "investment_analysis"
         assert "sp500_info" in result
