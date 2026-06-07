@@ -99,6 +99,18 @@ def _runtime_real_api_set(body: JsonDict) -> JsonDict:
     }
 
 
+def _rag_stats(body: JsonDict) -> JsonDict:
+    raw_keywords = body.get("keywords")
+    if isinstance(raw_keywords, list):
+        keywords = tuple(str(item).strip() for item in raw_keywords if str(item).strip())
+    else:
+        keywords = cli.DEFAULT_RAG_STATS_KEYWORDS
+    return cli.run_rag_stats(
+        db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
+        keywords=keywords,
+    )
+
+
 def _rag_search(body: JsonDict) -> JsonDict:
     query = _require_str(body, "query")
     results = cli.run_rag_search(
@@ -722,6 +734,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/budget"): _budget,
     ("GET", "/api/runtime/real-api"): _runtime_real_api_status,
     ("POST", "/api/runtime/real-api"): _runtime_real_api_set,
+    ("POST", "/api/rag/stats"): _rag_stats,
     ("POST", "/api/rag/search"): _rag_search,
     ("POST", "/api/rag/answer-context"): _rag_answer_context,
     ("POST", "/api/rag/answer"): _rag_answer,
