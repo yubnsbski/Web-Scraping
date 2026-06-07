@@ -20,6 +20,10 @@ from investment_assistant.ingestion.fetcher import (
     reject_path_traversal,
 )
 from investment_assistant.ingestion.http_cache import HttpCache
+from investment_assistant.ingestion.source_registry import (
+    build_fetch_job_from_registry,
+    fetch_job_to_yaml,
+)
 from investment_assistant.llm.cache import LlmCache
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
@@ -199,6 +203,27 @@ def run_fetch_url(
         include_metadata=include_metadata,
     )
     return asdict(result)
+
+
+def run_source_registry_build_fetch_job(
+    *,
+    path: str | Path,
+    output: str | Path | None = None,
+) -> dict[str, object]:
+    """Convert an approved source registry into a fetch-job payload."""
+
+    result = build_fetch_job_from_registry(path)
+    if output is not None:
+        output_path = Path(output)
+        if any(part == ".." for part in output_path.parts):
+            raise ValueError(f"path traversal is not allowed: {output}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fetch_job = result.get("fetch_job")
+        if not isinstance(fetch_job, dict):
+            raise ValueError("fetch_job result is invalid")
+        output_path.write_text(fetch_job_to_yaml(fetch_job), encoding="utf-8")
+        result["output"] = str(output_path)
+    return result
 
 
 def run_fetch_job(
@@ -979,6 +1004,10 @@ def main(argv: list[str] | None = None) -> int:
     fetch_url_parser.add_argument("--extract-text", action="store_true")
     fetch_url_parser.add_argument("--include-metadata", action="store_true")
 
+    source_registry_parser = subparsers.add_parser("source-registry-build-fetch-job")
+    source_registry_parser.add_argument("--path", required=True)
+    source_registry_parser.add_argument("--output")
+
     fetch_job_parser = subparsers.add_parser("fetch-job")
     fetch_job_parser.add_argument("--path", required=True)
     fetch_job_parser.add_argument("--dry-run", action="store_true")
@@ -1109,6 +1138,12 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             extract_text=args.extract_text,
             include_metadata=args.include_metadata,
         )
+    if command == "source-registry-build-fetch-job":
+        return run_source_registry_build_fetch_job(
+            path=args.path,
+            output=args.output,
+        )
+
     if command == "fetch-job":
         return run_fetch_job(
             path=args.path,
