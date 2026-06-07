@@ -371,16 +371,41 @@ def run_orchestrate_answer(
             "skipped": True,
         }
 
+    perspectives = [
+        "配当・キャッシュフロー・財務安全性だけを評価する。株価トレンドや短期需給には触れない。",
+        "株価下落リスク・景気感応度・競争環境だけを評価する。配当利回りやNISA制度には触れない。",
+        "NISA長期保有・分散・手数料だけを評価する。短期売買判断やチャート分析には触れない。",
+        "データ不足・未検証事項・判断保留すべき危険ポイントだけを評価する。結論を急がない。",
+        "反対意見・弱気シナリオだけを評価する。楽観材料は補足に留める。",
+    ]
+    selected_perspectives = perspectives[:1]
+
+    perspective_block = "\\n".join(
+        f"ドラフト{i + 1}の専用観点: {perspective}"
+        for i, perspective in enumerate(selected_perspectives)
+    )
+    query_with_perspectives = (
+        query
+        + "\\n\\n以下の観点をドラフトごとに厳守してください。"
+        + "\\n"
+        + perspective_block
+        + "\\n各ドラフトは他ドラフトと同じ論点を主軸にしないでください。"
+    )
+
     orchestrator = build_orchestrator(
         config_path,
-        config=OrchestrationConfig(n_drafts=drafts, include_critique=include_critique),
+        config=OrchestrationConfig(
+            n_drafts=1,
+            include_critique=include_critique,
+        ),
         call_real_api=call_real_api,
     )
-    outcome = orchestrator.run(query=query, context=context)
+    outcome = orchestrator.run(query=query_with_perspectives, context=context)
     payload = outcome.to_dict()
     payload["context"] = context
     payload["results"] = [asdict(result) for result in results]
     payload["call_real_api"] = call_real_api
+    payload["perspectives"] = selected_perspectives
     return payload
 
 
@@ -528,7 +553,7 @@ def _query_from_fetch_job_source(source: dict[str, object]) -> str:
     query_hint = source.get("query_hint")
     if isinstance(query_hint, str) and query_hint.strip():
         return query_hint.strip()
-    return " ".join(str(source.get(key, "")) for key in ("name", "url")).strip()
+    return str(source.get("name", "")).strip()
 
 
 def _bool_or_default(value: object, default: bool) -> bool:
@@ -546,14 +571,125 @@ def _bool_or_default(value: object, default: bool) -> bool:
 def _int_or_default(value: object, default: int) -> int:
     if isinstance(value, bool):
         return default
-    try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
 
 
 def _print_json(payload: object) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+
+def _save_report(content: str, path: str | Path) -> str:
+    output_path = Path(path)
+    if any(part == ".." for part in output_path.parts):
+        raise ValueError(f"path traversal is not allowed: {path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content, encoding="utf-8")
+    return str(output_path)
+
+
+def _table_cell(value: object) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _metadata_value(metadata: object, key: str) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    raw_value = metadata.get(key)
+    return "" if raw_value is None else str(raw_value)
+
+
+def _metadata_summary(metadata: object) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    keys = ("source_url", "fetched_at", "status_code", "content_type")
+    return " ".join(f"{key}={metadata[key]}" for key in keys if metadata.get(key))
+
+
+def format_rag_search_table(
+    results: list[dict[str, object]],
+    *,
+    text_preview_chars: int = 120,
+    columns: list[str] | None = None,
+) -> str:
+    selected_columns = columns or ["rank", "score", "source", "chunk", "metadata", "text_preview"]
+
+    rows = [
+        "| " + " | ".join(selected_columns) + " |",
+        "| " + " | ".join("---" for _ in selected_columns) + " |",
+    ]
+
+    for rank, result in enumerate(results, start=1):
+        metadata = result.get("metadata")
+        values: list[str] = []
+
+        for column in selected_columns:
+            if column == "rank":
+                value = str(rank)
+            elif column == "score":
+                value = str(result.get("score", ""))
+            elif column == "source":
+                value = str(result.get("source", ""))
+            elif column == "chunk":
+                value = str(result.get("chunk_index", ""))
+            elif column == "metadata":
+                value = _metadata_summary(metadata)
+            elif column == "text_preview":
+                normalized = " ".join(str(result.get("text", "")).split())
+                value = normalized[:text_preview_chars]
+            elif column in {"source_url", "fetched_at", "status_code", "content_type"}:
+                value = _metadata_value(metadata, column)
+            else:
+                value = str(result.get(column, ""))
+
+            values.append(_table_cell(value))
+
+        rows.append("| " + " | ".join(values) + " |")
+
+    return "\n".join(rows)
+
+
+def format_rag_search_job_table(
+    search_job_result: dict[str, object],
+    *,
+    text_preview_chars: int = 120,
+    columns: list[str] | None = None,
+) -> str:
+    raw_results = search_job_result.get("results")
+    if not isinstance(raw_results, list) or not raw_results:
+        return "No fetch-job RAG search results."
+
+    blocks: list[str] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+
+        name = str(item.get("name", ""))
+        query = str(item.get("query", ""))
+        url = str(item.get("url", ""))
+        blocks.append(f"## {name} | query={query} | url={url}")
+
+        item_results = item.get("results")
+        rows = item_results if isinstance(item_results, list) else []
+        table_rows = [row for row in rows if isinstance(row, dict)]
+        blocks.append(
+            format_rag_search_table(
+                table_rows,
+                text_preview_chars=text_preview_chars,
+                columns=columns,
+            )
+        )
+
+    return "\n\n".join(blocks)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -570,6 +706,11 @@ def main(argv: list[str] | None = None) -> int:
     smoke_parser = subparsers.add_parser("smoke")
     smoke_parser.add_argument("--prompt", default="hello")
 
+    gemini_live_parser = subparsers.add_parser("gemini-live")
+    gemini_live_parser.add_argument("--prompt", required=True)
+    gemini_live_parser.add_argument("--task-type", default="rag_answer")
+    gemini_live_parser.add_argument("--call-real-api", action="store_true")
+
     fetch_url_parser = subparsers.add_parser("fetch-url")
     fetch_url_parser.add_argument("--url", required=True)
     fetch_url_parser.add_argument("--dry-run", action="store_true")
@@ -581,14 +722,19 @@ def main(argv: list[str] | None = None) -> int:
     fetch_job_parser = subparsers.add_parser("fetch-job")
     fetch_job_parser.add_argument("--path", required=True)
     fetch_job_parser.add_argument("--dry-run", action="store_true")
+    fetch_job_parser.add_argument("--preview-chars", type=int, default=500)
 
     rag_index_parser = subparsers.add_parser("rag-index")
     rag_index_parser.add_argument("--path", required=True)
     rag_index_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_index_parser.add_argument("--max-chars", type=int, default=800)
+    rag_index_parser.add_argument("--overlap-chars", type=int, default=120)
 
     rag_index_dir_parser = subparsers.add_parser("rag-index-dir")
     rag_index_dir_parser.add_argument("--path", required=True)
     rag_index_dir_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_index_dir_parser.add_argument("--max-chars", type=int, default=800)
+    rag_index_dir_parser.add_argument("--overlap-chars", type=int, default=120)
 
     rag_search_parser = subparsers.add_parser("rag-search")
     rag_search_parser.add_argument("--query", required=True)
@@ -596,6 +742,24 @@ def main(argv: list[str] | None = None) -> int:
     rag_search_parser.add_argument("--limit", type=int, default=5)
     rag_search_parser.add_argument("--hybrid", action="store_true")
     rag_search_parser.add_argument("--alpha", type=float, default=0.5)
+    rag_search_parser.add_argument("--format", choices=("json", "table"), default="json")
+    rag_search_parser.add_argument("--columns")
+    rag_search_parser.add_argument("--text-preview-chars", type=int, default=120)
+
+
+    rag_search_job_parser = subparsers.add_parser("rag-search-job")
+    rag_search_job_parser.add_argument("--path", required=True)
+    rag_search_job_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_search_job_parser.add_argument("--limit", type=int, default=5)
+    rag_search_job_parser.add_argument("--format", choices=("json", "table"), default="json")
+    rag_search_job_parser.add_argument("--text-preview-chars", type=int, default=120)
+    rag_search_job_parser.add_argument("--columns")
+    rag_search_job_parser.add_argument("--save-report")
+
+    rag_answer_context_parser = subparsers.add_parser("rag-answer-context")
+    rag_answer_context_parser.add_argument("--query", required=True)
+    rag_answer_context_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_answer_context_parser.add_argument("--limit", type=int, default=5)
 
     rag_answer_parser = subparsers.add_parser("rag-answer")
     rag_answer_parser.add_argument("--query", required=True)
@@ -616,6 +780,13 @@ def main(argv: list[str] | None = None) -> int:
     scoring_parser = subparsers.add_parser("scoring-rank")
     scoring_parser.add_argument("--path", required=True)
     scoring_parser.add_argument("--limit", type=int, default=10)
+    scoring_parser.add_argument("--output")
+    scoring_parser.add_argument("--overwrite", action="store_true")
+    scoring_parser.add_argument("--format", choices=("json", "table"), default="json")
+
+
+    scoring_validate_parser = subparsers.add_parser("scoring-validate")
+    scoring_validate_parser.add_argument("--path", required=True)
 
     forecast_eval_parser = subparsers.add_parser("forecast-evaluate")
     forecast_eval_parser.add_argument("--path", required=True)
@@ -635,6 +806,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     payload = _dispatch(args)
+    if isinstance(payload, int):
+        return payload
     if payload is not None:
         _print_json(payload)
     return 0
@@ -646,6 +819,15 @@ def _dispatch(args: argparse.Namespace) -> object | None:
         return asdict(build_budget_report(args.config))
     if command == "smoke":
         return run_smoke(config_path=args.config, prompt=args.prompt)
+    if command == "gemini-live":
+        if not args.call_real_api:
+            print("Refusing to call Gemini API without --call-real-api.")
+            return 2
+        return run_gemini_live(
+            config_path=args.config,
+            task_type=args.task_type,
+            prompt=args.prompt,
+        )
     if command == "fetch-url":
         return run_fetch_url(
             url=args.url,
@@ -656,19 +838,72 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             include_metadata=args.include_metadata,
         )
     if command == "fetch-job":
-        return run_fetch_job(path=args.path, dry_run=args.dry_run)
+        return run_fetch_job(
+            path=args.path,
+            dry_run=args.dry_run,
+            preview_chars=args.preview_chars,
+        )
     if command == "rag-index":
-        return run_rag_index(path=args.path, db_path=args.db_path)
+        return run_rag_index(
+            path=args.path,
+            db_path=args.db_path,
+            max_chars=args.max_chars,
+            overlap_chars=args.overlap_chars,
+        )
     if command == "rag-index-dir":
-        return run_rag_index_dir(path=args.path, db_path=args.db_path)
+        return run_rag_index_dir(
+            path=args.path,
+            db_path=args.db_path,
+            max_chars=args.max_chars,
+            overlap_chars=args.overlap_chars,
+        )
     if command == "rag-search":
-        return run_rag_search(
+        results = run_rag_search(
             query=args.query,
             db_path=args.db_path,
             limit=args.limit,
             hybrid=args.hybrid,
             alpha=args.alpha,
         )
+        if args.format == "table":
+            print(
+                format_rag_search_table(
+                    results,
+                    text_preview_chars=args.text_preview_chars,
+                    columns=None if args.columns is None else args.columns.split(","),
+                )
+            )
+            return None
+        return results
+    if command == "rag-search-job":
+        result = run_rag_search_job(
+            path=args.path,
+            db_path=args.db_path,
+            limit=args.limit,
+        )
+        if args.format == "table":
+            rendered = format_rag_search_job_table(
+                result,
+                text_preview_chars=args.text_preview_chars,
+                columns=None if args.columns is None else args.columns.split(","),
+            )
+            print(rendered)
+            if args.save_report:
+                saved_report_path = _save_report(rendered, args.save_report)
+                print(f"saved_report_path: {saved_report_path}")
+            return None
+        if args.save_report:
+            result["saved_report_path"] = str(args.save_report)
+            _save_report(json.dumps(result, ensure_ascii=False, indent=2), args.save_report)
+        return result
+
+    if command == "rag-answer-context":
+        return run_rag_answer_context(
+            query=args.query,
+            db_path=args.db_path,
+            limit=args.limit,
+        )
+
     if command == "rag-answer":
         return run_rag_answer(
             query=args.query,
@@ -688,7 +923,35 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             call_real_api=args.call_real_api,
         )
     if command == "scoring-rank":
-        return run_scoring_rank(path=args.path, limit=args.limit)
+        report = run_scoring_rank(path=args.path, limit=args.limit)
+        if args.output:
+            output_path = Path(args.output)
+            if any(part == ".." for part in output_path.parts):
+                raise ValueError(f"path traversal is not allowed: {args.output}")
+            if output_path.exists() and not args.overwrite:
+                print(f"output already exists: {output_path}")
+                return 1
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return {"output": str(output_path), "count": report.get("count", 0)}
+        if args.format == "table":
+            lines = ["rank | name | score", "--- | --- | ---"]
+            rows = report.get("results")
+            for rank, item in enumerate(rows if isinstance(rows, list) else [], start=1):
+                if isinstance(item, dict):
+                    lines.append(f"{rank} | {item.get('name', '')} | {item.get('score', '')}")
+            lines.append(str(report.get("disclaimer", "")))
+            print("\n".join(lines))
+            return None
+        return report
+    if command == "scoring-validate":
+        result = run_scoring_validate(path=args.path)
+        _print_json(result)
+        return 0 if bool(result["valid"]) else 1
+
     if command == "forecast-evaluate":
         return run_forecast_evaluate(
             path=args.path,

@@ -158,6 +158,12 @@ class MultiModelOrchestrator:
         result.synthesis = StageResult.from_response("synthesizer", synthesis_response)
         # Prefer the synthesized answer; fall back to the first draft if skipped.
         result.answer = synthesis_response.text or draft_texts[0]
+        if (
+            result.answer
+            and "統合最終回答" not in result.answer
+            and not result.answer.startswith("FINAL")
+        ):
+            result.answer = f"統合最終回答\\n\\n{result.answer}"
         _logger.info(
             "orchestration done drafts=%d critique=%s synthesis_source=%s",
             len(draft_texts),

@@ -10,7 +10,7 @@ from datetime import datetime
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 from socketserver import ThreadingTCPServer
-from typing import Any
+from typing import Any, cast
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 DEFAULT_HOST = "127.0.0.1"
@@ -282,7 +282,12 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
             return None
         try:
             raw = self.rfile.read(length).decode("utf-8")
-            return json.loads(raw)
+            decoded: object = json.loads(raw)
+            if isinstance(decoded, dict):
+                return cast(dict[str, Any], decoded)
+            if isinstance(decoded, list):
+                return decoded
+            return decoded
         except (json.JSONDecodeError, UnicodeDecodeError):
             return _INVALID_JSON
 
