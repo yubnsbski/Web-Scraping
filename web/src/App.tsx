@@ -18,6 +18,11 @@ type SourcePreset = {
   query_hint: string;
 };
 
+type GuideCard = {
+  title: string;
+  body: string;
+};
+
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 
 const TABS = [
@@ -66,6 +71,44 @@ const SOURCE_PRESETS: SourcePreset[] = [
     url: "https://www.fsa.go.jp/policy/nisa2/",
     output_path: "local_docs/public/fsa_nisa.txt",
     query_hint: "NISA 成長投資枠 つみたて投資枠 制度 金融庁",
+  },
+];
+
+const AI_GUIDES: GuideCard[] = [
+  {
+    title: "1. まず根拠を検索",
+    body: "RAG DBから関連チャンクを取得します。ハイブリッド検索を使うと語句一致と意味検索を混ぜます。",
+  },
+  {
+    title: "2. 複数ドラフト",
+    body: "コスト、リスク、分散など複数観点で下書きを作ります。ドラフト数を増やすほど確認観点が増えます。",
+  },
+  {
+    title: "3. レビューと統合",
+    body: "レビュアーが根拠不足・飛躍・引用漏れを指摘し、統合担当が最終回答へ反映します。",
+  },
+  {
+    title: "4. 実APIは任意",
+    body: "標準はローカル擬似AIです。実Geminiを使うにはバックエンドで許可設定が必要です。",
+  },
+];
+
+const SCRAPE_GUIDES: GuideCard[] = [
+  {
+    title: "自動取得",
+    body: "robots.txt確認、URL安全性確認、レート制限、HTMLテキスト化、保存、RAG登録をまとめて実行します。",
+  },
+  {
+    title: "dry-run",
+    body: "本文を取得せず、robots.txtで取得可能かだけ確認します。新しいURLは最初にdry-runしてください。",
+  },
+  {
+    title: "手動取込",
+    body: "JavaScript描画やBot対策で取得できない場合、ブラウザで本文をコピーして貼り付けます。",
+  },
+  {
+    title: "法令・規約対応",
+    body: "公開HTTP(S)のみ対象です。robotsで禁止されたURL、内部IP、巨大レスポンスは拒否します。",
   },
 ];
 
@@ -149,7 +192,7 @@ function useAsync<T>() {
       setLoading(false);
     }
   }
-  return { loading, error, data, run, setData };
+  return { loading, error, data, run };
 }
 
 function Field(props: { label: string; children: ReactNode }) {
@@ -165,6 +208,19 @@ function Status(props: { loading: boolean; error: string | null }) {
   if (props.loading) return <p className="status">実行中…</p>;
   if (props.error) return <p className="status error">エラー: {props.error}</p>;
   return null;
+}
+
+function GuideCards(props: { items: GuideCard[] }) {
+  return (
+    <div className="guide-grid">
+      {props.items.map((item) => (
+        <article className="guide-card" key={item.title}>
+          <b>{item.title}</b>
+          <p>{item.body}</p>
+        </article>
+      ))}
+    </div>
+  );
 }
 
 function QuestionChips(props: { onPick: (question: string) => void }) {
@@ -319,8 +375,9 @@ function SearchTab() {
 function AnswerTab() {
   const [query, setQuery] = useState("S&P500と高配当ETFを比較して、長期保有の弱点を出して");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
-  const [drafts, setDrafts] = useState(2);
+  const [drafts, setDrafts] = useState(3);
   const [hybrid, setHybrid] = useState(true);
+  const [useRealApi, setUseRealApi] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
@@ -351,7 +408,9 @@ function AnswerTab() {
         db_path: dbPath,
         drafts,
         hybrid,
-        limit: 6,
+        critique: true,
+        limit: 8,
+        call_real_api: useRealApi,
       });
       setLastData(result);
       setMessages([
@@ -359,7 +418,7 @@ function AnswerTab() {
         {
           role: "assistant",
           content: cleanAssistantAnswer(result.answer, result.skipped),
-          meta: result.skipped ? "RAG未ヒット" : "RAG回答",
+          meta: result.skipped ? "RAG未ヒット" : "RAG + 複数AI統合",
           sources: result.results ?? [],
         },
       ]);
@@ -391,11 +450,13 @@ function AnswerTab() {
           <p className="eyebrow">AI Chat</p>
           <h2>文脈保持チャット</h2>
         </div>
-        <span className="badge">Local orchestration</span>
+        <span className="badge">RAG + Multi-agent orchestration</span>
       </div>
       <p className="hint">
-        直近の会話履歴を質問に含めて送信します。UIから実Gemini APIは呼ばず、ローカル文書の根拠に限定します。
+        RAG検索後、複数ドラフト→レビュー→統合の順で回答を作ります。UIの標準動作はローカル擬似AIです。
+        実Geminiを使う場合は、バックエンドで許可設定した上で「実APIを使う」を有効にします。
       </p>
+      <GuideCards items={AI_GUIDES} />
 
       <QuestionChips onPick={setQuery} />
 
@@ -438,7 +499,7 @@ function AnswerTab() {
         />
         <div className="composer-actions">
           <button className="primary" onClick={() => void ask()} disabled={loading || !query.trim()}>
-            送信
+            複数AIで回答生成
           </button>
           <button onClick={resetChat} disabled={loading}>
             リセット
@@ -450,7 +511,7 @@ function AnswerTab() {
         <Field label="RAG DB パス">
           <input value={dbPath} onChange={(e) => setDbPath(e.target.value)} />
         </Field>
-        <Field label="ドラフト数">
+        <Field label="ドラフト数（複数観点）">
           <input
             type="number"
             value={drafts}
@@ -462,9 +523,23 @@ function AnswerTab() {
         <Field label="ハイブリッド検索">
           <input type="checkbox" checked={hybrid} onChange={(e) => setHybrid(e.target.checked)} />
         </Field>
+        <Field label="実APIを使う（バックエンド許可時のみ）">
+          <input
+            type="checkbox"
+            checked={useRealApi}
+            onChange={(e) => setUseRealApi(e.target.checked)}
+          />
+        </Field>
       </div>
 
       <Status loading={loading} error={error} />
+      {lastData?.real_api_note && <p className="callout warn-callout">{lastData.real_api_note}</p>}
+      {lastData?.orchestration && (
+        <div className="callout">
+          実行方式: {lastData.orchestration.drafter} → {lastData.orchestration.critic} →{" "}
+          {lastData.orchestration.synthesizer} / draft数: {lastData.orchestration.drafts}
+        </div>
+      )}
       {lastData && (
         <details className="debug-panel">
           <summary>生成プロセスを確認</summary>
@@ -684,31 +759,30 @@ function ScrapeTab() {
     });
   }
 
-  function call(dry: boolean) {
-    let sources: unknown;
-    try {
-      sources = JSON.parse(sourcesText);
-    } catch {
-      sourceState.run(async () => {
-        throw new Error("sources は有効なJSON配列にしてください");
-      });
-      return;
-    }
+  function parsedSources() {
+    const sources = JSON.parse(sourcesText);
     if (!Array.isArray(sources) || sources.length === 0) {
-      sourceState.run(async () => {
-        throw new Error("sources は1件以上のJSON配列にしてください");
-      });
-      return;
+      throw new Error("sources は1件以上のJSON配列にしてください");
     }
+    return sources;
+  }
+
+  function call(dry: boolean) {
     sourceState.run(async () => {
-      const result = await api<Json>(dry ? "/api/fetch-job/dry-run" : "/api/fetch-job/run", {
+      const sources = parsedSources();
+      return api<Json>(dry ? "/api/fetch-job/dry-run" : "/api/fetch-job/run", { sources });
+    });
+  }
+
+  function callAuto() {
+    sourceState.run(async () => {
+      const sources = parsedSources();
+      return api<Json>("/api/fetch-job/auto", {
         sources,
+        db_path: dbPath,
+        index_path: indexPath,
+        index_after_fetch: indexAfterFetch,
       });
-      if (!dry && indexAfterFetch) {
-        const index = await api<Json>("/api/rag/index-dir", { path: indexPath, db_path: dbPath });
-        return { ...result, index };
-      }
-      return result;
     });
   }
 
@@ -722,7 +796,8 @@ function ScrapeTab() {
       }),
     );
 
-  const results: Json[] = sourceState.data?.results ?? [];
+  const dryResults: Json[] = sourceState.data?.dry_run?.results ?? [];
+  const results: Json[] = sourceState.data?.run?.results ?? sourceState.data?.results ?? [];
   return (
     <section className="tool-section">
       <div className="section-head">
@@ -733,18 +808,20 @@ function ScrapeTab() {
         <span className="badge warn">robots確認必須</span>
       </div>
 
+      <GuideCards items={SCRAPE_GUIDES} />
+
       <div className="workflow">
         <article className="step-card">
-          <b>1. dry-run</b>
-          <span>robots.txt とURL安全性を確認</span>
+          <b>1. 自動取得</b>
+          <span>許可確認、取得、保存、RAG登録を一括実行</span>
         </article>
         <article className="step-card">
-          <b>2. 取得実行</b>
-          <span>HTMLをテキスト化して local_docs に保存</span>
+          <b>2. dry-run</b>
+          <span>取得せずrobots.txtのみ確認</span>
         </article>
         <article className="step-card">
-          <b>3. RAG登録</b>
-          <span>取得後に自動で検索DBへ登録</span>
+          <b>3. 個別取得</b>
+          <span>許可済みURLだけ手動で取得</span>
         </article>
         <article className="step-card">
           <b>4. 手動取込</b>
@@ -802,38 +879,32 @@ function ScrapeTab() {
             onChange={(e) => setIndexAfterFetch(e.target.checked)}
           />
         </Field>
-        <button className="primary" onClick={() => call(true)} disabled={sourceState.loading}>
-          dry-run
+        <button className="primary" onClick={callAuto} disabled={sourceState.loading}>
+          自動取得 + RAG登録
+        </button>
+        <button onClick={() => call(true)} disabled={sourceState.loading}>
+          dry-runのみ
         </button>
         <button onClick={() => call(false)} disabled={sourceState.loading}>
-          取得 + 登録
+          取得のみ
         </button>
       </div>
       <Status loading={sourceState.loading} error={sourceState.error} />
-      {results.length > 0 && (
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>name</th>
-              <th>allowed</th>
-              <th>source</th>
-              <th>status</th>
-              <th>saved</th>
-            </tr>
-          </thead>
-          <tbody>
-            {results.map((r, i) => (
-              <tr key={i}>
-                <td>{r.name}</td>
-                <td>{String(r.fetch?.allowed_by_robots)}</td>
-                <td className="mono">{r.fetch?.source}</td>
-                <td>{r.fetch?.status_code ?? "-"}</td>
-                <td className="mono">{r.fetch?.saved_path ?? "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      {sourceState.data?.policy && (
+        <div className="callout">
+          法令・規約対応: robots確認={String(sourceState.data.policy.robots_checked)} / blocked={" "}
+          {sourceState.data.policy.robots_blocked_count} / SSRF対策={String(sourceState.data.policy.ssrf_protection)} / 
+          レート制限={String(sourceState.data.policy.rate_limit)} / サイズ制限={String(sourceState.data.policy.response_size_limit)}
+        </div>
       )}
+      {dryResults.length > 0 && (
+        <details className="debug-panel" open>
+          <summary>dry-run結果</summary>
+          <FetchResultsTable results={dryResults} />
+        </details>
+      )}
+      {results.length > 0 && <FetchResultsTable results={results} />}
       {sourceState.data?.index && (
         <p className="callout">RAG登録完了: {JSON.stringify(sourceState.data.index)}</p>
       )}
@@ -867,6 +938,33 @@ function ScrapeTab() {
         )}
       </div>
     </section>
+  );
+}
+
+function FetchResultsTable(props: { results: Json[] }) {
+  return (
+    <table className="grid">
+      <thead>
+        <tr>
+          <th>name</th>
+          <th>allowed</th>
+          <th>source</th>
+          <th>status</th>
+          <th>saved</th>
+        </tr>
+      </thead>
+      <tbody>
+        {props.results.map((r, i) => (
+          <tr key={i}>
+            <td>{r.name}</td>
+            <td>{String(r.fetch?.allowed_by_robots)}</td>
+            <td className="mono">{r.fetch?.source}</td>
+            <td>{r.fetch?.status_code ?? "-"}</td>
+            <td className="mono">{r.fetch?.saved_path ?? "-"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
