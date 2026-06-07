@@ -1115,3 +1115,54 @@ def test_cli_rag_stats_reports_sources_and_keywords(tmp_path, capsys):
     assert payload["keyword_totals"]["配当"] >= 1
     assert payload["keyword_totals"]["DOE"] >= 1
     assert payload["sources"][0]["source"] == str(memo)
+
+
+
+def test_source_registry_build_fetch_job_filters_blocked_sources(tmp_path, capsys):
+    registry = tmp_path / "registry.yaml"
+    output = tmp_path / "fetch_job.yaml"
+    registry.write_text(
+        """
+sources:
+  - name: safe_ir
+    source_type: issuer_ir
+    method: html
+    allowed: true
+    url: https://example.com/ir
+    output_path: local_docs/safe_ir.txt
+    query_hint: 配当 方針 IR
+  - name: broker_rank
+    source_type: broker_public
+    method: html
+    allowed: true
+    url: https://broker.example/ranking
+    output_path: local_docs/broker_rank.txt
+  - name: edinet_api
+    source_type: public_api
+    method: api
+    allowed: true
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "source-registry-build-fetch-job",
+            "--path",
+            str(registry),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["fetch_sources_count"] == 1
+    assert payload["excluded_count"] == 2
+    assert payload["fetch_job"]["sources"][0]["name"] == "safe_ir"
+
+    written = output.read_text(encoding="utf-8")
+    assert "safe_ir" in written
+    assert "broker_rank" not in written
+    assert "edinet_api" not in written
