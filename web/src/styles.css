@@ -549,3 +549,39 @@ details summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+/* hard override: full answer visibility */
+.chat-window {
+  max-height: none !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+
+.chat-bubble {
+  max-width: 100% !important;
+  width: 100% !important;
+  overflow: visible !important;
+}
+
+.chat-bubble.assistant {
+  justify-self: stretch !important;
+}
+
+.response-text {
+  display: block;
+  width: 100%;
+  max-height: none !important;
+  height: auto !important;
+  overflow: visible !important;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(7, 11, 18, 0.88);
+  color: var(--text);
+  font-size: 13px;
+}
