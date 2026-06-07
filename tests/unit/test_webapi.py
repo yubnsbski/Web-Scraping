@@ -35,6 +35,29 @@ def test_health_and_unknown_route() -> None:
     assert "error" in payload
 
 
+def test_edinet_ingest_route_is_registered_and_routed(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    assert "POST /api/edinet/ingest" in available_routes()
+
+    captured: dict[str, object] = {}
+
+    def fake_ingest(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"ingested_count": 0, "results": []}
+
+    monkeypatch.setattr(service.cli, "run_edinet_ingest", fake_ingest)
+    status, payload = handle_api(
+        "POST",
+        "/api/edinet/ingest",
+        {"registry_path": "examples/source_registry_edinet_sample.yaml", "days": 5},
+    )
+
+    assert status == 200
+    assert payload["ingested_count"] == 0
+    assert captured["days"] == 5
+
+
 
 def test_rag_stats_endpoint_reports_db_contents(tmp_path) -> None:
     db = tmp_path / "rag.sqlite"

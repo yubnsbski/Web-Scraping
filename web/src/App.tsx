@@ -903,8 +903,13 @@ function ScrapeTab() {
   const [manualTitle, setManualTitle] = useState("手動取込メモ");
   const [manualSourceUrl, setManualSourceUrl] = useState("");
   const [manualText, setManualText] = useState("");
+  const [edinetRegistry, setEdinetRegistry] = useState(
+    "examples/source_registry_nikkei225_edinet.yaml",
+  );
+  const [edinetDays, setEdinetDays] = useState(7);
   const sourceState = useAsync<Json>();
   const manualState = useAsync<Json>();
+  const edinetState = useAsync<Json>();
 
   function currentSource() {
     return {
@@ -977,6 +982,16 @@ function ScrapeTab() {
       });
     });
   }
+
+  const runEdinetIngest = () =>
+    edinetState.run(() =>
+      api<Json>("/api/edinet/ingest", {
+        registry_path: edinetRegistry,
+        days: edinetDays,
+        db_path: dbPath,
+        index_after_fetch: true,
+      }),
+    );
 
   const saveManual = () =>
     manualState.run(() =>
@@ -1103,6 +1118,63 @@ function ScrapeTab() {
       {sourceState.data?.index && (
         <p className="callout">RAG登録完了: {JSON.stringify(sourceState.data.index)}</p>
       )}
+
+      <div className="edinet-ingest">
+        <h3>EDINET（公的API）から財務数値を取得</h3>
+        <p className="hint">
+          金融庁EDINETの公式開示（XBRL/CSV）から営業CF・自己資本比率・配当性向などの数値を取得し、RAGに登録します。
+          通常は月曜6時に自動実行されますが、ここから任意のタイミングで実行できます（バックエンドにEDINET_API_KEYが必要）。
+        </p>
+        <div className="form">
+          <Field label="EDINET registry（YAML）">
+            <input value={edinetRegistry} onChange={(e) => setEdinetRegistry(e.target.value)} />
+          </Field>
+          <Field label="遡る日数（提出日のスキャン範囲）">
+            <input
+              type="number"
+              min={1}
+              max={31}
+              value={edinetDays}
+              onChange={(e) => setEdinetDays(Number(e.target.value))}
+            />
+          </Field>
+          <button
+            className="primary"
+            onClick={runEdinetIngest}
+            disabled={edinetState.loading}
+          >
+            EDINETから取得 + RAG登録
+          </button>
+        </div>
+        <Status loading={edinetState.loading} error={edinetState.error} />
+        {edinetState.data && (
+          <div className="callout">
+            取得件数: {String(edinetState.data.ingested_count)} / 対象{" "}
+            {String(edinetState.data.targets_count)}社（スキャン日数{" "}
+            {Array.isArray(edinetState.data.scanned_dates)
+              ? edinetState.data.scanned_dates.length
+              : 0}
+            ）
+            {Array.isArray(edinetState.data.results) && edinetState.data.results.length > 0 && (
+              <ul className="source-list">
+                {edinetState.data.results.map((r: Json, i: number) => (
+                  <li key={r.doc_id ?? i}>
+                    <span className="mono">
+                      {r.ticker} {r.status}
+                    </span>
+                    {Array.isArray(r.metrics) && r.metrics.length > 0 && (
+                      <p>{r.metrics.join(" / ")}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {edinetState.data.index ? (
+              <p className="hint">RAG登録完了: {JSON.stringify(edinetState.data.index)}</p>
+            ) : null}
+          </div>
+        )}
+      </div>
 
       <div className="manual-ingest">
         <h3>手動テキスト取込</h3>

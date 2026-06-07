@@ -11,6 +11,16 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant.config.loader import load_yaml
+from investment_assistant.edinet.client import EdinetClient
+from investment_assistant.edinet.csv_extract import parse_csv_archive, select_metrics, to_rag_text
+from investment_assistant.edinet.ingest import ingest_targets, recent_dates
+from investment_assistant.edinet.models import (
+    EdinetDocument,
+    filter_by_doc_types,
+    filter_by_ticker,
+    securities_code,
+)
+from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.forecasting import service as forecast_service
 from investment_assistant.forecasting.dataset import DEFAULT_DATASET, download_dataset
 from investment_assistant.forecasting.timeseries import load_timeseries_csv
@@ -269,6 +279,133 @@ def run_fetch_job(
         "sources_count": len(results),
         "results": results,
     }
+
+
+def run_edinet_documents(
+    *,
+    date: str,
+    ticker: str | None = None,
+    financial_only: bool = True,
+) -> dict[str, object]:
+    """List EDINET filings submitted on ``date`` (official public disclosure API).
+
+    Requires network access and the ``EDINET_API_KEY`` environment variable.
+    """
+
+    client = EdinetClient()
+    documents = client.list_documents(date)
+    if ticker:
+        documents = filter_by_ticker(documents, ticker)
+    if financial_only:
+        documents = filter_by_doc_types(documents)
+    return {
+        "date": date,
+        "ticker": ticker,
+        "count": len(documents),
+        "documents": [
+            {
+                "doc_id": doc.doc_id,
+                "sec_code": doc.sec_code,
+                "ticker": doc.ticker,
+                "filer_name": doc.filer_name,
+                "doc_type": doc.doc_type_label,
+                "period_end": doc.period_end,
+                "submit_datetime": doc.submit_datetime,
+                "has_csv": doc.has_csv,
+            }
+            for doc in documents
+        ],
+    }
+
+
+def run_edinet_extract(
+    *,
+    zip_path: str | Path,
+    doc_id: str,
+    ticker: str | None = None,
+    company: str | None = None,
+    period_end: str | None = None,
+    doc_type_code: str = "120",
+    save_text: str | Path | None = None,
+    preview_chars: int = 800,
+) -> dict[str, object]:
+    """Extract financial metrics from a downloaded EDINET CSV archive (offline).
+
+    Turns a type=5 CSV ZIP into RAG-ready text containing the structured numbers
+    (営業CF / 自己資本比率 / 配当性向) that the RAG store is currently missing.
+    """
+
+    data = Path(zip_path).read_bytes()
+    values = parse_csv_archive(data)
+    document = EdinetDocument(
+        doc_id=doc_id,
+        edinet_code=None,
+        sec_code=securities_code(ticker) if ticker else None,
+        filer_name=company or "",
+        doc_type_code=doc_type_code,
+        doc_description="",
+        period_start=None,
+        period_end=period_end,
+        submit_datetime=None,
+        has_xbrl=False,
+        has_csv=True,
+        has_pdf=False,
+    )
+    text = to_rag_text(document, values, company=company)
+    saved_path: str | None = None
+    if save_text is not None:
+        saved_path = str(reject_path_traversal(save_text))
+        target = Path(saved_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    return {
+        "doc_id": doc_id,
+        "values_extracted": len(values),
+        "metrics": sorted(select_metrics(values).keys()),
+        "saved_path": saved_path,
+        "text_preview": text[: max(0, preview_chars)],
+    }
+
+
+def run_edinet_ingest(
+    *,
+    registry_path: str | Path = "examples/source_registry_edinet_sample.yaml",
+    end_date: str | None = None,
+    days: int = 7,
+    output_dir: str | Path = "local_docs/edinet",
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    index_after: bool = True,
+    max_periods: int | None = None,
+    client: EdinetClient | None = None,
+) -> dict[str, object]:
+    """Run the end-to-end EDINET ingest and optionally index the result into RAG.
+
+    Scans the last ``days`` submission dates (ending at ``end_date``, default
+    today) for the registry's EDINET targets, downloads the latest financial
+    filing per ticker, extracts the metrics, and indexes the saved text so the
+    numbers become searchable. Requires network access for live runs; the
+    ``client`` is injectable for offline testing.
+    """
+
+    targets = build_edinet_targets_from_registry(registry_path)
+    edinet_client = client or EdinetClient()
+    effective_end = end_date or datetime.now(UTC).date().isoformat()
+    dates = recent_dates(effective_end, days)
+
+    result = ingest_targets(
+        client=edinet_client,
+        targets=targets,
+        dates=dates,
+        output_dir=output_dir,
+        max_periods_override=max_periods,
+    )
+    result["registry_path"] = str(registry_path)
+    result["end_date"] = effective_end
+    result["days"] = days
+
+    if index_after and result.get("ingested_count"):
+        result["index"] = run_rag_index_dir(path=str(output_dir), db_path=db_path)
+    return result
 
 
 def run_rag_index(
@@ -1013,6 +1150,34 @@ def main(argv: list[str] | None = None) -> int:
     fetch_job_parser.add_argument("--dry-run", action="store_true")
     fetch_job_parser.add_argument("--preview-chars", type=int, default=500)
 
+    edinet_documents_parser = subparsers.add_parser("edinet-documents")
+    edinet_documents_parser.add_argument("--date", required=True)
+    edinet_documents_parser.add_argument("--ticker")
+    edinet_documents_parser.add_argument("--all-doc-types", action="store_true")
+
+    edinet_ingest_parser = subparsers.add_parser("edinet-ingest")
+    edinet_ingest_parser.add_argument(
+        "--registry",
+        dest="registry_path",
+        default="examples/source_registry_edinet_sample.yaml",
+    )
+    edinet_ingest_parser.add_argument("--end-date")
+    edinet_ingest_parser.add_argument("--days", type=int, default=7)
+    edinet_ingest_parser.add_argument("--output-dir", default="local_docs/edinet")
+    edinet_ingest_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    edinet_ingest_parser.add_argument("--max-periods", type=int)
+    edinet_ingest_parser.add_argument("--no-index", action="store_true")
+
+    edinet_extract_parser = subparsers.add_parser("edinet-extract")
+    edinet_extract_parser.add_argument("--zip", dest="zip_path", required=True)
+    edinet_extract_parser.add_argument("--doc-id", required=True)
+    edinet_extract_parser.add_argument("--ticker")
+    edinet_extract_parser.add_argument("--company")
+    edinet_extract_parser.add_argument("--period-end")
+    edinet_extract_parser.add_argument("--doc-type-code", default="120")
+    edinet_extract_parser.add_argument("--save-text")
+    edinet_extract_parser.add_argument("--preview-chars", type=int, default=800)
+
     rag_index_parser = subparsers.add_parser("rag-index")
     rag_index_parser.add_argument("--path", required=True)
     rag_index_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
@@ -1148,6 +1313,33 @@ def _dispatch(args: argparse.Namespace) -> object | None:
         return run_fetch_job(
             path=args.path,
             dry_run=args.dry_run,
+            preview_chars=args.preview_chars,
+        )
+    if command == "edinet-documents":
+        return run_edinet_documents(
+            date=args.date,
+            ticker=args.ticker,
+            financial_only=not args.all_doc_types,
+        )
+    if command == "edinet-ingest":
+        return run_edinet_ingest(
+            registry_path=args.registry_path,
+            end_date=args.end_date,
+            days=args.days,
+            output_dir=args.output_dir,
+            db_path=args.db_path,
+            index_after=not args.no_index,
+            max_periods=args.max_periods,
+        )
+    if command == "edinet-extract":
+        return run_edinet_extract(
+            zip_path=args.zip_path,
+            doc_id=args.doc_id,
+            ticker=args.ticker,
+            company=args.company,
+            period_end=args.period_end,
+            doc_type_code=args.doc_type_code,
+            save_text=args.save_text,
             preview_chars=args.preview_chars,
         )
     if command == "rag-index":

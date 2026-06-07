@@ -1,0 +1,34 @@
+# EDINET (金融庁) public-API targets.
+#
+# These entries use the same safety boundary as the HTML path: source_type is
+# public_api and provider is edinet, allowed must be true. Financial numbers
+# (営業CF / 自己資本比率 / 配当性向) are taken from official filings via the EDINET
+# API rather than scraped from IR HTML, which is more reliable for structured
+# values. doc_types is a comma/space separated string of EDINET docTypeCode
+# values (120=有価証券報告書, 140=四半期報告書, 160=半期報告書); omit it to default
+# to the financial report set.
+sources:
+  - name: "8306_MUFG_edinet"
+    ticker: "8306"
+    company: "MUFG"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "7203_toyota_edinet"
+    ticker: "7203"
+    company: "トヨタ自動車"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+
+  - name: "9432_NTT_edinet"
+    ticker: "9432"
+    company: "NTT"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true

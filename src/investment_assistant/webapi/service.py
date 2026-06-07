@@ -358,6 +358,25 @@ def _fetch_job_auto(body: JsonDict) -> JsonDict:
 
 
 
+def _edinet_ingest(body: JsonDict) -> JsonDict:
+    registry_path = str(
+        body.get("registry_path") or "examples/source_registry_edinet_sample.yaml"
+    )
+    end_date_value = body.get("end_date")
+    end_date = str(end_date_value).strip() if end_date_value else None
+    max_periods_value = body.get("max_periods")
+    max_periods = _as_int(max_periods_value, 0) if max_periods_value is not None else None
+    return cli.run_edinet_ingest(
+        registry_path=registry_path,
+        end_date=end_date or None,
+        days=_as_int(body.get("days"), 7),
+        output_dir=str(body.get("output_dir") or "local_docs/edinet"),
+        db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
+        index_after=_as_bool(body.get("index_after_fetch"), True),
+        max_periods=max_periods if max_periods and max_periods > 0 else None,
+    )
+
+
 def _portfolio_dividends(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/portfolio_dividends_sample.csv")
     return summarize_dividends(load_dividends(path))
@@ -760,6 +779,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
+    ("POST", "/api/edinet/ingest"): _edinet_ingest,
 }
 
 
