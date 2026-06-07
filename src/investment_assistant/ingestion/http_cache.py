@@ -124,6 +124,20 @@ class HttpCache:
             )
             return int(cursor.rowcount)
 
+    def clear(self) -> int:
+        """Delete all cached HTTP responses. Returns the number removed."""
+
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM http_cache")
+            return int(cursor.rowcount)
+
+    def count(self) -> int:
+        """Return the number of cached HTTP responses."""
+
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) FROM http_cache").fetchone()
+            return int(row[0])
+
     def _ensure_schema(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
