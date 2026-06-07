@@ -333,10 +333,11 @@ def _real_api_decision(body: JsonDict) -> tuple[bool, str | None]:
     allowed = _as_bool(os.getenv(_REAL_API_ENV), False)
     if allowed:
         return True, None
-    return (
-        False,
-        f"real API disabled; set {_REAL_API_ENV}=true on the backend to enable budgeted Gemini calls",
+    message = (
+        f"real API disabled; set {_REAL_API_ENV}=true on the backend "
+        "to enable budgeted Gemini calls"
     )
+    return False, message
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
