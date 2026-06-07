@@ -14,6 +14,7 @@ Design notes:
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 
 JsonDict = dict[str, Any]
 Handler = Callable[[JsonDict], JsonDict]
+_REAL_API_ENV = "INVESTMENT_ASSISTANT_WEB_REAL_API"
 
 
 class ApiError(Exception):
@@ -86,26 +88,40 @@ def _rag_answer_context(body: JsonDict) -> JsonDict:
 
 
 def _rag_answer(body: JsonDict) -> JsonDict:
-    # call_real_api is intentionally never exposed to the web UI.
-    return cli.run_rag_answer(
+    call_real_api, real_api_note = _real_api_decision(body)
+    result = cli.run_rag_answer(
         query=_require_str(body, "query"),
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
         limit=_as_int(body.get("limit"), 5),
-        call_real_api=False,
+        call_real_api=call_real_api,
     )
+    if real_api_note:
+        result["real_api_note"] = real_api_note
+    return result
 
 
 def _orchestrate(body: JsonDict) -> JsonDict:
-    return cli.run_orchestrate_answer(
+    call_real_api, real_api_note = _real_api_decision(body)
+    result = cli.run_orchestrate_answer(
         query=_require_str(body, "query"),
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
-        limit=_as_int(body.get("limit"), 5),
-        drafts=_as_int(body.get("drafts"), 1),
+        limit=_as_int(body.get("limit"), 8),
+        drafts=_as_int(body.get("drafts"), 3),
         include_critique=bool(body.get("critique", True)),
-        hybrid=bool(body.get("hybrid", False)),
+        hybrid=bool(body.get("hybrid", True)),
         alpha=_as_float(body.get("alpha"), 0.5),
-        call_real_api=False,
+        call_real_api=call_real_api,
     )
+    result["orchestration"] = {
+        "drafter": "複数観点ドラフト",
+        "critic": "根拠・飛躍・引用漏れレビュー",
+        "synthesizer": "レビュー反映後の統合回答",
+        "drafts": _as_int(body.get("drafts"), 3),
+        "call_real_api": call_real_api,
+    }
+    if real_api_note:
+        result["real_api_note"] = real_api_note
+    return result
 
 
 def _rag_index_dir(body: JsonDict) -> JsonDict:
@@ -206,19 +222,43 @@ def _fetch_job(body: JsonDict, *, dry_run: bool) -> JsonDict:
     path = body.get("path")
     if path:
         return cli.run_fetch_job(path=str(path), dry_run=dry_run)
-    sources = body.get("sources")
-    if not isinstance(sources, list) or not sources:
-        raise ApiError("provide 'path' or a non-empty 'sources' list")
-    yaml_text = _sources_to_yaml(sources)
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".yaml", delete=False, encoding="utf-8"
-    ) as handle:
-        handle.write(yaml_text)
-        temp_path = handle.name
-    try:
-        return cli.run_fetch_job(path=temp_path, dry_run=dry_run)
-    finally:
-        Path(temp_path).unlink(missing_ok=True)
+    return _run_fetch_job_sources(_require_sources(body), dry_run=dry_run)
+
+
+def _fetch_job_auto(body: JsonDict) -> JsonDict:
+    """Dry-run, fetch allowed sources, save text, then index the documents."""
+
+    sources = _require_sources(body)
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+    index_path = str(body.get("index_path") or "local_docs")
+    index_after_fetch = _as_bool(body.get("index_after_fetch"), True)
+
+    dry_run = _run_fetch_job_sources(sources, dry_run=True)
+    allowed_sources, blocked = _filter_allowed_sources(sources, dry_run)
+    run_result: JsonDict | None = None
+    index_result: JsonDict | None = None
+
+    if allowed_sources:
+        run_result = _run_fetch_job_sources(allowed_sources, dry_run=False)
+        if index_after_fetch:
+            index_result = cli.run_rag_index_dir(path=index_path, db_path=db_path)
+
+    return {
+        "status": "completed" if allowed_sources else "blocked",
+        "policy": {
+            "robots_checked": True,
+            "robots_blocked_count": len(blocked),
+            "ssrf_protection": True,
+            "rate_limit": True,
+            "response_size_limit": True,
+            "auto_trading": False,
+        },
+        "dry_run": dry_run,
+        "run": run_result,
+        "index": index_result,
+        "allowed_sources_count": len(allowed_sources),
+        "blocked_results": blocked,
+    }
 
 
 # --- helpers ---------------------------------------------------------------
@@ -234,6 +274,81 @@ def _require_str(body: JsonDict, key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ApiError(f"missing required string field: {key}")
     return value
+
+
+def _require_sources(body: JsonDict) -> list[Any]:
+    sources = body.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ApiError("provide a non-empty 'sources' list")
+    for source in sources:
+        if not isinstance(source, dict):
+            raise ApiError("each source must be an object")
+    return sources
+
+
+def _run_fetch_job_sources(sources: list[Any], *, dry_run: bool) -> JsonDict:
+    yaml_text = _sources_to_yaml(sources)
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as handle:
+        handle.write(yaml_text)
+        temp_path = handle.name
+    try:
+        return cli.run_fetch_job(path=temp_path, dry_run=dry_run)
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+
+def _filter_allowed_sources(
+    sources: list[Any],
+    dry_run: JsonDict,
+) -> tuple[list[Any], list[JsonDict]]:
+    dry_results = dry_run.get("results")
+    if not isinstance(dry_results, list):
+        return [], []
+
+    allowed_names: set[str] = set()
+    blocked: list[JsonDict] = []
+    for item in dry_results:
+        if not isinstance(item, dict):
+            continue
+        fetch = item.get("fetch")
+        if isinstance(fetch, dict) and fetch.get("allowed_by_robots") is True:
+            allowed_names.add(str(item.get("name", "")))
+        else:
+            blocked.append(item)
+
+    allowed_sources = [
+        source
+        for source in sources
+        if isinstance(source, dict) and str(source.get("name", "")) in allowed_names
+    ]
+    return allowed_sources, blocked
+
+
+def _real_api_decision(body: JsonDict) -> tuple[bool, str | None]:
+    requested = _as_bool(body.get("call_real_api"), False)
+    if not requested:
+        return False, None
+    allowed = _as_bool(os.getenv(_REAL_API_ENV), False)
+    if allowed:
+        return True, None
+    return (
+        False,
+        f"real API disabled; set {_REAL_API_ENV}=true on the backend to enable budgeted Gemini calls",
+    )
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.lower().strip()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
 
 
 def _as_int(value: object, default: int) -> int:
@@ -314,6 +429,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
+    ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
 }
 
 
