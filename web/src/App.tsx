@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "./api";
+import { DashboardTab } from "./DashboardTab";
 
 type Json = Record<string, any>;
 
@@ -28,6 +29,7 @@ const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const TABS = [
   { id: "search", label: "Research" },
   { id: "answer", label: "AI Chat" },
+  { id: "dashboard", label: "Dashboard" },
   { id: "scoring", label: "Score" },
   { id: "forecast", label: "Forecast" },
   { id: "scrape", label: "Data Intake" },
@@ -213,6 +215,7 @@ export function App() {
       <main className="panel">
         {tab === "search" && <SearchTab />}
         {tab === "answer" && <AnswerTab />}
+        {tab === "dashboard" && <DashboardTab />}
         {tab === "scoring" && <ScoringTab />}
         {tab === "forecast" && <ForecastTab />}
         {tab === "scrape" && <ScrapeTab />}
