@@ -32,23 +32,43 @@ class LocalOrchestrationClient:
         )
         context_preview = context_preview[:300]
 
+        perspective = _extract_perspective(prompt)
+
         if "統合担当" in prompt:
             return "\n".join(
                 (
-                    "統合最終回答（ローカル擬似・実API未使用）",
-                    f"質問: {query}",
-                    f"要点: {context_preview} [1]",
-                    "不確実性: ローカル文書に一致した範囲のみ。",
+                    "1. 弱点指摘（誤り優先）",
+                    f"{query}について、ローカル文書で確認できる範囲に限定して整理します。",
+                    "",
+                    "2. 重大リスク",
+                    f"根拠候補: {context_preview} [1]",
+                    "",
+                    "3. 現実的代替案",
+                    "最小案: 追加データを入れず、根拠候補だけで判断保留点を整理する。",
+                    "標準案: Data IntakeでIR・決算資料を追加してから再回答する。",
+                    "強化案: 競合企業・ETF・指数データも登録して比較する。",
+                    "",
+                    "4. 【危険ポイント】",
+                    "ローカル文書にない情報、未取得ページ、PDF画像部分、最新市況は未検証です。",
+                    "",
+                    "5. 次アクション",
+                    "Data Intakeで根拠資料を追加し、同じ質問を再実行してください。",
+                    "",
                     "信頼度: 中",
                 )
             )
         if "厳格なレビュアー" in prompt:
-            return "重大な問題なし（ローカル擬似レビュー：引用と不確実性の記載を確認）"
+            return (
+                "レビュー指摘: 引用候補、不確実性、観点分離を確認。"
+                " 同一論点の重複がある場合は最終回答で統合してください。"
+            )
         return "\n".join(
             (
-                "ドラフト回答（ローカル擬似・実API未使用）",
+                f"ドラフト回答（{perspective}）",
                 f"質問: {query}",
+                f"専用観点: {perspective}",
                 f"根拠候補: {context_preview} [1]",
+                "弱点: この観点で見ると、未検証情報が残ります。",
                 "不確実性: ローカル文書検索に一致した範囲のみ。",
             )
         )
@@ -103,3 +123,20 @@ def _normalize_query(query: str) -> str:
     if len(compact) > 220:
         return compact[:220].rstrip() + "..."
     return compact
+
+
+def _extract_perspective(prompt: str) -> str:
+    for line in prompt.splitlines():
+        if line.startswith("専用指示:"):
+            return line.replace("専用指示:", "").strip()
+        if "配当・財務安全性" in line:
+            return "配当・財務安全性"
+        if "下落リスク・競争環境" in line:
+            return "下落リスク・競争環境"
+        if "NISA長期保有" in line:
+            return "NISA長期保有"
+        if "データ不足・判断保留" in line:
+            return "データ不足・判断保留"
+        if "反対意見・弱気シナリオ" in line:
+            return "反対意見・弱気シナリオ"
+    return "総合観点"

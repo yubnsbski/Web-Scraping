@@ -107,7 +107,22 @@ class LlmService:
 
     @staticmethod
     def _local_summary(prompt: str, *, max_chars: int = 4000) -> str:
+        """Do not expose internal prompts as user answers."""
+        if (
+            "あなたはアシスタントです" in prompt
+            or "以下のドラフト群とレビュー指摘" in prompt
+            or "最終回答を作成してください" in prompt
+            or "ローカル文書コンテキスト" in prompt
+            or "生成プロセス" in prompt
+        ):
+            return ""
+
         normalized = " ".join(prompt.split())
+        if len(normalized) <= max_chars:
+            return normalized
+        return f"{normalized[: max_chars - 1]}…"
+
+
         if len(normalized) <= max_chars:
             return normalized
         return f"{normalized[: max_chars - 1]}…"

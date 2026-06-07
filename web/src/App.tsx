@@ -119,6 +119,54 @@ const SAMPLE_CSV =
   "債券バランス型,0.35,0.030,0.08,0.80\n";
 
 const SAMPLE_SOURCES = JSON.stringify([presetToSource(SOURCE_PRESETS[0])], null, 2);
+const DISCLOSURE_AUTO_SOURCES = [
+  {
+    name: "edinet_portal",
+    url: "https://disclosure2.edinet-fsa.go.jp/",
+    output_path: "local_docs/disclosure/edinet_portal.txt",
+    query_hint: "EDINET 有価証券報告書 半期報告書 四半期報告書 財務諸表",
+    extract_text: true,
+    include_metadata: true,
+    preview_chars: 800,
+  },
+  {
+    name: "tdnet_portal",
+    url: "https://www.release.tdnet.info/inbs/I_main_00.html",
+    output_path: "local_docs/disclosure/tdnet_portal.txt",
+    query_hint: "TDnet 決算短信 適時開示 決算説明資料 業績予想",
+    extract_text: true,
+    include_metadata: true,
+    preview_chars: 800,
+  },
+  {
+    name: "jpx_listed_company_info",
+    url: "https://www.jpx.co.jp/listing/co-search/index.html",
+    output_path: "local_docs/disclosure/jpx_listed_company_info.txt",
+    query_hint: "東証 上場会社情報 決算短信 有価証券報告書 開示資料",
+    extract_text: true,
+    include_metadata: true,
+    preview_chars: 800,
+  },
+  {
+    name: "ntt_ir_library",
+    url: "https://group.ntt/jp/ir/library/",
+    output_path: "local_docs/disclosure/9432_ntt_ir_library.txt",
+    query_hint: "NTT 有価証券報告書 決算短信 決算説明資料 財務諸表",
+    extract_text: true,
+    include_metadata: true,
+    preview_chars: 800,
+  },
+  {
+    name: "toyota_ir_library",
+    url: "https://global.toyota/jp/ir/library/",
+    output_path: "local_docs/disclosure/7203_toyota_ir_library.txt",
+    query_hint: "トヨタ 有価証券報告書 決算短信 決算説明資料 財務諸表",
+    extract_text: true,
+    include_metadata: true,
+    preview_chars: 800,
+  },
+];
+
 
 type TabId = (typeof TABS)[number]["id"];
 
@@ -255,7 +303,7 @@ function buildContextualQuery(messages: ChatMessage[], currentQuestion: string) 
   return [
     "以下の会話履歴を踏まえて、最後の質問に自然に返答してください。",
     "ローカル文書にない事実は推測せず、不明または要検証と明記してください。",
-    "出力は日本語で、結論、根拠、不確実性、次アクションの順にしてください。",
+    "出力は日本語で、ユーザーに見せる最終回答だけを書いてください。内部の担当名、ドラフト名、レビュー担当名は出さないでください。",
     "",
     "会話履歴",
     conversation || "なし",
@@ -265,8 +313,22 @@ function buildContextualQuery(messages: ChatMessage[], currentQuestion: string) 
   ].join("\n");
 }
 
+function stripInternalLabels(text: string) {
+  return text
+    .replaceAll("統合最終回答（ローカル擬似・実API未使用）", "")
+    .replaceAll("ドラフト回答（ローカル擬似・実API未使用）", "")
+    .replaceAll("統合担当", "")
+    .replaceAll("レビュー担当", "")
+    .replaceAll("厳格なレビュアー", "")
+    .replaceAll("ローカル擬似", "")
+    .replaceAll("実API未使用", "")
+    .trim();
+}
+
 function cleanAssistantAnswer(raw: unknown, skipped?: boolean) {
-  const text = typeof raw === "string" ? raw.trim() : JSON.stringify(raw, null, 2);
+  const text = stripInternalLabels(
+    typeof raw === "string" ? raw.trim() : JSON.stringify(raw, null, 2)
+  );
   if (skipped || text.includes("オーケストレーションをスキップ")) {
     return [
       "参照できるローカル文書がまだありません。",
@@ -310,7 +372,7 @@ function SearchTab() {
         </div>
         <span className="badge">BM25 + Embedding</span>
       </div>
-      <QuestionChips onPick={setQuery} />
+
       <div className="form">
         <Field label="クエリ">
           <input value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -332,7 +394,7 @@ function SearchTab() {
           <input
             type="range"
             min={0}
-            max={1}
+            max={5}
             step={0.1}
             value={alpha}
             onChange={(e) => setAlpha(Number(e.target.value))}
@@ -378,6 +440,7 @@ function AnswerTab() {
   const [drafts, setDrafts] = useState(3);
   const [hybrid, setHybrid] = useState(true);
   const [useRealApi, setUseRealApi] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
@@ -411,14 +474,20 @@ function AnswerTab() {
         critique: true,
         limit: 8,
         call_real_api: useRealApi,
+        api_key: apiKeyInput.trim() || undefined,
       });
       setLastData(result);
+      if (result.error) {
+        setError(String(result.error));
+        setMessages(nextMessages);
+        return;
+      }
       setMessages([
         ...nextMessages,
         {
           role: "assistant",
-          content: cleanAssistantAnswer(result.answer, result.skipped),
-          meta: result.skipped ? "RAG未ヒット" : "RAG + 複数AI統合",
+          content: cleanAssistantAnswer(result.final_answer ?? result.answer, result.skipped),
+          meta: result.skipped ? "RAG未ヒット" : "回答",
           sources: result.results ?? [],
         },
       ]);
@@ -438,6 +507,9 @@ function AnswerTab() {
         meta: "system",
       },
     ]);
+    setQuery("");
+    setUseRealApi(false);
+    setLoading(false);
     setLastData(null);
     setError(null);
   };
@@ -467,7 +539,7 @@ function AnswerTab() {
               <span>{message.role === "user" ? "You" : "Assistant"}</span>
               {message.meta && <small>{message.meta}</small>}
             </div>
-            <pre>{message.content}</pre>
+            <div className="response-text">{message.content}</div>
             {message.sources && message.sources.length > 0 && (
               <details>
                 <summary>根拠候補 {message.sources.length}件</summary>
@@ -499,7 +571,7 @@ function AnswerTab() {
         />
         <div className="composer-actions">
           <button className="primary" onClick={() => void ask()} disabled={loading || !query.trim()}>
-            複数AIで回答生成
+            回答
           </button>
           <button onClick={resetChat} disabled={loading}>
             リセット
@@ -511,7 +583,7 @@ function AnswerTab() {
         <Field label="RAG DB パス">
           <input value={dbPath} onChange={(e) => setDbPath(e.target.value)} />
         </Field>
-        <Field label="ドラフト数（複数観点）">
+        <Field label="ドラフト数">
           <input
             type="number"
             value={drafts}
@@ -523,11 +595,29 @@ function AnswerTab() {
         <Field label="ハイブリッド検索">
           <input type="checkbox" checked={hybrid} onChange={(e) => setHybrid(e.target.checked)} />
         </Field>
+        <Field label="Gemini API KEY（一時入力・保存しない）">
+          <input
+            type="password"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            placeholder="API KEYを入力"
+            autoComplete="off"
+          />
+        </Field>
         <Field label="実APIを使う（バックエンド許可時のみ）">
           <input
             type="checkbox"
             checked={useRealApi}
-            onChange={(e) => setUseRealApi(e.target.checked)}
+            onChange={async (e) => {
+              const enabled = e.target.checked;
+              const result = await api<Json>("/api/runtime/real-api", { enabled, api_key: apiKeyInput.trim() || undefined });
+              setUseRealApi(Boolean(result.usable));
+              if (!result.usable) {
+                setError(result.error ?? "実APIを有効化できませんでした。GEMINI_API_KEYを確認してください。");
+              } else {
+                setError(null);
+              }
+            }}
           />
         </Field>
       </div>
@@ -538,6 +628,13 @@ function AnswerTab() {
         <div className="callout">
           実行方式: {lastData.orchestration.drafter} → {lastData.orchestration.critic} →{" "}
           {lastData.orchestration.synthesizer} / draft数: {lastData.orchestration.drafts}
+          {Array.isArray(lastData.perspectives) && (
+            <ul>
+              {lastData.perspectives.map((p: string, i: number) => (
+                <li key={i}>観点{i + 1}: {p}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       {lastData && (
@@ -555,6 +652,12 @@ function AnswerTab() {
               {lastData.drafts.map((draft: Json, i: number) => (
                 <pre key={draft.cache_key ?? i}>{draft.text}</pre>
               ))}
+            </>
+          )}
+          {lastData.generation_process && (
+            <>
+              <h3>生成プロセス</h3>
+              <pre>{JSON.stringify(lastData.generation_process, null, 2)}</pre>
             </>
           )}
           {sourceResults.length > 0 && <p className="hint">根拠候補: {sourceResults.length}件</p>}
@@ -786,6 +889,19 @@ function ScrapeTab() {
     });
   }
 
+  function callDisclosureAuto() {
+    sourceState.run(async () => {
+      const sources = DISCLOSURE_AUTO_SOURCES;
+      setSourcesText(JSON.stringify(sources, null, 2));
+      return api<Json>("/api/fetch-job/auto", {
+        sources,
+        db_path: dbPath,
+        index_path: "local_docs",
+        index_after_fetch: true,
+      });
+    });
+  }
+
   const saveManual = () =>
     manualState.run(() =>
       api<Json>("/api/manual-doc/save", {
@@ -879,8 +995,11 @@ function ScrapeTab() {
             onChange={(e) => setIndexAfterFetch(e.target.checked)}
           />
         </Field>
-        <button className="primary" onClick={callAuto} disabled={sourceState.loading}>
-          自動取得 + RAG登録
+        <button className="primary" onClick={callDisclosureAuto} disabled={sourceState.loading}>
+          開示資料を一括取得 + RAG登録
+        </button>
+        <button onClick={callAuto} disabled={sourceState.loading}>
+          現在のJSONで自動取得 + RAG登録
         </button>
         <button onClick={() => call(true)} disabled={sourceState.loading}>
           dry-runのみ

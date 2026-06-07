@@ -62,7 +62,7 @@ def test_orchestrate_endpoint_is_offline(tmp_path) -> None:
     )
     assert status == 200
     assert payload["call_real_api"] is False
-    assert payload["orchestration"]["drafts"] == 2
+    assert payload["orchestration"]["drafts"] == 3
     assert "answer" in payload
 
 
@@ -77,7 +77,7 @@ def test_orchestrate_real_api_is_guarded_when_env_disabled(tmp_path, monkeypatch
     )
     assert status == 200
     assert payload["call_real_api"] is False
-    assert "real API disabled" in payload["real_api_note"]
+    assert "GEMINI_API_KEY is not configured" in payload["real_api_note"]
 
 
 def test_fetch_job_auto_fetches_allowed_sources_and_indexes(monkeypatch, tmp_path) -> None:

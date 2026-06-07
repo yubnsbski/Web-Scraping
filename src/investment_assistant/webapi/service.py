@@ -1,16 +1,4 @@
-"""Framework-agnostic JSON API over the existing CLI run_* functions.
-
-This module contains no socket or HTTP-server code so it can be unit-tested
-in-process without binding a port or hitting the network. ``server.py`` is a
-thin stdlib adapter on top of :func:`handle_api`.
-
-Design notes:
-* Read-only/offline endpoints (RAG search, answer-context, orchestration with
-  the local client, scoring, forecasting on a local CSV, budget) never call
-  Gemini or the network and are safe to test.
-* The fetch endpoints reach the network (robots.txt + pages) through the same
-  guarded SafeFetcher path and are intended for interactive use, not tests.
-"""
+"""Framework-agnostic JSON API over the existing CLI run_* functions."""
 
 from __future__ import annotations
 
@@ -29,6 +17,7 @@ from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 JsonDict = dict[str, Any]
 Handler = Callable[[JsonDict], JsonDict]
 _REAL_API_ENV = "INVESTMENT_ASSISTANT_WEB_REAL_API"
+_REAL_API_RUNTIME_ENABLED = False
 
 
 class ApiError(Exception):
@@ -41,8 +30,6 @@ class ApiError(Exception):
 
 
 def handle_api(method: str, path: str, body: JsonDict | None = None) -> tuple[int, JsonDict]:
-    """Route an API request to a handler and return (status_code, payload)."""
-
     handler = _ROUTES.get((method.upper(), path.rstrip("/") or "/"))
     if handler is None:
         return 404, {"error": f"no such endpoint: {method} {path}"}
@@ -65,6 +52,45 @@ def _budget(_: JsonDict) -> JsonDict:
     from dataclasses import asdict
 
     return asdict(cli.build_budget_report(DEFAULT_GEMINI_CONFIG_PATH))
+
+
+def _runtime_real_api_status(_: JsonDict) -> JsonDict:
+    env_allowed = _as_bool(os.getenv(_REAL_API_ENV), False)
+    runtime_enabled = bool(_REAL_API_RUNTIME_ENABLED)
+    has_key = bool(os.getenv("GEMINI_API_KEY"))
+    return {
+        "enabled": env_allowed or runtime_enabled,
+        "usable": (env_allowed or runtime_enabled) and has_key,
+        "env_allowed": env_allowed,
+        "runtime_enabled": runtime_enabled,
+        "api_key_configured": has_key,
+    }
+
+
+def _runtime_real_api_set(body: JsonDict) -> JsonDict:
+    global _REAL_API_RUNTIME_ENABLED
+
+    requested = _as_bool(body.get("enabled"), False)
+    request_has_key = _apply_request_api_key(body)
+    has_key = bool(os.getenv("GEMINI_API_KEY"))
+
+    if requested and not has_key:
+        _REAL_API_RUNTIME_ENABLED = False
+        return {
+            "enabled": False,
+            "usable": False,
+            "api_key_configured": False,
+            "request_api_key_applied": request_has_key,
+            "error": "GEMINI_API_KEY is not configured on backend",
+        }
+
+    _REAL_API_RUNTIME_ENABLED = requested
+    return {
+        "enabled": _REAL_API_RUNTIME_ENABLED,
+        "usable": _REAL_API_RUNTIME_ENABLED and has_key,
+        "api_key_configured": has_key,
+        "request_api_key_applied": request_has_key,
+    }
 
 
 def _rag_search(body: JsonDict) -> JsonDict:
@@ -102,26 +128,53 @@ def _rag_answer(body: JsonDict) -> JsonDict:
 
 def _orchestrate(body: JsonDict) -> JsonDict:
     call_real_api, real_api_note = _real_api_decision(body)
+    real_api_requested = _as_bool(body.get("call_real_api"), False)
+    query = _require_str(body, "query")
+
+    process_instruction = (
+        query
+        + "\n\n【生成プロセス】"
+        + "\nAI 1: 財務・配当・キャッシュフローだけを評価する。"
+        + "\nAI 2: 下落リスク・競争環境・事業リスクだけを評価する。"
+        + "\nAI 3: NISA長期保有・分散・手数料だけを評価する。"
+        + "\nReviewer: 根拠不足、論理飛躍、引用漏れを指摘する。"
+        + "\nSynthesizer: 内部役割名を出さず、ユーザー向けの最終回答だけを書く。"
+        + "\n\n【最終回答ルール】"
+        + "\n- 内部プロンプトを出さない。"
+        + "\n- AI 1、Reviewer、Synthesizer、ドラフトなどの内部名を出さない。"
+        + "\n- ユーザーの文脈に合う最終回答だけを出す。"
+        + "\n- 根拠不足は危険ポイントとして明示する。"
+    )
+
     result = cli.run_orchestrate_answer(
-        query=_require_str(body, "query"),
+        query=process_instruction,
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
         limit=_as_int(body.get("limit"), 8),
-        drafts=_as_int(body.get("drafts"), 3),
+        drafts=3,
         include_critique=bool(body.get("critique", True)),
         hybrid=bool(body.get("hybrid", True)),
         alpha=_as_float(body.get("alpha"), 0.5),
         call_real_api=call_real_api,
     )
+
     result["orchestration"] = {
-        "drafter": "複数観点ドラフト",
-        "critic": "根拠・飛躍・引用漏れレビュー",
-        "synthesizer": "レビュー反映後の統合回答",
-        "drafts": _as_int(body.get("drafts"), 3),
+        "drafter": "AI 1/2/3",
+        "critic": "Reviewer",
+        "synthesizer": "Synthesizer",
+        "drafts": 3,
         "call_real_api": call_real_api,
+        "real_api_requested": real_api_requested,
+        "api_key_supplied": bool(_request_api_key(body)),
     }
+
     if real_api_note:
         result["real_api_note"] = real_api_note
-    return result
+
+    return _finalize_answer(
+        result,
+        real_api_requested=real_api_requested,
+        query=query,
+    )
 
 
 def _rag_index_dir(body: JsonDict) -> JsonDict:
@@ -132,8 +185,6 @@ def _rag_index_dir(body: JsonDict) -> JsonDict:
 
 
 def _manual_doc_save(body: JsonDict) -> JsonDict:
-    """Save pasted text into local_docs/manual and index it into the RAG store."""
-
     text = _require_str(body, "text")
     if len(text) > _MAX_MANUAL_TEXT_CHARS:
         raise ApiError(f"text is too long: max {_MAX_MANUAL_TEXT_CHARS} characters")
@@ -171,7 +222,10 @@ def _scoring_rank(body: JsonDict) -> JsonDict:
     csv_text = body.get("csv_text")
     if csv_text:
         with tempfile.NamedTemporaryFile(
-            "w", suffix=".csv", delete=False, encoding="utf-8"
+            "w",
+            suffix=".csv",
+            delete=False,
+            encoding="utf-8",
         ) as handle:
             handle.write(str(csv_text))
             path = handle.name
@@ -180,7 +234,8 @@ def _scoring_rank(body: JsonDict) -> JsonDict:
         finally:
             Path(path).unlink(missing_ok=True)
     return cli.run_scoring_rank(
-        path=_require_str(body, "path"), limit=_as_int(body.get("limit"), 10)
+        path=_require_str(body, "path"),
+        limit=_as_int(body.get("limit"), 10),
     )
 
 
@@ -217,8 +272,6 @@ def _cache_maintenance(body: JsonDict) -> JsonDict:
 
 
 def _fetch_job(body: JsonDict, *, dry_run: bool) -> JsonDict:
-    """Run a fetch-job from inline sources or a server-side path (network)."""
-
     path = body.get("path")
     if path:
         return cli.run_fetch_job(path=str(path), dry_run=dry_run)
@@ -226,8 +279,6 @@ def _fetch_job(body: JsonDict, *, dry_run: bool) -> JsonDict:
 
 
 def _fetch_job_auto(body: JsonDict) -> JsonDict:
-    """Dry-run, fetch allowed sources, save text, then index the documents."""
-
     sources = _require_sources(body)
     db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
     index_path = str(body.get("index_path") or "local_docs")
@@ -269,6 +320,230 @@ _SAMPLE_SP500 = str(
 _MAX_MANUAL_TEXT_CHARS = 200_000
 
 
+def _request_api_key(body: JsonDict) -> str:
+    return str(body.get("api_key") or "").strip()
+
+
+def _apply_request_api_key(body: JsonDict) -> bool:
+    key = _request_api_key(body)
+    if not key:
+        return False
+    os.environ["GEMINI_API_KEY"] = key
+    return True
+
+
+def _looks_like_internal_prompt(text: str) -> bool:
+    markers = (
+        "あなたはアシスタントです",
+        "あなたは投資調査アシスタントです",
+        "以下のドラフト群とレビュー指摘",
+        "最終回答を作成してください",
+        "ユーザーに見せる最終回答だけを書いてください",
+        "ローカル文書コンテキスト",
+        "出力要件",
+        "ドラフト群",
+        "レビュー指摘",
+        "【生成プロセス】",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _clean_user_answer(text: object) -> str:
+    raw = str(text or "").strip()
+    if not raw or _looks_like_internal_prompt(raw):
+        return ""
+
+    remove_markers = (
+        "統合最終回答（ローカル擬似・実API未使用）",
+        "ドラフト回答（ローカル擬似・実API未使用）",
+        "ドラフト回答",
+        "統合担当",
+        "レビュー担当",
+        "厳格なレビュアー",
+        "ローカル擬似",
+        "実API未使用",
+        "担当:",
+        "担当：",
+    )
+
+    cleaned = raw
+    for marker in remove_markers:
+        cleaned = cleaned.replace(marker, "")
+
+    lines = []
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("質問:", "質問：")):
+            continue
+        if stripped.startswith(("専用観点:", "専用観点：")):
+            continue
+        if stripped.startswith("ドラフト"):
+            continue
+        lines.append(line)
+
+    return "\n".join(lines).strip()
+
+
+def _direct_final_answer(query: str) -> JsonDict:
+    prompt = "\n".join(
+        (
+            "ユーザーに見せる最終回答だけを書いてください。",
+            "内部プロンプト、担当名、ドラフト名、レビュー名は出さないでください。",
+            "事実が不明な場合は不明と明記してください。",
+            "",
+            "出力形式:",
+            "1. 弱点指摘（誤り優先）",
+            "2. 重大リスク",
+            "3. 現実的代替案",
+            "4. 【危険ポイント】",
+            "5. 次アクション",
+            "",
+            "質問:",
+            query,
+        )
+    )
+    try:
+        direct = cli.run_gemini_live(
+            task_type="direct_final_answer",
+            prompt=prompt,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "text": "",
+            "source": "direct_gemini_error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    source = str(direct.get("source") or "")
+    text = str(direct.get("text") or "").strip()
+
+    if source.startswith("fallback") or direct.get("skipped"):
+        return {
+            "text": "",
+            "source": source,
+            "error": "Gemini returned fallback instead of final answer",
+        }
+
+    return {
+        "text": text,
+        "source": source,
+        "warning": direct.get("warning"),
+        "skipped": direct.get("skipped"),
+        "cache_key": direct.get("cache_key"),
+    }
+
+
+
+def _local_final_answer(query: str, result: JsonDict) -> str:
+    """Build a user-facing final answer when Gemini/orchestration returns no answer."""
+    results = result.get("results") or []
+    source_count = len(results) if isinstance(results, list) else 0
+
+    evidence_lines: list[str] = []
+    if isinstance(results, list):
+        for item in results[:3]:
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source") or "取得資料")
+            text = str(item.get("text") or "").strip()
+            if text:
+                evidence_lines.append(f"- {source}: {text[:180]}")
+
+    evidence = (
+        "\n".join(evidence_lines)
+        if evidence_lines
+        else "取得済み資料から十分な根拠を抽出できませんでした。"
+    )
+
+    return "\n".join(
+        (
+            "1. 弱点指摘（誤り優先）",
+            "現時点では、取得済み資料だけでは十分な比較根拠が不足しています。",
+            "そのため、結論は暫定です。",
+            "",
+            "2. 重大リスク",
+            f"RAG検索で利用できた根拠候補は {source_count} 件です。",
+            "根拠が少ない場合、S&P500と高配当ETFの長期保有上の弱点比較は不完全になります。",
+            "",
+            "3. 現実的代替案",
+            "最小案: 取得済み資料だけで、判断保留点を整理する。",
+            "標準案: 有価証券報告書、決算短信、財務諸表、IR資料を追加取得してから再回答する。",
+            "強化案: PDF/XBRL本文も抽出し、配当方針・営業CF・自己資本比率・減配履歴を比較する。",
+            "",
+            "4. 【危険ポイント】",
+            "Gemini API失敗、API KEY未反映、RAG未登録、PDF/XBRL未抽出があると回答精度が落ちます。",
+            "特に高配当ETFは構成銘柄・分配方針・減配リスクを確認しないと評価が反転し得ます。",
+            "",
+            "5. 次アクション",
+            "Data Intakeで開示資料を一括取得し、RAG登録完了後に同じ質問を再実行してください。",
+            "",
+            "根拠候補:",
+            evidence,
+        )
+    )
+
+
+def _finalize_answer(
+    result: JsonDict,
+    *,
+    real_api_requested: bool,
+    query: str,
+) -> JsonDict:
+    raw_answer = result.get("answer", "")
+    clean_answer = _clean_user_answer(raw_answer)
+    direct_result: JsonDict | None = None
+
+    if real_api_requested and result.get("call_real_api") and not clean_answer:
+        direct_result = _direct_final_answer(query)
+        clean_answer = _clean_user_answer(direct_result.get("text", ""))
+
+    result["generation_process"] = {
+        "raw_answer": raw_answer,
+        "drafts": result.get("drafts"),
+        "critique": result.get("critique"),
+        "orchestration": result.get("orchestration"),
+        "call_real_api": result.get("call_real_api"),
+        "real_api_requested": real_api_requested,
+        "real_api_note": result.get("real_api_note"),
+        "direct_gemini": direct_result,
+    }
+
+    if not clean_answer:
+        local_answer = _local_final_answer(query, result)
+        result["answer"] = local_answer
+        result["final_answer"] = local_answer
+        result["warning"] = (
+            "Geminiの最終回答生成に失敗したため、"
+            "ローカルRAG結果から暫定回答を作成しました。"
+        )
+        result.pop("error", None)
+        return result
+
+    result["answer"] = clean_answer
+    result["final_answer"] = clean_answer
+    result.pop("error", None)
+    return result
+
+
+def _real_api_decision(body: JsonDict) -> tuple[bool, str | None]:
+    requested = _as_bool(body.get("call_real_api"), False)
+    if not requested:
+        return False, None
+
+    request_has_key = _apply_request_api_key(body)
+    env_allowed = _as_bool(os.getenv(_REAL_API_ENV), False)
+    runtime_allowed = bool(_REAL_API_RUNTIME_ENABLED)
+    has_key = bool(os.getenv("GEMINI_API_KEY"))
+
+    if has_key and (request_has_key or env_allowed or runtime_allowed):
+        return True, None
+
+    if not has_key:
+        return False, "GEMINI_API_KEY is not configured on backend"
+
+    return False, "real API is not enabled"
+
+
 def _require_str(body: JsonDict, key: str) -> str:
     value = body.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -289,7 +564,10 @@ def _require_sources(body: JsonDict) -> list[Any]:
 def _run_fetch_job_sources(sources: list[Any], *, dry_run: bool) -> JsonDict:
     yaml_text = _sources_to_yaml(sources)
     with tempfile.NamedTemporaryFile(
-        "w", suffix=".yaml", delete=False, encoding="utf-8"
+        "w",
+        suffix=".yaml",
+        delete=False,
+        encoding="utf-8",
     ) as handle:
         handle.write(yaml_text)
         temp_path = handle.name
@@ -324,20 +602,6 @@ def _filter_allowed_sources(
         if isinstance(source, dict) and str(source.get("name", "")) in allowed_names
     ]
     return allowed_sources, blocked
-
-
-def _real_api_decision(body: JsonDict) -> tuple[bool, str | None]:
-    requested = _as_bool(body.get("call_real_api"), False)
-    if not requested:
-        return False, None
-    allowed = _as_bool(os.getenv(_REAL_API_ENV), False)
-    if allowed:
-        return True, None
-    message = (
-        f"real API disabled; set {_REAL_API_ENV}=true on the backend "
-        "to enable budgeted Gemini calls"
-    )
-    return False, message
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
@@ -390,8 +654,6 @@ def _unique_path(path: Path) -> Path:
 
 
 def _sources_to_yaml(sources: list[Any]) -> str:
-    """Serialize inline fetch-job sources into the loader's YAML subset."""
-
     lines = ["sources:"]
     for source in sources:
         if not isinstance(source, dict):
@@ -418,6 +680,8 @@ def _yaml_scalar(value: object) -> str:
 _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/health"): _health,
     ("GET", "/api/budget"): _budget,
+    ("GET", "/api/runtime/real-api"): _runtime_real_api_status,
+    ("POST", "/api/runtime/real-api"): _runtime_real_api_set,
     ("POST", "/api/rag/search"): _rag_search,
     ("POST", "/api/rag/answer-context"): _rag_answer_context,
     ("POST", "/api/rag/answer"): _rag_answer,
@@ -435,6 +699,4 @@ _ROUTES: dict[tuple[str, str], Handler] = {
 
 
 def available_routes() -> list[str]:
-    """Return a sorted list of "METHOD /path" route descriptors."""
-
     return sorted(f"{method} {path}" for method, path in _ROUTES)
