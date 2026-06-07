@@ -938,3 +938,126 @@ sources:
     assert saved["saved_report_path"] == str(report_path)
     assert saved["results"][0]["query"] == "Example Domain"
     assert saved["results"][0]["results"][0]["text"] == "Example Domain json report."
+
+
+
+def test_cli_rag_search_job_scope_job_source_filters_results(tmp_path, capsys):
+    db_path = tmp_path / "rag.sqlite"
+    docs_dir = tmp_path / "local_docs"
+    docs_dir.mkdir()
+
+    first_doc = docs_dir / "first.txt"
+    second_doc = docs_dir / "second.txt"
+
+    first_doc.write_text("alpha company 配当 方針 unique-first", encoding="utf-8")
+    second_doc.write_text("beta company 配当 方針 unique-second", encoding="utf-8")
+
+    job_path = tmp_path / "fetch_job.yaml"
+    job_path.write_text(
+        f"""
+sources:
+  - name: first
+    url: https://example.com/first
+    output_path: {first_doc}
+    query_hint: 配当 方針
+  - name: second
+    url: https://example.com/second
+    output_path: {second_doc}
+    query_hint: 配当 方針
+""",
+        encoding="utf-8",
+    )
+
+    assert main(
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]
+    ) == 0
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "rag-search-job",
+            "--path",
+            str(job_path),
+            "--db-path",
+            str(db_path),
+            "--limit",
+            "5",
+            "--scope",
+            "job-source",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+
+    first_results = output["results"][0]["results"]
+    second_results = output["results"][1]["results"]
+
+    assert first_results
+    assert second_results
+    assert {row["source"] for row in first_results} == {str(first_doc)}
+    assert {row["source"] for row in second_results} == {str(second_doc)}
+
+
+def test_cli_rag_search_job_scope_job_source_filters_saved_table(tmp_path, capsys):
+    db_path = tmp_path / "rag.sqlite"
+    docs_dir = tmp_path / "local_docs"
+    report_path = tmp_path / "reports" / "scoped.md"
+    docs_dir.mkdir()
+
+    first_doc = docs_dir / "first.txt"
+    second_doc = docs_dir / "second.txt"
+
+    first_doc.write_text("alpha company 配当 方針 unique-first", encoding="utf-8")
+    second_doc.write_text("beta company 配当 方針 unique-second", encoding="utf-8")
+
+    job_path = tmp_path / "fetch_job.yaml"
+    job_path.write_text(
+        f"""
+sources:
+  - name: first
+    url: https://example.com/first
+    output_path: {first_doc}
+    query_hint: 配当 方針
+  - name: second
+    url: https://example.com/second
+    output_path: {second_doc}
+    query_hint: 配当 方針
+""",
+        encoding="utf-8",
+    )
+
+    assert main(
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]
+    ) == 0
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "rag-search-job",
+            "--path",
+            str(job_path),
+            "--db-path",
+            str(db_path),
+            "--format",
+            "table",
+            "--columns",
+            "rank,source,text_preview",
+            "--save-report",
+            str(report_path),
+            "--scope",
+            "job-source",
+        ]
+    )
+
+    assert exit_code == 0
+    assert f"saved_report_path: {report_path}" in capsys.readouterr().out
+
+    saved = report_path.read_text(encoding="utf-8")
+    first_block = saved.split("## second", 1)[0]
+    second_block = saved.split("## second", 1)[1]
+
+    assert str(first_doc) in first_block
+    assert str(second_doc) not in first_block
+    assert str(second_doc) in second_block
+    assert str(first_doc) not in second_block

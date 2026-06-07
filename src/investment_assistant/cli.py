@@ -35,6 +35,7 @@ from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.indexer import index_directory
 from investment_assistant.rag.search import build_answer_context, hybrid_search, search_chunks
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
+from investment_assistant.rag.tokenize import tokenize
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
 from investment_assistant.scoring.scorer import validate_scoring_csv
@@ -263,20 +264,110 @@ def run_rag_search(
     return [asdict(result) for result in results]
 
 
+
+def _run_rag_search_for_source(
+    *,
+    query: str,
+    source: str,
+    db_path: str | Path,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Search only chunks whose RAG source exactly matches source."""
+
+    terms = tokenize(query)
+    if not terms or limit <= 0:
+        return []
+
+    store = RagStore(db_path)
+    results: list[dict[str, object]] = []
+
+    for chunk in store.list_chunks():
+        if chunk.source != source:
+            continue
+
+        score = _score_scoped_text(chunk.text, terms)
+        if score <= 0:
+            continue
+
+        results.append(
+            {
+                "chunk_id": chunk.chunk_id,
+                "source": chunk.source,
+                "chunk_index": chunk.chunk_index,
+                "score": float(score),
+                "text": chunk.text,
+                "metadata": chunk.metadata,
+            }
+        )
+
+    ranked = sorted(results, key=_search_result_sort_key)
+    return _dedupe_search_dicts_by_text(ranked)[:limit]
+
+
+def _score_scoped_text(text: str, terms: list[str]) -> int:
+    lowered = text.lower()
+    return sum(lowered.count(term.lower()) for term in terms)
+
+
+def _search_result_sort_key(result: dict[str, object]) -> tuple[float, str, int]:
+    score = result.get("score")
+    source = result.get("source")
+    chunk_index = result.get("chunk_index")
+
+    score_value = float(score) if isinstance(score, (int, float)) else 0.0
+    source_value = source if isinstance(source, str) else ""
+    chunk_index_value = chunk_index if isinstance(chunk_index, int) else 0
+
+    return (-score_value, source_value, chunk_index_value)
+
+
+def _dedupe_search_dicts_by_text(
+    results: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, object]] = []
+
+    for result in results:
+        key = " ".join(str(result.get("text", "")).split())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(result)
+
+    return deduped
+
 def run_rag_search_job(
     *,
     path: str | Path,
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     limit: int = 5,
+    scope: str = "all",
 ) -> dict[str, object]:
     """Search the local RAG store for each query_hint in a fetch-job file."""
 
     job_path = Path(path)
     config = load_yaml(job_path)
     sources = _fetch_job_sources(config, job_path)
+    if scope not in {"all", "job-source"}:
+        msg = "scope must be one of: all, job-source"
+        raise ValueError(msg)
     results: list[dict[str, object]] = []
     for source in sources:
         query = _query_from_fetch_job_source(source)
+        if scope == "job-source":
+            search_results = _run_rag_search_for_source(
+                query=query,
+                source=str(source["output_path"]),
+                db_path=db_path,
+                limit=limit,
+            )
+        else:
+            search_results = run_rag_search(
+                query=query,
+                db_path=db_path,
+                limit=limit,
+            )
+
         results.append(
             {
                 "name": str(source["name"]),
@@ -286,7 +377,7 @@ def run_rag_search_job(
                 "query_hint": None
                 if source.get("query_hint") is None
                 else str(source.get("query_hint")),
-                "results": run_rag_search(query=query, db_path=db_path, limit=limit),
+                "results": search_results,
             }
         )
     return {
@@ -755,6 +846,11 @@ def main(argv: list[str] | None = None) -> int:
     rag_search_job_parser.add_argument("--text-preview-chars", type=int, default=120)
     rag_search_job_parser.add_argument("--columns")
     rag_search_job_parser.add_argument("--save-report")
+    rag_search_job_parser.add_argument(
+        "--scope",
+        choices=("all", "job-source"),
+        default="all",
+    )
 
     rag_answer_context_parser = subparsers.add_parser("rag-answer-context")
     rag_answer_context_parser.add_argument("--query", required=True)
@@ -880,6 +976,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             path=args.path,
             db_path=args.db_path,
             limit=args.limit,
+            scope=args.scope,
         )
         if args.format == "table":
             rendered = format_rag_search_job_table(
