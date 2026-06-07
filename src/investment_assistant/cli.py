@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from investment_assistant.config.loader import load_yaml
 from investment_assistant.forecasting import service as forecast_service
@@ -26,7 +27,17 @@ from investment_assistant.llm.factory import (
     load_gemini_runtime_config,
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
-
+from investment_assistant.observability import configure_logging
+from investment_assistant.orchestration.factory import build_orchestrator
+from investment_assistant.orchestration.orchestrator import OrchestrationConfig
+from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
+from investment_assistant.rag.chunker import chunk_text, load_document
+from investment_assistant.rag.indexer import index_directory
+from investment_assistant.rag.search import build_answer_context, hybrid_search, search_chunks
+from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
+from investment_assistant.scoring.models import ScoreWeights
+from investment_assistant.scoring.report import build_scoring_report
+from investment_assistant.scoring.scorer import validate_scoring_csv
 
 
 @dataclass(frozen=True)
@@ -242,11 +253,7 @@ def run_rag_search(
     hybrid: bool = False,
     alpha: float = 0.5,
 ) -> list[dict[str, object]]:
-    """Search the local RAG store without calling an LLM.
-
-    With ``hybrid=True`` the lexical BM25 ranking is blended with semantic
-    embedding similarity (``alpha`` weights the semantic part).
-    """
+    """Search the local RAG store without calling an LLM."""
 
     store = RagStore(db_path)
     if hybrid:
@@ -254,45 +261,6 @@ def run_rag_search(
     else:
         results = search_chunks(store, query=query, limit=limit)
     return [asdict(result) for result in results]
-
-
-
-
-def format_rag_search_table(
-    results: list[dict[str, object]],
-    *,
-    text_preview_chars: int = 120,
-    columns: Sequence[str] | None = None,
-) -> str:
-    """Format RAG search results as a compact Markdown table for terminal review."""
-
-    if not results:
-        return "No RAG search results."
-
-    selected_columns = _parse_table_columns(columns)
-    rows = [
-        "| " + " | ".join(selected_columns) + " |",
-        "| " + " | ".join("---" for _ in selected_columns) + " |",
-    ]
-    for rank, result in enumerate(results, 1):
-        rows.append(
-            "| "
-            + " | ".join(
-                _table_cell(
-                    _rag_table_value(
-                        column,
-                        rank=rank,
-                        result=result,
-                        text_preview_chars=text_preview_chars,
-                    )
-                )
-                for column in selected_columns
-            )
-            + " |"
-        )
-    return "\n".join(rows)
-
-
 
 
 def run_rag_search_job(
@@ -327,39 +295,6 @@ def run_rag_search_job(
         "sources_count": len(results),
         "results": results,
     }
-
-
-def format_rag_search_job_table(
-    search_job_result: dict[str, object],
-    *,
-    text_preview_chars: int = 120,
-    columns: Sequence[str] | None = None,
-) -> str:
-    """Format fetch-job query_hint search results for terminal review."""
-
-    raw_results = search_job_result.get("results")
-    if not isinstance(raw_results, list) or not raw_results:
-        return "No fetch-job RAG search results."
-
-    blocks: list[str] = []
-    for item in raw_results:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name", ""))
-        query = str(item.get("query", ""))
-        url = str(item.get("url", ""))
-        blocks.append(f"## {name} | query={query} | url={url}")
-        raw_search_results = item.get("results")
-        search_results = raw_search_results if isinstance(raw_search_results, list) else []
-        table_rows = [row for row in search_results if isinstance(row, dict)]
-        blocks.append(
-            format_rag_search_table(
-                table_rows,
-                text_preview_chars=text_preview_chars,
-                columns=columns,
-            )
-        )
-    return "\n\n".join(blocks)
 
 
 def run_rag_answer_context(
@@ -416,7 +351,7 @@ def run_orchestrate_answer(
     alpha: float = 0.5,
     call_real_api: bool = False,
 ) -> dict[str, object]:
-    """Run multi-model orchestration (draft->critique->synthesize) over RAG context."""
+    """Run multi-model orchestration over RAG context."""
 
     store = RagStore(db_path)
     if hybrid:
@@ -488,7 +423,7 @@ def run_forecast_fetch_data(
     dataset: str = DEFAULT_DATASET,
     dest: str | Path,
 ) -> dict[str, object]:
-    """Download a real financial dataset for forecasting (no auto-trading)."""
+    """Download a real financial dataset for forecasting."""
 
     return download_dataset(dataset, dest=dest)
 
@@ -532,7 +467,7 @@ def run_forecast_predict(
     ensemble_method: str = "weighted",
     space: str = "returns",
 ) -> dict[str, object]:
-    """Forecast the next horizon steps with the ensemble (research aid only)."""
+    """Forecast the next horizon steps with the ensemble."""
 
     series = load_timeseries_csv(path, date_column=date_column, value_column=value_column)
     return forecast_service.run_forecast(
@@ -548,8 +483,8 @@ def run_scoring_rank(
     *,
     path: str | Path,
     limit: int = 10,
-    expense_weight: float = 0.30,
-    return_weight: float = 0.30,
+    expense_weight: float = 0.35,
+    return_weight: float = 0.25,
     volatility_weight: float = 0.25,
     diversification_weight: float = 0.15,
 ) -> dict[str, object]:
@@ -561,17 +496,67 @@ def run_scoring_rank(
         volatility=volatility_weight,
         diversification_score=diversification_weight,
     )
-    report: dict[str, object] = build_scoring_report(path=path, limit=limit, weights=weights)
-    return report
+    return build_scoring_report(path=path, limit=limit, weights=weights)
 
 
-def run_scoring_validate(*, path: str | Path) -> dict[str, object]:
+def run_scoring_validate(path: str | Path) -> dict[str, object]:
     """Validate a local scoring CSV without LLMs, scoring, or trading actions."""
 
     return validate_scoring_csv(path)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _fetch_job_sources(config: dict[str, Any], job_path: Path) -> list[dict[str, object]]:
+    raw_sources = config.get("sources")
+    if not isinstance(raw_sources, list) or not raw_sources:
+        msg = f"fetch job must define a non-empty sources list: {job_path}"
+        raise ValueError(msg)
+
+    sources: list[dict[str, object]] = []
+    for index, source in enumerate(raw_sources, start=1):
+        if not isinstance(source, dict):
+            msg = f"source #{index} must be a mapping"
+            raise ValueError(msg)
+        missing = [key for key in ("name", "url", "output_path") if key not in source]
+        if missing:
+            msg = f"source #{index} missing required keys: {', '.join(missing)}"
+            raise ValueError(msg)
+        sources.append(dict(source))
+    return sources
+
+
+def _query_from_fetch_job_source(source: dict[str, object]) -> str:
+    query_hint = source.get("query_hint")
+    if isinstance(query_hint, str) and query_hint.strip():
+        return query_hint.strip()
+    return " ".join(str(source.get(key, "")) for key in ("name", "url")).strip()
+
+
+def _bool_or_default(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.lower().strip()
+        if lowered in {"1", "true", "yes", "y"}:
+            return True
+        if lowered in {"0", "false", "no", "n"}:
+            return False
+    return default
+
+
+def _int_or_default(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _print_json(payload: object) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def main(argv: list[str] | None = None) -> int:
     """Run the CLI."""
 
     configure_logging()
@@ -579,324 +564,152 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--config", default=str(DEFAULT_GEMINI_CONFIG_PATH))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    budget_parser = subparsers.add_parser("budget", help="Show Gemini budget usage")
-    budget_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    budget_parser = subparsers.add_parser("budget")
+    budget_parser.add_argument("--json", action="store_true")
 
-    smoke_parser = subparsers.add_parser("smoke", help="Run a no-network LLM service smoke check")
-    smoke_parser.add_argument("--task-type", default="rag_answer")
-    smoke_parser.add_argument("--prompt", default="Gemini budget guard smoke test")
+    smoke_parser = subparsers.add_parser("smoke")
+    smoke_parser.add_argument("--prompt", default="hello")
 
-    live_parser = subparsers.add_parser(
-        "gemini-live",
-        help="Manually call the real Gemini API through the guarded service",
-    )
-    live_parser.add_argument("--task-type", default="rag_answer")
-    live_parser.add_argument("--prompt", required=True)
-    live_parser.add_argument(
-        "--call-real-api",
-        action="store_true",
-        help="Required safety acknowledgement because this consumes Gemini quota",
-    )
+    fetch_url_parser = subparsers.add_parser("fetch-url")
+    fetch_url_parser.add_argument("--url", required=True)
+    fetch_url_parser.add_argument("--dry-run", action="store_true")
+    fetch_url_parser.add_argument("--preview-chars", type=int, default=500)
+    fetch_url_parser.add_argument("--save-text")
+    fetch_url_parser.add_argument("--extract-text", action="store_true")
+    fetch_url_parser.add_argument("--include-metadata", action="store_true")
 
+    fetch_job_parser = subparsers.add_parser("fetch-job")
+    fetch_job_parser.add_argument("--path", required=True)
+    fetch_job_parser.add_argument("--dry-run", action="store_true")
 
+    rag_index_parser = subparsers.add_parser("rag-index")
+    rag_index_parser.add_argument("--path", required=True)
+    rag_index_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+
+    rag_index_dir_parser = subparsers.add_parser("rag-index-dir")
+    rag_index_dir_parser.add_argument("--path", required=True)
+    rag_index_dir_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+
+    rag_search_parser = subparsers.add_parser("rag-search")
+    rag_search_parser.add_argument("--query", required=True)
+    rag_search_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_search_parser.add_argument("--limit", type=int, default=5)
+    rag_search_parser.add_argument("--hybrid", action="store_true")
+    rag_search_parser.add_argument("--alpha", type=float, default=0.5)
+
+    rag_answer_parser = subparsers.add_parser("rag-answer")
+    rag_answer_parser.add_argument("--query", required=True)
+    rag_answer_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_answer_parser.add_argument("--limit", type=int, default=5)
+    rag_answer_parser.add_argument("--call-real-api", action="store_true")
+
+    orchestrate_parser = subparsers.add_parser("orchestrate-answer")
+    orchestrate_parser.add_argument("--query", required=True)
+    orchestrate_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    orchestrate_parser.add_argument("--limit", type=int, default=5)
+    orchestrate_parser.add_argument("--drafts", type=int, default=1)
+    orchestrate_parser.add_argument("--no-critique", action="store_true")
+    orchestrate_parser.add_argument("--hybrid", action="store_true")
+    orchestrate_parser.add_argument("--alpha", type=float, default=0.5)
+    orchestrate_parser.add_argument("--call-real-api", action="store_true")
+
+    scoring_parser = subparsers.add_parser("scoring-rank")
+    scoring_parser.add_argument("--path", required=True)
+    scoring_parser.add_argument("--limit", type=int, default=10)
+
+    forecast_eval_parser = subparsers.add_parser("forecast-evaluate")
+    forecast_eval_parser.add_argument("--path", required=True)
+    forecast_eval_parser.add_argument("--value-column", default="SP500")
+    forecast_eval_parser.add_argument("--horizon", type=int, default=1)
+    forecast_eval_parser.add_argument("--space", choices=("level", "returns"), default="returns")
+
+    forecast_predict_parser = subparsers.add_parser("forecast-predict")
+    forecast_predict_parser.add_argument("--path", required=True)
+    forecast_predict_parser.add_argument("--value-column", default="SP500")
+    forecast_predict_parser.add_argument("--horizon", type=int, default=1)
+    forecast_predict_parser.add_argument("--space", choices=("level", "returns"), default="returns")
+
+    serve_parser = subparsers.add_parser("serve")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args(argv)
-    config_path = str(args.config)
-
-    if args.command == "budget":
-        report = build_budget_report(config_path)
-        if bool(args.json):
-            print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
-        else:
-            print(_format_budget_report(report))
-        return 0
-
-    if args.command == "smoke":
-        result = run_smoke(
-            config_path=config_path,
-            task_type=str(args.task_type),
-            prompt=str(args.prompt),
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-
-    if args.command == "gemini-live":
-        if not bool(args.call_real_api):
-            print("Refusing to call Gemini API without --call-real-api.")
-            return 2
-        result = run_gemini_live(
-            config_path=config_path,
-            task_type=str(args.task_type),
-            prompt=str(args.prompt),
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-
-
-        
-
-    return 2
-
-
-
-
-
-_DEFAULT_RAG_TABLE_COLUMNS = ("rank", "score", "source", "chunk", "metadata", "text_preview")
-_ALLOWED_RAG_TABLE_COLUMNS = frozenset(
-    {
-        "rank",
-        "score",
-        "source",
-        "chunk",
-        "source_url",
-        "fetched_at",
-        "status_code",
-        "content_type",
-        "metadata",
-        "text_preview",
-    }
-)
-
-
-def _parse_table_columns(columns: Sequence[str] | None) -> tuple[str, ...]:
-    if columns is None:
-        return _DEFAULT_RAG_TABLE_COLUMNS
-    parsed = tuple(column.strip() for column in columns if column.strip())
-    if not parsed:
-        return _DEFAULT_RAG_TABLE_COLUMNS
-    unknown = [column for column in parsed if column not in _ALLOWED_RAG_TABLE_COLUMNS]
-    if unknown:
-        msg = f"unknown rag-search table column(s): {', '.join(unknown)}"
-        raise ValueError(msg)
-    return parsed
-
-
-def _rag_table_value(
-    column: str,
-    *,
-    rank: int,
-    result: dict[str, object],
-    text_preview_chars: int,
-) -> str:
-    metadata = result.get("metadata")
-    if column == "rank":
-        return str(rank)
-    if column == "score":
-        return str(result.get("score", ""))
-    if column == "source":
-        return str(result.get("source", ""))
-    if column == "chunk":
-        return str(result.get("chunk_index", ""))
-    if column == "metadata":
-        return _metadata_summary(metadata)
-    if column == "text_preview":
-        return _preview_text(str(result.get("text", "")), text_preview_chars)
-    return _metadata_value(metadata, column)
-
-
-def _metadata_value(value: object, key: str) -> str:
-    if not isinstance(value, dict):
-        return ""
-    raw_value = value.get(key)
-    return "" if raw_value is None else str(raw_value)
-
-
-def _metadata_summary(value: object) -> str:
-    if not isinstance(value, dict):
-        return ""
-    keys = ("source_url", "fetched_at", "status_code", "content_type")
-    parts = [f"{key}={value[key]}" for key in keys if value.get(key)]
-    return " ".join(parts)
-
-
-def _preview_text(text: str, max_chars: int) -> str:
-    normalized = " ".join(text.split())
-    if max_chars <= 0 or len(normalized) <= max_chars:
-        return normalized
-    return f"{normalized[: max(0, max_chars - 1)]}…"
-
-
-def _table_cell(value: str) -> str:
-    return value.replace("|", "\\|").replace("\n", " ")
-
-
-def _fetch_job_sources(config: dict[str, object], job_path: Path) -> list[dict[str, object]]:
-    raw_sources = config.get("sources")
-    if not isinstance(raw_sources, list):
-        msg = f"fetch job must contain a sources list: {job_path}"
-        raise ValueError(msg)
-
-    sources: list[dict[str, object]] = []
-    for index, raw_source in enumerate(raw_sources, start=1):
-        if not isinstance(raw_source, dict):
-            msg = f"fetch job source #{index} must be a mapping"
-            raise ValueError(msg)
-        source = {str(key): value for key, value in raw_source.items()}
-        for field in ("name", "url", "output_path"):
-            if not source.get(field):
-                msg = f"fetch job source #{index} is missing required field: {field}"
-                raise ValueError(msg)
-        sources.append(source)
-    return sources
-
-
-
-
-
-
-def _save_report(content: str, path: str | Path) -> str:
-    report_path = reject_path_traversal(path)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(content, encoding="utf-8")
-    return str(report_path)
-
-
-def _query_from_fetch_job_source(source: dict[str, object]) -> str:
-    query_hint = source.get("query_hint")
-    if query_hint is not None and str(query_hint).strip():
-        return str(query_hint)
-    return str(source["name"])
-
-
-def _parse_int_list(value: str | None) -> tuple[int, ...]:
-    if not value:
-        return ()
-    windows = tuple(int(part.strip()) for part in str(value).split(",") if part.strip())
-    if any(window < 1 for window in windows):
-        msg = "moving-average windows must be positive integers"
-        raise ValueError(msg)
-    return windows
-
-
-def _int_or_default(value: object, default: int) -> int:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        return int(value)
-    return default
-
-
-def _bool_or_default(value: object, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in {"1", "true", "yes", "on"}
-    return default
-
-
-def _write_scoring_output(result: dict[str, object], output: str, *, overwrite: bool) -> int:
-    """Write a scoring-rank result to a file, refusing to overwrite by default."""
-
-    output_path = reject_path_traversal(output)
-    if output_path.exists() and not overwrite:
-        print(
-            json.dumps(
-                {
-                    "error": "output file already exists; pass --overwrite to replace it",
-                    "output": str(output_path),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return 1
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    print(
-        json.dumps(
-            {
-                "output": str(output_path),
-                "count": result.get("count"),
-                "call_real_api": False,
-                "auto_trading": False,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    payload = _dispatch(args)
+    if payload is not None:
+        _print_json(payload)
     return 0
 
 
-def _format_scoring_rank_table(report: dict[str, object]) -> str:
-    """Format scoring-rank JSON as a compact comparison table for humans."""
-
-    headers = (
-        "rank",
-        "name",
-        "total_score",
-        "expense_ratio",
-        "annual_return",
-        "volatility",
-        "diversification_score",
-    )
-    rows: list[tuple[str, ...]] = [headers]
-    raw_results = report.get("results", [])
-    results = raw_results if isinstance(raw_results, list) else []
-    for item in results:
-        if not isinstance(item, dict):
-            continue
-        metrics = item.get("metrics", {})
-        score = item.get("score", {})
-        metrics = metrics if isinstance(metrics, dict) else {}
-        score = score if isinstance(score, dict) else {}
-        rows.append(
-            (
-                _format_table_value(item.get("rank", "")),
-                _format_table_value(item.get("name", "")),
-                _format_table_value(score.get("total_score", "")),
-                _format_table_value(metrics.get("expense_ratio", "")),
-                _format_table_value(metrics.get("annual_return", "")),
-                _format_table_value(metrics.get("volatility", "")),
-                _format_table_value(metrics.get("diversification_score", "")),
-            )
+def _dispatch(args: argparse.Namespace) -> object | None:
+    command = str(args.command)
+    if command == "budget":
+        return asdict(build_budget_report(args.config))
+    if command == "smoke":
+        return run_smoke(config_path=args.config, prompt=args.prompt)
+    if command == "fetch-url":
+        return run_fetch_url(
+            url=args.url,
+            dry_run=args.dry_run,
+            preview_chars=args.preview_chars,
+            save_text=args.save_text,
+            extract_text=args.extract_text,
+            include_metadata=args.include_metadata,
         )
-    widths = [max(len(row[index]) for row in rows) for index in range(len(headers))]
-    table_lines = [
-        " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
-        for row in rows
-    ]
-    lines = [
-        f"source: {report.get('source', '')}",
-        f"limit: {report.get('limit', '')}",
-        f"call_real_api: {str(bool(report.get('call_real_api', False))).lower()}",
-        f"auto_trading: {str(bool(report.get('auto_trading', False))).lower()}",
-        "",
-        *table_lines,
-        "",
-        str(
-            report.get(
-                "disclaimer", "投資助言・売買推奨ではありません。最終判断はユーザー本人が行います。"
-            )
-        ),
-    ]
-    return "\n".join(lines)
-
-
-def _format_table_value(value: object) -> str:
-    if isinstance(value, float):
-        return f"{value:.6g}"
-    return str(value)
-
-
-def _format_budget_report(report: BudgetReport) -> str:
-    return "\n".join(
-        (
-            f"model: {report.model}",
-            f"daily: {report.daily_used}/{report.hard_daily_limit} "
-            f"hard-stop requests used ({report.daily_remaining} remaining)",
-            f"monthly: {report.monthly_used}/{report.hard_monthly_limit} "
-            f"hard-stop requests used ({report.monthly_remaining} remaining)",
-            f"warning: {str(report.warning).lower()}",
+    if command == "fetch-job":
+        return run_fetch_job(path=args.path, dry_run=args.dry_run)
+    if command == "rag-index":
+        return run_rag_index(path=args.path, db_path=args.db_path)
+    if command == "rag-index-dir":
+        return run_rag_index_dir(path=args.path, db_path=args.db_path)
+    if command == "rag-search":
+        return run_rag_search(
+            query=args.query,
+            db_path=args.db_path,
+            limit=args.limit,
+            hybrid=args.hybrid,
+            alpha=args.alpha,
         )
-    )
+    if command == "rag-answer":
+        return run_rag_answer(
+            query=args.query,
+            db_path=args.db_path,
+            limit=args.limit,
+            call_real_api=args.call_real_api,
+        )
+    if command == "orchestrate-answer":
+        return run_orchestrate_answer(
+            query=args.query,
+            db_path=args.db_path,
+            limit=args.limit,
+            drafts=args.drafts,
+            include_critique=not args.no_critique,
+            hybrid=args.hybrid,
+            alpha=args.alpha,
+            call_real_api=args.call_real_api,
+        )
+    if command == "scoring-rank":
+        return run_scoring_rank(path=args.path, limit=args.limit)
+    if command == "forecast-evaluate":
+        return run_forecast_evaluate(
+            path=args.path,
+            value_column=args.value_column,
+            horizon=args.horizon,
+            space=args.space,
+        )
+    if command == "forecast-predict":
+        return run_forecast_predict(
+            path=args.path,
+            value_column=args.value_column,
+            horizon=args.horizon,
+            space=args.space,
+        )
+    if command == "serve":
+        from investment_assistant.webapi.server import serve
+
+        serve(host=args.host, port=args.port)
+        return None
+    msg = f"unknown command: {command}"
+    raise ValueError(msg)
 
 
 if __name__ == "__main__":
