@@ -62,7 +62,89 @@ def test_orchestrate_endpoint_is_offline(tmp_path) -> None:
     )
     assert status == 200
     assert payload["call_real_api"] is False
+    assert payload["orchestration"]["drafts"] == 2
     assert "answer" in payload
+
+
+def test_orchestrate_real_api_is_guarded_when_env_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_WEB_REAL_API", raising=False)
+    db = tmp_path / "rag.sqlite"
+    _index_doc(db, tmp_path)
+    status, payload = handle_api(
+        "POST",
+        "/api/orchestrate",
+        {"query": "分散投資とは", "db_path": str(db), "call_real_api": True},
+    )
+    assert status == 200
+    assert payload["call_real_api"] is False
+    assert "real API disabled" in payload["real_api_note"]
+
+
+def test_fetch_job_auto_fetches_allowed_sources_and_indexes(monkeypatch, tmp_path) -> None:
+    calls: list[bool] = []
+
+    def fake_run_fetch_job(*, path, dry_run: bool, preview_chars: int = 500):
+        _ = path, preview_chars
+        calls.append(dry_run)
+        source = {
+            "name": "allowed_ir",
+            "url": "https://example.com/ir",
+            "output_path": "local_docs/allowed.txt",
+            "fetch": {
+                "allowed_by_robots": True,
+                "source": "dry_run" if dry_run else "network",
+                "status_code": None if dry_run else 200,
+                "saved_path": None if dry_run else "local_docs/allowed.txt",
+            },
+        }
+        blocked = {
+            "name": "blocked_ir",
+            "url": "https://example.com/private",
+            "output_path": "local_docs/blocked.txt",
+            "fetch": {
+                "allowed_by_robots": False,
+                "source": "blocked_by_robots",
+                "status_code": None,
+                "saved_path": None,
+            },
+        }
+        return {"results": [source, blocked] if dry_run else [source]}
+
+    def fake_index_dir(*, path, db_path):
+        assert path == "local_docs"
+        assert db_path == str(tmp_path / "rag.sqlite")
+        return {"files_indexed": 1, "chunks_indexed": 2}
+
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service.cli, "run_fetch_job", fake_run_fetch_job)
+    monkeypatch.setattr(service.cli, "run_rag_index_dir", fake_index_dir)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/fetch-job/auto",
+        {
+            "db_path": str(tmp_path / "rag.sqlite"),
+            "sources": [
+                {
+                    "name": "allowed_ir",
+                    "url": "https://example.com/ir",
+                    "output_path": "local_docs/allowed.txt",
+                },
+                {
+                    "name": "blocked_ir",
+                    "url": "https://example.com/private",
+                    "output_path": "local_docs/blocked.txt",
+                },
+            ],
+        },
+    )
+    assert status == 200
+    assert calls == [True, False]
+    assert payload["policy"]["robots_checked"] is True
+    assert payload["policy"]["robots_blocked_count"] == 1
+    assert payload["allowed_sources_count"] == 1
+    assert payload["index"]["chunks_indexed"] == 2
 
 
 def test_manual_doc_save_indexes_pasted_text(tmp_path, monkeypatch) -> None:
@@ -125,6 +207,7 @@ def test_available_routes_lists_endpoints() -> None:
     assert "GET /api/health" in routes
     assert "POST /api/rag/search" in routes
     assert "POST /api/manual-doc/save" in routes
+    assert "POST /api/fetch-job/auto" in routes
     assert "POST /api/fetch-job/dry-run" in routes
 
 
