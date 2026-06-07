@@ -24,7 +24,39 @@ type GuideCard = {
   body: string;
 };
 
+type TargetSourceOption = {
+  label: string;
+  source: string;
+  queryContext: string;
+};
+
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
+
+const TARGET_SOURCE_OPTIONS: TargetSourceOption[] = [
+  {
+    label: "指定なし（DB全体）",
+    source: "",
+    queryContext: "",
+  },
+  {
+    label: "9432 NTT",
+    source: "local_docs/nikkei225/9432/ir.txt",
+    queryContext:
+      "対象銘柄: 9432 NTT\n対象資料: local_docs/nikkei225/9432/ir.txt\nこの対象資料だけを根拠にしてください。",
+  },
+  {
+    label: "2914 JT",
+    source: "local_docs/nikkei225/2914/ir.txt",
+    queryContext:
+      "対象銘柄: 2914 JT\n対象資料: local_docs/nikkei225/2914/ir.txt\nこの対象資料だけを根拠にしてください。",
+  },
+  {
+    label: "8306 MUFG",
+    source: "local_docs/nikkei225/8306/ir.txt",
+    queryContext:
+      "対象銘柄: 8306 MUFG\n対象資料: local_docs/nikkei225/8306/ir.txt\nこの対象資料だけを根拠にしてください。",
+  },
+];
 
 const TABS = [
   { id: "search", label: "Research" },
@@ -44,12 +76,12 @@ const HERO_CARDS = [
 ] as const;
 
 const SUGGESTED_QUESTIONS = [
-  "この銘柄の配当方針と減配リスクを、根拠つきで整理して",
-  "S&P500と高配当ETFを比較して、長期保有の弱点を出して",
-  "NISA成長投資枠で見る場合、候補の優先順位をどう確認すべき？",
-  "取得済みIR資料だけを根拠に、買う前の確認項目を作って",
-  "直近の予測結果を踏まえて、判断を保留すべき危険ポイントを出して",
-  "このポートフォリオで集中リスクが出る箇所を指摘して",
+  "選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して",
+  "選択中の対象銘柄について、株主還元方針と未確認の危険ポイントを分けて",
+  "選択中の対象銘柄について、買う前に追加取得すべき資料を列挙して",
+  "取得済みIR資料だけを根拠に、判断を保留すべき危険ポイントを出して",
+  "対象sourceに根拠がない項目を、不明として整理して",
+  "配当・自己株式取得・営業CFの確認観点をチェックリスト化して",
 ] as const;
 
 const SOURCE_PRESETS: SourcePreset[] = [
@@ -298,7 +330,11 @@ function presetToSource(preset: SourcePreset) {
   };
 }
 
-function buildContextualQuery(messages: ChatMessage[], currentQuestion: string) {
+function buildContextualQuery(
+  messages: ChatMessage[],
+  currentQuestion: string,
+  targetContext?: string,
+) {
   const conversation = messages
     .slice(-8)
     .map((message) => `${message.role === "user" ? "ユーザー" : "アシスタント"}: ${message.content}`)
@@ -307,6 +343,7 @@ function buildContextualQuery(messages: ChatMessage[], currentQuestion: string) 
     "以下の会話履歴を踏まえて、最後の質問に自然に返答してください。",
     "ローカル文書にない事実は推測せず、不明または要検証と明記してください。",
     "出力は日本語で、ユーザーに見せる最終回答だけを書いてください。内部の担当名、ドラフト名、レビュー担当名は出さないでください。",
+    ...(targetContext ? ["", "対象指定", targetContext] : []),
     "",
     "会話履歴",
     conversation || "なし",
@@ -438,8 +475,10 @@ function SearchTab() {
 // --- AI answer (orchestration, offline) -----------------------------------
 
 function AnswerTab() {
-  const [query, setQuery] = useState("S&P500と高配当ETFを比較して、長期保有の弱点を出して");
+  const [query, setQuery] = useState("選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
+  const [targetSource, setTargetSource] = useState(TARGET_SOURCE_OPTIONS[1].source);
+  const [evidenceLimit, setEvidenceLimit] = useState(20);
   const [drafts, setDrafts] = useState(3);
   const [hybrid, setHybrid] = useState(true);
   const [useRealApi, setUseRealApi] = useState(false);
@@ -455,6 +494,9 @@ function AnswerTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastData, setLastData] = useState<Json | null>(null);
+  const selectedTarget =
+    TARGET_SOURCE_OPTIONS.find((option) => option.source === targetSource) ??
+    TARGET_SOURCE_OPTIONS[0];
 
   async function ask() {
     const trimmed = query.trim();
@@ -468,14 +510,19 @@ function AnswerTab() {
     setError(null);
 
     try {
-      const contextualQuery = buildContextualQuery(nextMessages, trimmed);
+      const contextualQuery = buildContextualQuery(
+        nextMessages,
+        trimmed,
+        selectedTarget.queryContext
+      );
       const result = await api<Json>("/api/orchestrate", {
         query: contextualQuery,
         db_path: dbPath,
+        target_source: targetSource || undefined,
         drafts,
         hybrid,
         critique: true,
-        limit: 8,
+        limit: evidenceLimit,
         call_real_api: useRealApi,
         api_key: apiKeyInput.trim() || undefined,
       });
@@ -547,7 +594,7 @@ function AnswerTab() {
               <details>
                 <summary>根拠候補 {message.sources.length}件</summary>
                 <ul className="source-list">
-                  {message.sources.slice(0, 5).map((source, i) => (
+                  {message.sources.slice(0, 10).map((source, i) => (
                     <li key={source.chunk_id ?? i}>
                       <span className="mono">{source.source}</span>
                       <p>{String(source.text ?? "").slice(0, 160)}</p>
@@ -586,6 +633,29 @@ function AnswerTab() {
         <Field label="RAG DB パス">
           <input value={dbPath} onChange={(e) => setDbPath(e.target.value)} />
         </Field>
+        <Field label="対象銘柄/source">
+          <select value={targetSource} onChange={(e) => setTargetSource(e.target.value)}>
+            {TARGET_SOURCE_OPTIONS.map((option) => (
+              <option key={option.label} value={option.source}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="根拠件数">
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={evidenceLimit}
+            onChange={(e) => setEvidenceLimit(Number(e.target.value))}
+          />
+        </Field>
+        {targetSource && (
+          <p className="hint">
+            対象source: <span className="mono">{targetSource}</span>
+          </p>
+        )}
         <Field label="ドラフト数">
           <input
             type="number"
@@ -631,6 +701,9 @@ function AnswerTab() {
         <div className="callout">
           実行方式: {lastData.orchestration.drafter} → {lastData.orchestration.critic} →{" "}
           {lastData.orchestration.synthesizer} / draft数: {lastData.orchestration.drafts}
+          {lastData.target_source && (
+            <p className="hint">対象source: {String(lastData.target_source)}</p>
+          )}
           {Array.isArray(lastData.perspectives) && (
             <ul>
               {lastData.perspectives.map((p: string, i: number) => (
