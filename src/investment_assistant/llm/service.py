@@ -53,7 +53,7 @@ class LlmService:
     def generate(self, *, task_type: str, prompt: str, priority: str = "normal") -> LlmResponse:
         """Generate text through cache, budget guard, and fallback controls."""
 
-        _ = priority  # Reserved for later priority-aware budgeting.
+        _ = priority
         cache_key = self.cache.make_key(task_type, self.model, prompt)
         cached = self.cache.get(cache_key)
         if cached is not None:
@@ -76,7 +76,7 @@ class LlmService:
 
         try:
             text = self.client.generate(prompt, model=self.model)
-        except Exception as exc:  # noqa: BLE001 - central service must shield callers and fallback.
+        except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "llm call failed task=%s model=%s error=%s; using fallback",
                 task_type,
@@ -106,7 +106,7 @@ class LlmService:
         return LlmResponse("", f"fallback:{mode}:{reason}", cache_key, warning=True, skipped=True)
 
     @staticmethod
-    def _local_summary(prompt: str, *, max_chars: int = 240) -> str:
+    def _local_summary(prompt: str, *, max_chars: int = 4000) -> str:
         normalized = " ".join(prompt.split())
         if len(normalized) <= max_chars:
             return normalized
