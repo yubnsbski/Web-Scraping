@@ -417,8 +417,8 @@ button:disabled {
 .chat-window {
   display: grid;
   gap: 12px;
-  max-height: 560px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -430,7 +430,7 @@ button:disabled {
 }
 
 .chat-bubble {
-  max-width: 88%;
+  max-width: 100%;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -444,7 +444,7 @@ button:disabled {
 }
 
 .chat-bubble.assistant {
-  justify-self: start;
+  justify-self: stretch;
   border-color: rgba(34, 197, 94, 0.34);
 }
 
@@ -525,10 +525,6 @@ details summary {
   .guide-grid,
   .workflow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .chat-bubble {
-    max-width: 100%;
   }
 }
 
