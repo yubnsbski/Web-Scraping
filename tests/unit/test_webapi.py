@@ -232,3 +232,36 @@ def test_sources_to_yaml_roundtrips_with_loader(tmp_path) -> None:
     assert sources[0]["name"] == "9432_NTT_ir"
     assert sources[0]["extract_text"] is True
     assert sources[0]["preview_chars"] == 500
+
+
+
+def test_portfolio_endpoints_return_sample_summaries() -> None:
+    root = Path(__file__).resolve().parents[2]
+    dividends_csv = root / "examples" / "portfolio_dividends_sample.csv"
+    performance_csv = root / "examples" / "portfolio_performance_sample.csv"
+
+    status, dividends = handle_api(
+        "POST",
+        "/api/portfolio/dividends",
+        {"path": str(dividends_csv)},
+    )
+    assert status == 200
+    assert dividends["latest_annual"] == 182400.0
+    assert dividends["increase_streak"] == 6
+    assert "投資助言" in str(dividends["disclaimer"])
+
+    status, performance = handle_api(
+        "POST",
+        "/api/portfolio/performance",
+        {"path": str(performance_csv)},
+    )
+    assert status == 200
+    assert performance["market_value"] == 5420000.0
+    assert performance["pnl"] == 850000.0
+    assert performance["max_drawdown_pct"] <= 0
+
+
+def test_available_routes_includes_portfolio_endpoints() -> None:
+    routes = available_routes()
+    assert "POST /api/portfolio/dividends" in routes
+    assert "POST /api/portfolio/performance" in routes
