@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 
 from investment_assistant.cli import build_budget_report, main, run_orchestrate_answer, run_smoke
 
@@ -63,6 +65,55 @@ def test_cli_budget_json_outputs_report(tmp_path, capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["model"] == "gemini-test"
     assert output["daily_used"] == 0
+
+
+def _write_edinet_csv_zip(path):
+    columns = [
+        "要素ID", "項目名", "コンテキストID", "相対年度", "連結・個別",
+        "期間・時点", "ユニットID", "単位", "値",
+    ]
+    header = "\t".join(columns)
+    rows = [
+        "x:Cf\t営業活動によるキャッシュ・フロー\tCurrentYearDuration\t当期\t連結\t期間\tJPY\t百万円\t1234567",
+        "x:Eq\t自己資本比率\tCurrentYearInstant\t当期\t連結\t時点\tPure\t％\t9.8",
+    ]
+    csv_bytes = ("\r\n".join([header, *rows]) + "\r\n").encode("utf-16")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("XBRL_TO_CSV/jpcrp.csv", csv_bytes)
+    path.write_bytes(buffer.getvalue())
+    return path
+
+
+def test_cli_edinet_extract_outputs_rag_text(tmp_path, capsys):
+    zip_path = _write_edinet_csv_zip(tmp_path / "doc.zip")
+    out_path = tmp_path / "out" / "edinet.txt"
+
+    exit_code = main(
+        [
+            "edinet-extract",
+            "--zip",
+            str(zip_path),
+            "--doc-id",
+            "S100AAA1",
+            "--ticker",
+            "8306",
+            "--company",
+            "MUFG",
+            "--save-text",
+            str(out_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["doc_id"] == "S100AAA1"
+    assert output["values_extracted"] == 2
+    assert "営業活動によるキャッシュ・フロー" in output["metrics"]
+    assert output["saved_path"] == str(out_path)
+    saved = out_path.read_text(encoding="utf-8")
+    assert "営業活動によるキャッシュ・フロー: 1234567" in saved
+    assert "EDINET docID=S100AAA1" in saved
 
 
 def test_cli_smoke_outputs_json(tmp_path, capsys):
