@@ -1,47 +1,39 @@
+"""Weekly EDINET ingest scheduler.
+
+Runs every Monday at 06:00 local time and triggers the EDINET ingest endpoint,
+which downloads the latest official filings for the registry's targets and
+indexes the extracted financial numbers into RAG. The webapi server
+(``investment-assistant serve``) must be running.
+
+Timing logic lives in ``investment_assistant.scheduling.next_weekly_run`` so it
+can be unit-tested without running this loop.
+"""
+
 from __future__ import annotations
 
 import json
+import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-API_URL = "http://127.0.0.1:8000/api/fetch-job/auto"
-STATE_PATH = Path(".cache/investment_assistant/auto_scrape_state.json")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-SOURCES = [
-    {
-        "name": "9432_NTT_ir",
-        "url": "https://group.ntt/jp/ir/",
-        "output_path": "local_docs/nikkei225/9432/ir.txt",
-        "query_hint": "9432 NTT 配当 方針 DOE 配当性向 IR",
-        "extract_text": True,
-        "include_metadata": True,
-        "preview_chars": 500,
-    },
-    {
-        "name": "7203_toyota_ir",
-        "url": "https://global.toyota/jp/ir/",
-        "output_path": "local_docs/nikkei225/7203/ir.txt",
-        "query_hint": "7203 トヨタ 配当 方針 株主還元 IR",
-        "extract_text": True,
-        "include_metadata": True,
-        "preview_chars": 500,
-    },
-]
+from investment_assistant.scheduling import next_weekly_run  # noqa: E402
 
-def next_6am(now: datetime) -> datetime:
-    target = now.replace(hour=6, minute=0, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return target
+API_URL = "http://127.0.0.1:8000/api/edinet/ingest"
+STATE_PATH = Path(".cache/investment_assistant/edinet_schedule_state.json")
+REGISTRY_PATH = "examples/source_registry_edinet_sample.yaml"
+SCAN_DAYS = 7
+
 
 def run_once() -> None:
     body = json.dumps(
         {
-            "sources": SOURCES,
+            "registry_path": REGISTRY_PATH,
+            "days": SCAN_DAYS,
             "db_path": ".cache/investment_assistant/rag.sqlite",
-            "index_path": "local_docs",
             "index_after_fetch": True,
         }
     ).encode("utf-8")
@@ -52,16 +44,13 @@ def run_once() -> None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urlopen(req, timeout=120) as res:
+    with urlopen(req, timeout=300) as res:  # noqa: S310 - fixed localhost endpoint
         payload = json.loads(res.read().decode("utf-8"))
 
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(
         json.dumps(
-            {
-                "last_run_at": datetime.now().isoformat(),
-                "result": payload,
-            },
+            {"last_run_at": datetime.now().isoformat(), "result": payload},
             ensure_ascii=False,
             indent=2,
         ),
@@ -69,18 +58,20 @@ def run_once() -> None:
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
 
+
 def main() -> None:
-    print("auto scrape scheduler started; daily 06:00", flush=True)
+    print("edinet scheduler started; weekly Monday 06:00", flush=True)
     while True:
-        target = next_6am(datetime.now())
+        target = next_weekly_run(datetime.now(), weekday=0, hour=6)
         seconds = max(1, int((target - datetime.now()).total_seconds()))
         print(f"next run at {target.isoformat()}", flush=True)
         time.sleep(seconds)
         try:
             run_once()
-        except Exception as exc:
-            print(f"auto scrape failed: {type(exc).__name__}: {exc}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - keep the loop alive
+            print(f"edinet ingest failed: {type(exc).__name__}: {exc}", flush=True)
             time.sleep(60)
+
 
 if __name__ == "__main__":
     main()

@@ -18,6 +18,7 @@ from investment_assistant.edinet.csv_extract import (
     select_metrics,
     to_rag_text,
 )
+from investment_assistant.edinet.ingest import ingest_targets, recent_dates
 from investment_assistant.edinet.models import (
     ACQUISITION_CSV,
     ACQUISITION_PDF,
@@ -48,6 +49,8 @@ __all__ = [
     "EdinetTarget",
     "FinancialValue",
     "build_edinet_targets_from_registry",
+    "ingest_targets",
+    "recent_dates",
     "filter_by_doc_types",
     "filter_by_ticker",
     "latest_document",

@@ -13,12 +13,14 @@ from typing import Any
 from investment_assistant.config.loader import load_yaml
 from investment_assistant.edinet.client import EdinetClient
 from investment_assistant.edinet.csv_extract import parse_csv_archive, select_metrics, to_rag_text
+from investment_assistant.edinet.ingest import ingest_targets, recent_dates
 from investment_assistant.edinet.models import (
     EdinetDocument,
     filter_by_doc_types,
     filter_by_ticker,
     securities_code,
 )
+from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.forecasting import service as forecast_service
 from investment_assistant.forecasting.dataset import DEFAULT_DATASET, download_dataset
 from investment_assistant.forecasting.timeseries import load_timeseries_csv
@@ -363,6 +365,45 @@ def run_edinet_extract(
         "saved_path": saved_path,
         "text_preview": text[: max(0, preview_chars)],
     }
+
+
+def run_edinet_ingest(
+    *,
+    registry_path: str | Path = "examples/source_registry_edinet_sample.yaml",
+    end_date: str | None = None,
+    days: int = 7,
+    output_dir: str | Path = "local_docs/edinet",
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    index_after: bool = True,
+    client: EdinetClient | None = None,
+) -> dict[str, object]:
+    """Run the end-to-end EDINET ingest and optionally index the result into RAG.
+
+    Scans the last ``days`` submission dates (ending at ``end_date``, default
+    today) for the registry's EDINET targets, downloads the latest financial
+    filing per ticker, extracts the metrics, and indexes the saved text so the
+    numbers become searchable. Requires network access for live runs; the
+    ``client`` is injectable for offline testing.
+    """
+
+    targets = build_edinet_targets_from_registry(registry_path)
+    edinet_client = client or EdinetClient()
+    effective_end = end_date or datetime.now(UTC).date().isoformat()
+    dates = recent_dates(effective_end, days)
+
+    result = ingest_targets(
+        client=edinet_client,
+        targets=targets,
+        dates=dates,
+        output_dir=output_dir,
+    )
+    result["registry_path"] = str(registry_path)
+    result["end_date"] = effective_end
+    result["days"] = days
+
+    if index_after and result.get("ingested_count"):
+        result["index"] = run_rag_index_dir(path=str(output_dir), db_path=db_path)
+    return result
 
 
 def run_rag_index(
@@ -1112,6 +1153,18 @@ def main(argv: list[str] | None = None) -> int:
     edinet_documents_parser.add_argument("--ticker")
     edinet_documents_parser.add_argument("--all-doc-types", action="store_true")
 
+    edinet_ingest_parser = subparsers.add_parser("edinet-ingest")
+    edinet_ingest_parser.add_argument(
+        "--registry",
+        dest="registry_path",
+        default="examples/source_registry_edinet_sample.yaml",
+    )
+    edinet_ingest_parser.add_argument("--end-date")
+    edinet_ingest_parser.add_argument("--days", type=int, default=7)
+    edinet_ingest_parser.add_argument("--output-dir", default="local_docs/edinet")
+    edinet_ingest_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    edinet_ingest_parser.add_argument("--no-index", action="store_true")
+
     edinet_extract_parser = subparsers.add_parser("edinet-extract")
     edinet_extract_parser.add_argument("--zip", dest="zip_path", required=True)
     edinet_extract_parser.add_argument("--doc-id", required=True)
@@ -1264,6 +1317,15 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             date=args.date,
             ticker=args.ticker,
             financial_only=not args.all_doc_types,
+        )
+    if command == "edinet-ingest":
+        return run_edinet_ingest(
+            registry_path=args.registry_path,
+            end_date=args.end_date,
+            days=args.days,
+            output_dir=args.output_dir,
+            db_path=args.db_path,
+            index_after=not args.no_index,
         )
     if command == "edinet-extract":
         return run_edinet_extract(
