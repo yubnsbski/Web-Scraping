@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant import cli
+from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
 from investment_assistant.portfolio.loader import (
     load_dividends,
     load_performance,
     summarize_dividends,
     summarize_performance,
 )
-from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 
 JsonDict = dict[str, Any]
