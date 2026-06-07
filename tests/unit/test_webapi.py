@@ -35,6 +35,23 @@ def test_health_and_unknown_route() -> None:
     assert "error" in payload
 
 
+
+def test_rag_stats_endpoint_reports_db_contents(tmp_path) -> None:
+    db = tmp_path / "rag.sqlite"
+    _index_doc(db, tmp_path)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/rag/stats",
+        {"db_path": str(db), "keywords": ["投資判断"]},
+    )
+
+    assert status == 200
+    assert payload["sources_count"] == 1
+    assert payload["chunks_count"] >= 1
+    assert payload["keyword_totals"]["投資判断"] >= 1
+
+
 def test_rag_search_endpoint(tmp_path) -> None:
     db = tmp_path / "rag.sqlite"
     _index_doc(db, tmp_path)
@@ -206,6 +223,7 @@ def test_available_routes_lists_endpoints() -> None:
     routes = available_routes()
     assert "GET /api/health" in routes
     assert "POST /api/rag/search" in routes
+    assert "POST /api/rag/stats" in routes
     assert "POST /api/manual-doc/save" in routes
     assert "POST /api/fetch-job/auto" in routes
     assert "POST /api/fetch-job/dry-run" in routes

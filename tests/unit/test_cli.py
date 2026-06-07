@@ -1093,3 +1093,25 @@ def test_run_orchestrate_answer_source_filter_limits_results(tmp_path, capsys):
     assert sources == {str(first_doc)}
     assert "unique-first" in result["context"]
     assert "unique-second" not in result["context"]
+
+
+
+def test_cli_rag_stats_reports_sources_and_keywords(tmp_path, capsys):
+    db_path = tmp_path / "rag.sqlite"
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+
+    memo = docs_dir / "memo.txt"
+    memo.write_text("配当 方針 DOE 配当性向 有価証券報告書", encoding="utf-8")
+
+    assert main(["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]) == 0
+    capsys.readouterr()
+
+    assert main(["rag-stats", "--db-path", str(db_path), "--keywords", "配当,DOE"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["sources_count"] == 1
+    assert payload["chunks_count"] >= 1
+    assert payload["keyword_totals"]["配当"] >= 1
+    assert payload["keyword_totals"]["DOE"] >= 1
+    assert payload["sources"][0]["source"] == str(memo)

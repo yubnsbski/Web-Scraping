@@ -62,6 +62,45 @@ class BudgetReport:
     warning: bool
 
 
+DEFAULT_RAG_STATS_KEYWORDS: tuple[str, ...] = (
+    "配当",
+    "株主還元",
+    "自己株式",
+    "営業CF",
+    "営業キャッシュフロー",
+    "DOE",
+    "配当性向",
+    "有価証券報告書",
+    "決算短信",
+    "統合報告書",
+)
+
+
+@dataclass
+class _RagSourceStats:
+    source: str
+    keyword_hits: dict[str, int]
+    chunks: int = 0
+    chars: int = 0
+    source_url: str | None = None
+    fetched_at: str | None = None
+    status_code: str | None = None
+    content_type: str | None = None
+
+
+def _rag_source_stats_to_dict(stats: _RagSourceStats) -> dict[str, object]:
+    return {
+        "source": stats.source,
+        "chunks": stats.chunks,
+        "chars": stats.chars,
+        "source_url": stats.source_url,
+        "fetched_at": stats.fetched_at,
+        "status_code": stats.status_code,
+        "content_type": stats.content_type,
+        "keyword_hits": stats.keyword_hits,
+    }
+
+
 class EchoClient:
     """Local fake client used by the smoke command without calling Gemini."""
 
@@ -306,6 +345,65 @@ def _dedupe_source_filtered_results(results: list[SearchResult]) -> list[SearchR
         deduped.append(result)
 
     return deduped
+
+def run_rag_stats(
+    *,
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    keywords: Sequence[str] = DEFAULT_RAG_STATS_KEYWORDS,
+) -> dict[str, object]:
+    """Summarize local RAG DB contents without calling an LLM."""
+
+    keyword_list = tuple(keyword for keyword in keywords if keyword)
+    store = RagStore(db_path)
+    chunks = store.list_chunks()
+
+    stats_by_source: dict[str, _RagSourceStats] = {}
+    keyword_totals = {keyword: 0 for keyword in keyword_list}
+    total_chars = 0
+
+    for chunk in chunks:
+        total_chars += len(chunk.text)
+        stats = stats_by_source.get(chunk.source)
+        if stats is None:
+            stats = _RagSourceStats(
+                source=chunk.source,
+                keyword_hits={keyword: 0 for keyword in keyword_list},
+            )
+            stats_by_source[chunk.source] = stats
+
+        stats.chunks += 1
+        stats.chars += len(chunk.text)
+
+        if stats.source_url is None:
+            stats.source_url = chunk.metadata.get("source_url")
+        if stats.fetched_at is None:
+            stats.fetched_at = chunk.metadata.get("fetched_at")
+        if stats.status_code is None:
+            stats.status_code = chunk.metadata.get("status_code")
+        if stats.content_type is None:
+            stats.content_type = chunk.metadata.get("content_type")
+
+        for keyword in keyword_list:
+            count = chunk.text.count(keyword)
+            if count:
+                stats.keyword_hits[keyword] += count
+                keyword_totals[keyword] += count
+
+    sources = sorted(
+        (_rag_source_stats_to_dict(stats) for stats in stats_by_source.values()),
+        key=lambda item: str(item["source"]),
+    )
+
+    return {
+        "db_path": str(db_path),
+        "sources_count": len(sources),
+        "chunks_count": len(chunks),
+        "total_chars": total_chars,
+        "keywords": list(keyword_list),
+        "keyword_totals": keyword_totals,
+        "sources": sources,
+    }
+
 
 def run_rag_search(
     *,
@@ -898,6 +996,13 @@ def main(argv: list[str] | None = None) -> int:
     rag_index_dir_parser.add_argument("--max-chars", type=int, default=800)
     rag_index_dir_parser.add_argument("--overlap-chars", type=int, default=120)
 
+    rag_stats_parser = subparsers.add_parser("rag-stats")
+    rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    rag_stats_parser.add_argument(
+        "--keywords",
+        default=",".join(DEFAULT_RAG_STATS_KEYWORDS),
+    )
+
     rag_search_parser = subparsers.add_parser("rag-search")
     rag_search_parser.add_argument("--query", required=True)
     rag_search_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
@@ -1024,6 +1129,14 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             max_chars=args.max_chars,
             overlap_chars=args.overlap_chars,
         )
+    if command == "rag-stats":
+        keywords = tuple(
+            keyword.strip()
+            for keyword in str(args.keywords).split(",")
+            if keyword.strip()
+        )
+        return run_rag_stats(db_path=args.db_path, keywords=keywords)
+
     if command == "rag-search":
         results = run_rag_search(
             query=args.query,
