@@ -12,6 +12,12 @@ from typing import Any
 
 from investment_assistant import cli
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
+from investment_assistant.portfolio.loader import (
+    load_dividends,
+    load_performance,
+    summarize_dividends,
+    summarize_performance,
+)
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 
 JsonDict = dict[str, Any]
@@ -333,6 +339,17 @@ def _fetch_job_auto(body: JsonDict) -> JsonDict:
         "allowed_sources_count": len(allowed_sources),
         "blocked_results": blocked,
     }
+
+
+
+def _portfolio_dividends(body: JsonDict) -> JsonDict:
+    path = str(body.get("path") or "examples/portfolio_dividends_sample.csv")
+    return summarize_dividends(load_dividends(path))
+
+
+def _portfolio_performance(body: JsonDict) -> JsonDict:
+    path = str(body.get("path") or "examples/portfolio_performance_sample.csv")
+    return summarize_performance(load_performance(path))
 
 
 # --- helpers ---------------------------------------------------------------
@@ -714,6 +731,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/scoring/rank"): _scoring_rank,
     ("POST", "/api/forecast/evaluate"): _forecast_evaluate,
     ("POST", "/api/forecast/predict"): _forecast_predict,
+    ("POST", "/api/portfolio/dividends"): _portfolio_dividends,
+    ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
