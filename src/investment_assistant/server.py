@@ -5,12 +5,12 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import urllib.parse
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 from socketserver import ThreadingTCPServer
 from typing import Any
-import urllib.parse
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 DEFAULT_HOST = "127.0.0.1"
@@ -69,17 +69,12 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
 
     def handle_scrape_run(self) -> None:
         """Run web scraping job."""
-        length = int(self.headers.get("Content-Length", 0))
-        if length <= 0:
+        request = self._read_json_body()
+        if request is None:
             return self.send_json({"error": "missing_body"}, status=400)
-
-        try:
-            raw = self.rfile.read(length).decode("utf-8")
-            request = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        if request is _INVALID_JSON:
             return self.send_json({"error": "invalid_json"}, status=400)
 
-        # Handle both {"sources": [...]} and [...] formats
         if isinstance(request, list):
             sources = request
         elif isinstance(request, dict):
@@ -90,14 +85,13 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
         if not sources:
             return self.send_json({"error": "sources_required"}, status=400)
 
-        # Dummy scraping result
         payload = {
             "status": "success",
             "sources_processed": len(sources),
             "results": [
                 {
-                    "source": src.get("name", "unknown"),
-                    "url": src.get("url", ""),
+                    "source": src.get("name", "unknown") if isinstance(src, dict) else "unknown",
+                    "url": src.get("url", "") if isinstance(src, dict) else "",
                     "timestamp": datetime.now().isoformat(),
                     "content_extracted": "サンプルテキスト（実装予定）",
                 }
@@ -116,20 +110,14 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
 
     def handle_forecast_evaluate(self) -> None:
         """Backtest ensemble models."""
-        length = int(self.headers.get("Content-Length", 0))
-        if length <= 0:
+        request = self._read_json_body()
+        if request is None:
             return self.send_json({"error": "missing_body"}, status=400)
-
-        try:
-            raw = self.rfile.read(length).decode("utf-8")
-            request = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        if request is _INVALID_JSON:
             return self.send_json({"error": "invalid_json"}, status=400)
-
         if not isinstance(request, dict):
             return self.send_json({"error": "invalid_format"}, status=400)
 
-        # Generate dummy evaluation results
         models = [
             {"name": "naive", "rmse": 0.087, "accuracy": 0.52, "skill": 0.0},
             {"name": "drift", "rmse": 0.085, "accuracy": 0.53, "skill": 0.02},
@@ -144,7 +132,7 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
         ]
 
         payload = {
-            "series": "S&P 500 Monthly Returns (前月比% - mean: 1.08%, std: 4.2%)",
+            "series": "S&P 500 Monthly Returns",
             "series_explanation": "月次リターン = (当月終値 - 前月終値) / 前月終値 × 100",
             "horizon": 1,
             "observations": 660,
@@ -156,27 +144,22 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
 
     def handle_forecast_predict(self) -> None:
         """Generate next-step forecast."""
-        length = int(self.headers.get("Content-Length", 0))
-        if length <= 0:
+        request = self._read_json_body()
+        if request is None:
             return self.send_json({"error": "missing_body"}, status=400)
-
-        try:
-            raw = self.rfile.read(length).decode("utf-8")
-            request = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        if request is _INVALID_JSON:
             return self.send_json({"error": "invalid_json"}, status=400)
-
         if not isinstance(request, dict):
             return self.send_json({"error": "invalid_format"}, status=400)
 
         horizon = int(request.get("horizon", 1))
-        # S&P 500 月次リターン予測（%単位、平均値周辺）
-        last_observed = 1.2  # 最直近月のリターン %
+        last_observed = 1.2
+        forecast = [last_observed + (0.1 * index) for index in range(horizon)]
         payload = {
             "last_observed_return": last_observed,
-            "last_observed_value": 5254.80,  # 2024年最新の S&P 500 値
+            "last_observed_value": 5254.80,
             "horizon": horizon,
-            "ensemble_forecast": [last_observed + (0.1 * i) for i in range(horizon)],  # 月次リターン %
+            "ensemble_forecast": forecast,
             "ensemble_weights": {
                 "naive": 0.15,
                 "drift": 0.20,
@@ -192,51 +175,45 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
 
     def handle_chat(self) -> None:
         """Handle chat message with AI orchestration."""
-        length = int(self.headers.get("Content-Length", 0))
-        if length <= 0:
+        request = self._read_json_body()
+        if request is None:
             return self.send_json({"error": "missing_body"}, status=400)
-
-        try:
-            raw = self.rfile.read(length).decode("utf-8")
-            request = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        if request is _INVALID_JSON:
             return self.send_json({"error": "invalid_json"}, status=400)
-
         if not isinstance(request, dict):
             return self.send_json({"error": "invalid_format"}, status=400)
 
-        message = request.get("message", "").strip()
+        message = str(request.get("message", "")).strip()
         if not message:
             return self.send_json({"error": "message_required"}, status=400)
 
-        # Detect intent and route to appropriate handler
         response = self._orchestrate_chat(message)
         self.send_json(response)
 
     def _orchestrate_chat(self, message: str) -> dict[str, Any]:
         """Route message to appropriate AI/feature handler."""
         lower_msg = message.lower()
+        forecast_keywords = ["予測", "フォーキャスト", "forecast", "リターン", "return"]
+        scraping_keywords = ["スクレイピング", "scrape", "データ", "取得", "fetch"]
+        investment_keywords = ["投資", "invest", "分析", "analyze", "s&p", "sp500"]
 
-        # Check for forecast-related keywords
-        if any(kw in lower_msg for kw in ["予測", "フォーキャスト", "forecast", "リターン", "return"]):
+        if any(keyword in lower_msg for keyword in forecast_keywords):
             return self._chat_forecast(message)
-
-        # Check for scraping-related keywords
-        if any(kw in lower_msg for kw in ["スクレイピング", "scrape", "データ", "取得", "fetch"]):
+        if any(keyword in lower_msg for keyword in scraping_keywords):
             return self._chat_scraping(message)
-
-        # Check for investment analysis keywords
-        if any(kw in lower_msg for kw in ["投資", "invest", "分析", "analyze", "s&p", "sp500"]):
+        if any(keyword in lower_msg for keyword in investment_keywords):
             return self._chat_investment(message)
-
-        # Default: general conversation
         return self._chat_general(message)
 
     def _chat_general(self, message: str) -> dict[str, Any]:
         """General conversation response."""
+        _ = message
         return {
             "role": "assistant",
-            "content": "こんにちは。投資支援AIアシスタントです。予測、データ分析、市場情報のご質問があればお気軽にどうぞ。",
+            "content": (
+                "こんにちは。投資支援AIアシスタントです。"
+                "予測、データ分析、市場情報の質問に対応します。"
+            ),
             "feature": "general",
             "suggestions": [
                 "S&P 500 の予測をしてください",
@@ -247,9 +224,13 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
 
     def _chat_forecast(self, message: str) -> dict[str, Any]:
         """Forecast-related response."""
+        _ = message
         return {
             "role": "assistant",
-            "content": "S&P 500 月次リターンのアンサンブル予測を実行します。複数のモデル（Naive, Drift, AR3, Linear Trend）を組み合わせて、翌月のリターンを予測しています。",
+            "content": (
+                "S&P 500 月次リターンのアンサンブル予測を実行します。"
+                "複数モデルを組み合わせて翌月リターンを推定します。"
+            ),
             "feature": "forecast",
             "forecast_data": {
                 "last_observed_return": 1.2,
@@ -263,9 +244,13 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
 
     def _chat_scraping(self, message: str) -> dict[str, Any]:
         """Web scraping-related response."""
+        _ = message
         return {
             "role": "assistant",
-            "content": "Webスクレイピング機能でお気に入りのデータソースを自動取得できます。NTT IR など対応サイトからの最新情報を収集します。",
+            "content": (
+                "Webスクレイピング機能でデータソースを取得できます。"
+                "取得できない場合は手動テキスト取込に切り替えてください。"
+            ),
             "feature": "scraping",
             "available_sources": [
                 {"name": "NTT IR", "url": "https://group.ntt/jp/ir/", "category": "企業情報"},
@@ -275,9 +260,13 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
 
     def _chat_investment(self, message: str) -> dict[str, Any]:
         """Investment analysis response."""
+        _ = message
         return {
             "role": "assistant",
-            "content": "S&P 500 は米国の主要500企業で構成される指数です。月次リターン（monthly return）= (当月終値 - 前月終値) / 前月終値 × 100 で計算され、市場のボラティリティを示します。",
+            "content": (
+                "S&P 500 は米国の主要500企業で構成される指数です。"
+                "月次リターンは月ごとの騰落率を示します。"
+            ),
             "feature": "investment_analysis",
             "sp500_info": {
                 "current_value": 5254.80,
@@ -286,6 +275,16 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
                 "description": "月次リターン = 月ごとの騰落率(%)",
             },
         }
+
+    def _read_json_body(self) -> dict[str, Any] | list[Any] | object | None:
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0:
+            return None
+        try:
+            raw = self.rfile.read(length).decode("utf-8")
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _INVALID_JSON
 
     def send_json(self, payload: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -296,7 +295,11 @@ class ApiRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
+        _ = format, args
         return
+
+
+_INVALID_JSON = object()
 
 
 def run_server(
