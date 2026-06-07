@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from investment_assistant.cli import build_budget_report, main, run_smoke
+from investment_assistant.cli import build_budget_report, main, run_orchestrate_answer, run_smoke
 
 
 def write_config(tmp_path):
@@ -1061,3 +1061,35 @@ sources:
     assert str(second_doc) not in first_block
     assert str(second_doc) in second_block
     assert str(first_doc) not in second_block
+
+
+
+def test_run_orchestrate_answer_source_filter_limits_results(tmp_path, capsys):
+    db_path = tmp_path / "rag.sqlite"
+    docs_dir = tmp_path / "local_docs"
+    docs_dir.mkdir()
+
+    first_doc = docs_dir / "first.txt"
+    second_doc = docs_dir / "second.txt"
+
+    first_doc.write_text("alpha company 配当 方針 unique-first", encoding="utf-8")
+    second_doc.write_text("beta company 配当 方針 unique-second", encoding="utf-8")
+
+    assert main(
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]
+    ) == 0
+    capsys.readouterr()
+
+    result = run_orchestrate_answer(
+        query="配当 方針",
+        db_path=db_path,
+        limit=5,
+        include_critique=False,
+        source_filter=str(first_doc),
+    )
+
+    assert result["source_filter"] == str(first_doc)
+    sources = {row["source"] for row in result["results"]}
+    assert sources == {str(first_doc)}
+    assert "unique-first" in result["context"]
+    assert "unique-second" not in result["context"]
