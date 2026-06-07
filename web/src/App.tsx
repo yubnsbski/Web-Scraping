@@ -904,7 +904,7 @@ function ScrapeTab() {
   const [manualSourceUrl, setManualSourceUrl] = useState("");
   const [manualText, setManualText] = useState("");
   const [edinetRegistry, setEdinetRegistry] = useState(
-    "examples/source_registry_edinet_sample.yaml",
+    "examples/source_registry_nikkei225_edinet.yaml",
   );
   const [edinetDays, setEdinetDays] = useState(7);
   const sourceState = useAsync<Json>();

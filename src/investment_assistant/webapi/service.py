@@ -364,6 +364,8 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
     )
     end_date_value = body.get("end_date")
     end_date = str(end_date_value).strip() if end_date_value else None
+    max_periods_value = body.get("max_periods")
+    max_periods = _as_int(max_periods_value, 0) if max_periods_value is not None else None
     return cli.run_edinet_ingest(
         registry_path=registry_path,
         end_date=end_date or None,
@@ -371,6 +373,7 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
         output_dir=str(body.get("output_dir") or "local_docs/edinet"),
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
         index_after=_as_bool(body.get("index_after_fetch"), True),
+        max_periods=max_periods if max_periods and max_periods > 0 else None,
     )
 
 

@@ -9,6 +9,7 @@ from investment_assistant.edinet.models import (
     latest_document,
     parse_documents,
     securities_code,
+    select_recent_documents,
 )
 
 _SAMPLE_PAYLOAD = {
@@ -98,6 +99,21 @@ def test_latest_document_picks_most_recent_submission() -> None:
 
 def test_latest_document_returns_none_for_empty() -> None:
     assert latest_document([]) is None
+
+
+def test_select_recent_documents_orders_desc_and_limits() -> None:
+    documents = filter_by_ticker(parse_documents(_SAMPLE_PAYLOAD), "8306")
+    top1 = select_recent_documents(documents, 1)
+    assert [doc.doc_id for doc in top1] == ["S100AAA1"]
+
+    top_all = select_recent_documents(documents, 5)
+    assert [doc.doc_id for doc in top_all] == ["S100AAA1", "S100AAA2"]
+
+    # limit <= 0 returns everything, still most-recent first.
+    assert [doc.doc_id for doc in select_recent_documents(documents, 0)] == [
+        "S100AAA1",
+        "S100AAA2",
+    ]
 
 
 def test_ticker_is_none_for_non_standard_sec_code() -> None:

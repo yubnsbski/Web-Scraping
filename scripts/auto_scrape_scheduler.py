@@ -24,7 +24,7 @@ from investment_assistant.scheduling import next_weekly_run  # noqa: E402
 
 API_URL = "http://127.0.0.1:8000/api/edinet/ingest"
 STATE_PATH = Path(".cache/investment_assistant/edinet_schedule_state.json")
-REGISTRY_PATH = "examples/source_registry_edinet_sample.yaml"
+REGISTRY_PATH = "examples/source_registry_nikkei225_edinet.yaml"
 SCAN_DAYS = 7
 
 

@@ -30,6 +30,7 @@ from investment_assistant.edinet.models import (
     latest_document,
     parse_documents,
     securities_code,
+    select_recent_documents,
 )
 from investment_assistant.edinet.registry import (
     EdinetTarget,
@@ -58,5 +59,6 @@ __all__ = [
     "parse_documents",
     "securities_code",
     "select_metrics",
+    "select_recent_documents",
     "to_rag_text",
 ]

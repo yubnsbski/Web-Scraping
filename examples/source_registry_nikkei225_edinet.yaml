@@ -1,0 +1,275 @@
+# Nikkei 225 EDINET (金融庁) targets — representative constituents.
+#
+# Same safety boundary as the rest of the registry: source_type=public_api,
+# provider=edinet, allowed=true. Financial numbers come from official filings
+# via the EDINET API (not scraped HTML).
+#
+# Per-entry fields used by the EDINET connector:
+#   doc_types   : comma/space separated EDINET docTypeCode values
+#                 (120=有価証券報告書, 140=四半期報告書, 160=半期報告書)
+#   max_periods : how many recent filings to keep per ticker (annual + quarterly).
+#                 Repeated/weekly runs accumulate history (already-saved filings
+#                 are skipped), so set --days wide enough to reach the periods you
+#                 want, then let the weekly job fill in over time.
+#
+# secCode is derived as ticker+"0", so company names here are display-only.
+sources:
+  - name: "7203_toyota_edinet"
+    ticker: "7203"
+    company: "トヨタ自動車"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "6758_sony_edinet"
+    ticker: "6758"
+    company: "ソニーグループ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "6861_keyence_edinet"
+    ticker: "6861"
+    company: "キーエンス"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "9984_softbankgroup_edinet"
+    ticker: "9984"
+    company: "ソフトバンクグループ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "8306_mufg_edinet"
+    ticker: "8306"
+    company: "三菱UFJフィナンシャル・グループ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "8316_smfg_edinet"
+    ticker: "8316"
+    company: "三井住友フィナンシャルグループ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "8766_tokiomarine_edinet"
+    ticker: "8766"
+    company: "東京海上ホールディングス"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "9432_ntt_edinet"
+    ticker: "9432"
+    company: "日本電信電話"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "9433_kddi_edinet"
+    ticker: "9433"
+    company: "KDDI"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "8058_mitsubishi_corp_edinet"
+    ticker: "8058"
+    company: "三菱商事"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "8001_itochu_edinet"
+    ticker: "8001"
+    company: "伊藤忠商事"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "8031_mitsui_edinet"
+    ticker: "8031"
+    company: "三井物産"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "6501_hitachi_edinet"
+    ticker: "6501"
+    company: "日立製作所"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "8035_tokyoelectron_edinet"
+    ticker: "8035"
+    company: "東京エレクトロン"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "4063_shinetsu_edinet"
+    ticker: "4063"
+    company: "信越化学工業"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "6098_recruit_edinet"
+    ticker: "6098"
+    company: "リクルートホールディングス"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "7974_nintendo_edinet"
+    ticker: "7974"
+    company: "任天堂"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "9983_fastretailing_edinet"
+    ticker: "9983"
+    company: "ファーストリテイリング"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "6902_denso_edinet"
+    ticker: "6902"
+    company: "デンソー"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "7267_honda_edinet"
+    ticker: "7267"
+    company: "本田技研工業"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "4502_takeda_edinet"
+    ticker: "4502"
+    company: "武田薬品工業"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "4568_daiichisankyo_edinet"
+    ticker: "4568"
+    company: "第一三共"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "6367_daikin_edinet"
+    ticker: "6367"
+    company: "ダイキン工業"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "6981_murata_edinet"
+    ticker: "6981"
+    company: "村田製作所"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "4661_olc_edinet"
+    ticker: "4661"
+    company: "オリエンタルランド"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4
+
+  - name: "9020_jreast_edinet"
+    ticker: "9020"
+    company: "東日本旅客鉄道"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+    max_periods: 4

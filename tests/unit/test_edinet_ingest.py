@@ -85,6 +85,79 @@ def test_ingest_targets_downloads_latest_and_writes_text(tmp_path: Path) -> None
     assert "配当性向: 40.1" in body
 
 
+def _quarterly_doc(doc_id: str, submit: str, period_end: str) -> dict[str, object]:
+    return {
+        "docID": doc_id,
+        "secCode": "83060",
+        "filerName": "三菱UFJ",
+        "docTypeCode": "140",
+        "docDescription": "四半期報告書",
+        "periodEnd": period_end,
+        "submitDateTime": submit,
+        "csvFlag": "1",
+    }
+
+
+def test_ingest_targets_keeps_multiple_periods(tmp_path: Path) -> None:
+    client = _FakeEdinetClient(
+        {
+            "2026-06-08": [
+                _mufg_doc("S100ANN", "2024-06-21 09:00"),
+                _quarterly_doc("S100Q3", "2024-02-14 09:00", "2023-12-31"),
+                _quarterly_doc("S100Q2", "2023-11-14 09:00", "2023-09-30"),
+            ],
+        }
+    )
+    target = EdinetTarget(
+        name="8306_MUFG",
+        ticker="8306",
+        company="MUFG",
+        doc_types=("120", "140"),
+        max_periods=2,
+    )
+
+    result = ingest_targets(
+        client=client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=tmp_path / "edinet",
+    )
+
+    # Two most-recent filings kept (annual + latest quarter), oldest dropped.
+    assert result["ingested_count"] == 2
+    assert client.downloaded == ["S100ANN", "S100Q3"]
+    assert (tmp_path / "edinet" / "8306" / "S100ANN.txt").is_file()
+    assert (tmp_path / "edinet" / "8306" / "S100Q3.txt").is_file()
+    assert not (tmp_path / "edinet" / "8306" / "S100Q2.txt").exists()
+
+
+def test_ingest_targets_skips_already_saved_documents(tmp_path: Path) -> None:
+    documents = {"2026-06-08": [_mufg_doc("S100ANN", "2024-06-21 09:00")]}
+    target = EdinetTarget(name="8306", ticker="8306", company="MUFG", doc_types=("120",))
+
+    first_client = _FakeEdinetClient(documents)
+    first = ingest_targets(
+        client=first_client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=tmp_path / "edinet",
+    )
+    assert first["ingested_count"] == 1
+    assert first_client.downloaded == ["S100ANN"]
+
+    # Second run over the same output dir must not re-download.
+    second_client = _FakeEdinetClient(documents)
+    second = ingest_targets(
+        client=second_client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=tmp_path / "edinet",
+    )
+    assert second["ingested_count"] == 0
+    assert second["cached_count"] == 1
+    assert second_client.downloaded == []
+
+
 def test_ingest_targets_reports_missing_documents(tmp_path: Path) -> None:
     client = _FakeEdinetClient({})
     target = EdinetTarget(name="7203", ticker="7203", company="トヨタ", doc_types=("120",))

@@ -21,6 +21,7 @@ sources:
     method: "api"
     allowed: true
     doc_types: "120"
+    max_periods: 4
   - name: "blocked_not_allowed"
     ticker: "9999"
     source_type: "public_api"
@@ -66,6 +67,9 @@ def test_build_edinet_targets_resolves_sec_code_and_doc_types(tmp_path: Path) ->
 
     toyota = targets["7203"]
     assert toyota.doc_types == ("120",)
+    assert toyota.max_periods == 4
+    # No explicit max_periods -> defaults to 1.
+    assert targets["8306"].max_periods == 1
 
 
 def test_build_edinet_targets_handles_missing_sources(tmp_path: Path) -> None:
@@ -85,3 +89,20 @@ def test_shipped_example_registry_parses_with_repo_loader() -> None:
     assert set(targets) == {"8306", "7203", "9432"}
     assert targets["8306"].doc_types == ("120", "140")
     assert targets["7203"].sec_code == "72030"
+
+
+def test_shipped_nikkei225_registry_parses_with_repo_loader() -> None:
+    example = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "source_registry_nikkei225_edinet.yaml"
+    )
+    targets = {t.ticker: t for t in build_edinet_targets_from_registry(example)}
+
+    # A representative set of constituents, all multi-period annual+quarterly.
+    assert len(targets) >= 25
+    assert {"7203", "6758", "8306", "9432", "8035"} <= set(targets)
+    toyota = targets["7203"]
+    assert toyota.doc_types == ("120", "140")
+    assert toyota.max_periods == 4
+    assert targets["8035"].company == "東京エレクトロン"

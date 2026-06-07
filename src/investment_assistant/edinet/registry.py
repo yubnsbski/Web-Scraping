@@ -30,11 +30,13 @@ class EdinetTarget:
         ticker: str,
         company: str | None,
         doc_types: tuple[str, ...],
+        max_periods: int = 1,
     ) -> None:
         self.name = name
         self.ticker = ticker
         self.company = company
         self.doc_types = doc_types
+        self.max_periods = max_periods
         self.sec_code = securities_code(ticker)
 
     def __eq__(self, other: object) -> bool:
@@ -45,12 +47,14 @@ class EdinetTarget:
             and self.ticker == other.ticker
             and self.company == other.company
             and self.doc_types == other.doc_types
+            and self.max_periods == other.max_periods
         )
 
     def __repr__(self) -> str:
         return (
             f"EdinetTarget(name={self.name!r}, ticker={self.ticker!r}, "
-            f"company={self.company!r}, doc_types={self.doc_types!r})"
+            f"company={self.company!r}, doc_types={self.doc_types!r}, "
+            f"max_periods={self.max_periods!r})"
         )
 
 
@@ -100,12 +104,28 @@ def _maybe_target(source: dict[str, object]) -> EdinetTarget | None:
         doc_types = tuple(sorted(FINANCIAL_DOC_TYPES))
 
     company = str(source.get("company") or "").strip() or None
+    max_periods = _positive_int(source.get("max_periods"), default=1)
     return EdinetTarget(
         name=str(source.get("name") or ticker).strip(),
         ticker=ticker,
         company=company,
         doc_types=doc_types,
+        max_periods=max_periods,
     )
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return default
+        return parsed if parsed > 0 else default
+    return default
 
 
 def _is_allowed(value: object) -> bool:

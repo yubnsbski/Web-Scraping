@@ -160,6 +160,23 @@ def latest_document(documents: Iterable[EdinetDocument]) -> EdinetDocument | Non
     return ordered[-1] if ordered else None
 
 
+def select_recent_documents(
+    documents: Iterable[EdinetDocument],
+    limit: int,
+) -> list[EdinetDocument]:
+    """Return up to ``limit`` documents, most recent first.
+
+    ``limit <= 0`` returns every document (still sorted). Used to capture
+    multiple reporting periods (e.g. the latest annual plus recent quarterly
+    filings) instead of only the single newest document.
+    """
+
+    ordered = sorted(documents, key=lambda doc: doc.sort_key, reverse=True)
+    if limit <= 0:
+        return ordered
+    return ordered[:limit]
+
+
 def _str_or_none(value: object) -> str | None:
     if value is None:
         return None

@@ -375,6 +375,7 @@ def run_edinet_ingest(
     output_dir: str | Path = "local_docs/edinet",
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     index_after: bool = True,
+    max_periods: int | None = None,
     client: EdinetClient | None = None,
 ) -> dict[str, object]:
     """Run the end-to-end EDINET ingest and optionally index the result into RAG.
@@ -396,6 +397,7 @@ def run_edinet_ingest(
         targets=targets,
         dates=dates,
         output_dir=output_dir,
+        max_periods_override=max_periods,
     )
     result["registry_path"] = str(registry_path)
     result["end_date"] = effective_end
@@ -1163,6 +1165,7 @@ def main(argv: list[str] | None = None) -> int:
     edinet_ingest_parser.add_argument("--days", type=int, default=7)
     edinet_ingest_parser.add_argument("--output-dir", default="local_docs/edinet")
     edinet_ingest_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    edinet_ingest_parser.add_argument("--max-periods", type=int)
     edinet_ingest_parser.add_argument("--no-index", action="store_true")
 
     edinet_extract_parser = subparsers.add_parser("edinet-extract")
@@ -1326,6 +1329,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             output_dir=args.output_dir,
             db_path=args.db_path,
             index_after=not args.no_index,
+            max_periods=args.max_periods,
         )
     if command == "edinet-extract":
         return run_edinet_extract(
