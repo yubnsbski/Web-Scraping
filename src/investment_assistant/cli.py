@@ -33,7 +33,12 @@ from investment_assistant.orchestration.orchestrator import OrchestrationConfig
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.indexer import index_directory
-from investment_assistant.rag.search import build_answer_context, hybrid_search, search_chunks
+from investment_assistant.rag.search import (
+    SearchResult,
+    build_answer_context,
+    hybrid_search,
+    search_chunks,
+)
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 from investment_assistant.rag.tokenize import tokenize
 from investment_assistant.scoring.models import ScoreWeights
@@ -246,6 +251,62 @@ def run_rag_index_dir(
     )
 
 
+
+def _search_chunks_for_source(
+    store: RagStore,
+    *,
+    query: str,
+    source_filter: str,
+    limit: int,
+) -> list[SearchResult]:
+    """Search chunks only from one exact RAG source path."""
+
+    terms = tokenize(query)
+    if not terms or limit <= 0:
+        return []
+
+    results: list[SearchResult] = []
+    for chunk in store.list_chunks():
+        if chunk.source != source_filter:
+            continue
+
+        score = _score_source_filtered_text(chunk.text, terms)
+        if score <= 0:
+            continue
+
+        results.append(
+            SearchResult(
+                chunk_id=chunk.chunk_id,
+                source=chunk.source,
+                chunk_index=chunk.chunk_index,
+                score=float(score),
+                text=chunk.text,
+                metadata=chunk.metadata,
+            )
+        )
+
+    ranked = sorted(results, key=lambda item: (-item.score, item.source, item.chunk_index))
+    return _dedupe_source_filtered_results(ranked)[:limit]
+
+
+def _score_source_filtered_text(text: str, terms: list[str]) -> int:
+    lowered = text.lower()
+    return sum(lowered.count(term.lower()) for term in terms)
+
+
+def _dedupe_source_filtered_results(results: list[SearchResult]) -> list[SearchResult]:
+    seen: set[str] = set()
+    deduped: list[SearchResult] = []
+
+    for result in results:
+        key = " ".join(result.text.split())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(result)
+
+    return deduped
+
 def run_rag_search(
     *,
     query: str,
@@ -441,11 +502,19 @@ def run_orchestrate_answer(
     hybrid: bool = False,
     alpha: float = 0.5,
     call_real_api: bool = False,
+    source_filter: str | None = None,
 ) -> dict[str, object]:
     """Run multi-model orchestration over RAG context."""
 
     store = RagStore(db_path)
-    if hybrid:
+    if source_filter:
+        results = _search_chunks_for_source(
+            store,
+            query=query,
+            source_filter=source_filter,
+            limit=limit,
+        )
+    elif hybrid:
         results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
     else:
         results = search_chunks(store, query=query, limit=limit)
@@ -459,6 +528,7 @@ def run_orchestrate_answer(
             ),
             "context": context,
             "results": [],
+            "source_filter": source_filter,
             "skipped": True,
         }
 
@@ -495,6 +565,7 @@ def run_orchestrate_answer(
     payload = outcome.to_dict()
     payload["context"] = context
     payload["results"] = [asdict(result) for result in results]
+    payload["source_filter"] = source_filter
     payload["call_real_api"] = call_real_api
     payload["perspectives"] = selected_perspectives
     return payload

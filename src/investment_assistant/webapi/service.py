@@ -130,9 +130,29 @@ def _orchestrate(body: JsonDict) -> JsonDict:
     call_real_api, real_api_note = _real_api_decision(body)
     real_api_requested = _as_bool(body.get("call_real_api"), False)
     query = _require_str(body, "query")
+    target_source_value = body.get("target_source")
+
+    if target_source_value is not None and not isinstance(target_source_value, str):
+        raise ApiError("target_source must be a string")
+
+    target_source = (
+        target_source_value.strip()
+        if isinstance(target_source_value, str)
+        else ""
+    )
+
+    source_constraint = (
+        "\n\n【対象資料制約】"
+        + f"\n対象資料: {target_source}"
+        + "\n上記sourceのローカル文書だけを根拠にしてください。"
+        + "\n他sourceの情報は混ぜず、不足する場合は不明・要追加取得と明記してください。"
+        if target_source
+        else ""
+    )
 
     process_instruction = (
         query
+        + source_constraint
         + "\n\n【生成プロセス】"
         + "\nAI 1: 財務・配当・キャッシュフローだけを評価する。"
         + "\nAI 2: 下落リスク・競争環境・事業リスクだけを評価する。"
@@ -155,7 +175,10 @@ def _orchestrate(body: JsonDict) -> JsonDict:
         hybrid=bool(body.get("hybrid", True)),
         alpha=_as_float(body.get("alpha"), 0.5),
         call_real_api=call_real_api,
+        source_filter=target_source or None,
     )
+
+    result["target_source"] = target_source or None
 
     result["orchestration"] = {
         "drafter": "AI 1/2/3",
