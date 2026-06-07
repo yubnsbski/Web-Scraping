@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant import cli
+from investment_assistant.financials import (
+    compare_financials,
+    load_financials,
+)
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
 from investment_assistant.portfolio.loader import (
     load_dividends,
@@ -362,6 +366,11 @@ def _portfolio_dividends(body: JsonDict) -> JsonDict:
 def _portfolio_performance(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/portfolio_performance_sample.csv")
     return summarize_performance(load_performance(path))
+
+
+def _financials_compare(body: JsonDict) -> JsonDict:
+    path = str(body.get("path") or "examples/financials_sample.csv")
+    return compare_financials(load_financials(path))
 
 
 # --- helpers ---------------------------------------------------------------
@@ -746,6 +755,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/forecast/predict"): _forecast_predict,
     ("POST", "/api/portfolio/dividends"): _portfolio_dividends,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
+    ("POST", "/api/financials/compare"): _financials_compare,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
