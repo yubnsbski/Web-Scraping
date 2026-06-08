@@ -9,6 +9,7 @@ type ChatMessage = {
   content: string;
   meta?: string;
   sources?: Json[];
+  question?: string;
 };
 
 type SourcePreset = {
@@ -500,6 +501,52 @@ function SearchTab() {
 
 // --- AI answer (orchestration, offline) -----------------------------------
 
+function FeedbackButtons({ message }: { message: ChatMessage }) {
+  const [sent, setSent] = useState<"up" | "down" | null>(null);
+
+  const rate = async (rating: "up" | "down") => {
+    if (sent) return;
+    setSent(rating);
+    try {
+      await api("/api/feedback", {
+        rating,
+        sources: (message.sources ?? [])
+          .map((s) => String(s.source ?? ""))
+          .filter(Boolean),
+        question: message.question ?? "",
+        answer_preview: message.content.slice(0, 200),
+      });
+    } catch {
+      setSent(null);
+    }
+  };
+
+  if (sent) {
+    return (
+      <div className="feedback">
+        <small className="feedback-thanks">
+          {sent === "up" ? "👍" : "👎"} 記録しました。次回以降の検索ランキングに反映されます。
+        </small>
+      </div>
+    );
+  }
+  return (
+    <div className="feedback">
+      <span className="feedback-label">この回答は役立ちましたか？</span>
+      <button className="feedback-btn" onClick={() => void rate("up")} aria-label="役に立った">
+        👍
+      </button>
+      <button
+        className="feedback-btn"
+        onClick={() => void rate("down")}
+        aria-label="役に立たなかった"
+      >
+        👎
+      </button>
+    </div>
+  );
+}
+
 function AnswerTab() {
   const [query, setQuery] = useState("選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
@@ -565,6 +612,7 @@ function AnswerTab() {
           content: cleanAssistantAnswer(result.final_answer ?? result.answer, result.skipped),
           meta: result.skipped ? "RAG未ヒット" : "回答",
           sources: result.results ?? [],
+          question: trimmed,
         },
       ]);
     } catch (e) {
@@ -629,6 +677,9 @@ function AnswerTab() {
                 </ul>
               </details>
             )}
+            {message.role === "assistant" &&
+              message.sources &&
+              message.sources.length > 0 && <FeedbackButtons message={message} />}
           </article>
         ))}
       </div>

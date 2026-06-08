@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 
 from investment_assistant.rag.embeddings import Embedder, HashingEmbedder, cosine
 from investment_assistant.rag.store import RagStore, StoredChunk
@@ -183,6 +184,31 @@ def build_answer_context(
         blocks.append(block)
         used_chars += len(block) + 2
     return "\n\n".join(blocks)
+
+
+def boost_by_feedback(
+    results: list[SearchResult],
+    source_scores: dict[str, int],
+    *,
+    weight: float = 0.15,
+) -> list[SearchResult]:
+    """Gently re-rank results by accumulated user feedback per source.
+
+    A source's net feedback (👍 = +1, 👎 = -1) nudges its score by at most
+    ``±weight`` (bounded via tanh), so liked sources float up and disliked ones
+    sink — without letting one rating dominate lexical/semantic relevance.
+    Returns a new score-sorted list; with no feedback the order is unchanged.
+    """
+
+    if not source_scores or weight <= 0:
+        return results
+    adjusted: list[SearchResult] = []
+    for result in results:
+        net = source_scores.get(result.source, 0)
+        factor = 1 + weight * math.tanh(net / 3)
+        adjusted.append(replace(result, score=result.score * factor))
+    adjusted.sort(key=lambda result: (-result.score, result.source, result.chunk_index))
+    return adjusted
 
 
 def diversify_results(

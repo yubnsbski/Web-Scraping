@@ -410,6 +410,31 @@ def _job_status(body: JsonDict) -> JsonDict:
     return job
 
 
+def _feedback(body: JsonDict) -> JsonDict:
+    from investment_assistant.feedback import DEFAULT_FEEDBACK_DB_PATH, FeedbackStore
+
+    raw_sources = body.get("sources")
+    sources = [str(item) for item in raw_sources] if isinstance(raw_sources, list) else []
+    store = FeedbackStore(str(body.get("feedback_db") or DEFAULT_FEEDBACK_DB_PATH))
+    try:
+        result = store.record(
+            rating=_require_str(body, "rating"),
+            sources=sources,
+            question=str(body.get("question") or ""),
+            answer_preview=str(body.get("answer_preview") or ""),
+        )
+    except ValueError as exc:
+        raise ApiError(str(exc)) from exc
+    result["summary"] = store.summary()
+    return result
+
+
+def _feedback_stats(body: JsonDict) -> JsonDict:
+    from investment_assistant.feedback import DEFAULT_FEEDBACK_DB_PATH, FeedbackStore
+
+    return FeedbackStore(str(body.get("feedback_db") or DEFAULT_FEEDBACK_DB_PATH)).summary()
+
+
 def _knowledge_diff(body: JsonDict) -> JsonDict:
     from investment_assistant import knowledge
 
@@ -848,6 +873,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/jobs/status"): _job_status,
     ("POST", "/api/storage/prune"): _storage_prune,
     ("POST", "/api/knowledge/diff"): _knowledge_diff,
+    ("POST", "/api/feedback"): _feedback,
+    ("POST", "/api/feedback/stats"): _feedback_stats,
 }
 
 
