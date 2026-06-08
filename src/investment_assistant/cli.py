@@ -53,6 +53,7 @@ from investment_assistant.rag.indexer import index_directory
 from investment_assistant.rag.search import (
     SearchResult,
     build_answer_context,
+    diversify_results,
     hybrid_search,
     search_chunks,
 )
@@ -894,17 +895,24 @@ def run_orchestrate_answer(
     """Run multi-model orchestration over RAG context."""
 
     store = RagStore(db_path)
+    # Retrieve a larger candidate pool, then diversify down so the context spans
+    # more documents instead of many redundant passages from one filing.
+    pool = max(limit, min(limit * 3, 48))
     if source_filter:
         results = _search_chunks_for_source(
             store,
             query=query,
             source_filter=source_filter,
-            limit=limit,
+            limit=pool,
         )
+        # Single source: dedup only, do not cap per-source.
+        results = diversify_results(results, limit=limit, max_per_source=limit)
     elif hybrid:
-        results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
+        results = hybrid_search(store, query=query, limit=pool, alpha=alpha)
+        results = diversify_results(results, limit=limit)
     else:
-        results = search_chunks(store, query=query, limit=limit)
+        results = search_chunks(store, query=query, limit=pool)
+        results = diversify_results(results, limit=limit)
     context = build_answer_context(results)
     if not results:
         return {

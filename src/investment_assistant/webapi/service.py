@@ -209,7 +209,7 @@ def _orchestrate(body: JsonDict) -> JsonDict:
     result = cli.run_orchestrate_answer(
         query=process_instruction,
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
-        limit=_as_int(body.get("limit"), 8),
+        limit=_as_int(body.get("limit"), 16),
         drafts=3,
         include_critique=bool(body.get("critique", True)),
         hybrid=bool(body.get("hybrid", True)),

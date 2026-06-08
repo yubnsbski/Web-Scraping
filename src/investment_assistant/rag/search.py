@@ -9,8 +9,10 @@ from investment_assistant.rag.store import RagStore, StoredChunk
 from investment_assistant.rag.tokenize import tokenize
 
 _CONTEXT_METADATA_KEYS = ("source_url", "fetched_at", "status_code", "content_type")
-DEFAULT_MAX_CONTEXT_CHARS = 6000
+DEFAULT_MAX_CONTEXT_CHARS = 10000
 DEFAULT_HYBRID_ALPHA = 0.5
+# Near-duplicate threshold (token Jaccard) for diversity selection.
+_DUPLICATE_JACCARD = 0.85
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,64 @@ def build_answer_context(
         blocks.append(block)
         used_chars += len(block) + 2
     return "\n\n".join(blocks)
+
+
+def diversify_results(
+    results: list[SearchResult],
+    *,
+    limit: int,
+    max_per_source: int = 3,
+) -> list[SearchResult]:
+    """Select a diverse, de-duplicated top-``limit`` from a larger ranked pool.
+
+    Drops near-duplicate passages and caps how many chunks any single source can
+    contribute, so the context spans more documents instead of many redundant
+    passages from one filing. Over-cap chunks are only used to backfill when the
+    capped pass cannot reach ``limit``. Input is assumed score-ordered.
+    """
+
+    if limit <= 0:
+        return []
+
+    selected: list[SearchResult] = []
+    deferred: list[SearchResult] = []
+    per_source: dict[str, int] = {}
+    fingerprints: list[tuple[str, frozenset[str]]] = []
+
+    def _is_duplicate(result: SearchResult) -> bool:
+        tokens = frozenset(tokenize(result.text))
+        if not tokens:
+            return False
+        for source, prior in fingerprints:
+            if source != result.source or not prior:
+                continue
+            overlap = len(tokens & prior) / len(tokens | prior)
+            if overlap >= _DUPLICATE_JACCARD:
+                return True
+        return False
+
+    def _accept(result: SearchResult) -> None:
+        selected.append(result)
+        per_source[result.source] = per_source.get(result.source, 0) + 1
+        fingerprints.append((result.source, frozenset(tokenize(result.text))))
+
+    for result in results:
+        if len(selected) >= limit:
+            break
+        if _is_duplicate(result):
+            continue
+        if per_source.get(result.source, 0) >= max_per_source:
+            deferred.append(result)
+            continue
+        _accept(result)
+
+    for result in deferred:
+        if len(selected) >= limit:
+            break
+        if not _is_duplicate(result):
+            _accept(result)
+
+    return selected
 
 
 def _format_context_header(index: int, result: SearchResult) -> str:
