@@ -5,6 +5,7 @@ import json
 import pytest
 
 from investment_assistant.edinet.client import EdinetApiError, EdinetClient
+from investment_assistant.ingestion.rate_limit import DomainRateLimiter
 from investment_assistant.ingestion.transport import HttpResponse
 
 
@@ -105,3 +106,24 @@ def test_download_document_raises_on_error_status() -> None:
     client = EdinetClient(transport=transport, api_key="k")
     with pytest.raises(EdinetApiError, match="status=404"):
         client.download_document("S100MISSING")
+
+
+def test_client_rate_limits_requests_to_same_host() -> None:
+    waits: list[float] = []
+    ticks = iter([0.0, 0.0, 0.0])  # first wait, then two clock reads
+    limiter = DomainRateLimiter(
+        min_interval_seconds=0.5,
+        clock=lambda: next(ticks, 0.0),
+        sleeper=waits.append,
+    )
+    client = EdinetClient(
+        transport=_FakeTransport(_json_response({"results": []})),
+        api_key="k",
+        rate_limiter=limiter,
+    )
+
+    # First call has no prior timestamp -> no wait; second must be spaced.
+    client.list_documents("2024-06-21")
+    client.list_documents("2024-06-22")
+
+    assert waits == [0.5]
