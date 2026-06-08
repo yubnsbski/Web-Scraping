@@ -602,3 +602,78 @@ details summary {
   color: var(--text);
   font-size: 13px;
 }
+
+/* --- Dashboard (運用実績) polish ------------------------------------- */
+.metric-card.pos b { color: var(--safe); }
+.metric-card.neg b { color: var(--error); }
+.metric-card.accent b { color: var(--accent); }
+.metric-card.warn b { color: var(--warn); }
+.metric-card.pos,
+.metric-card.neg,
+.metric-card.accent,
+.metric-card.warn { position: relative; overflow: hidden; }
+.metric-card.pos::after,
+.metric-card.neg::after,
+.metric-card.accent::after,
+.metric-card.warn::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+}
+.metric-card.pos::after { background: linear-gradient(90deg, var(--safe), transparent); }
+.metric-card.neg::after { background: linear-gradient(90deg, var(--error), transparent); }
+.metric-card.accent::after { background: linear-gradient(90deg, var(--accent), transparent); }
+.metric-card.warn::after { background: linear-gradient(90deg, var(--warn), transparent); }
+
+.dash-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.chart-card { position: relative; overflow: hidden; }
+.chart-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+.chart-card-wide { grid-column: 1 / -1; }
+.chart-card > b { display: block; margin-bottom: 12px; color: var(--text); letter-spacing: 0.02em; }
+
+.area-chart { width: 100%; height: auto; display: block; }
+.area-last { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.chart-bars {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  min-height: 168px;
+  padding-top: 4px;
+}
+.chart-bar { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.chart-bar-track {
+  width: 100%;
+  height: 120px;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.05), rgba(56, 189, 248, 0));
+}
+.chart-bar-track i {
+  display: block;
+  width: 100%;
+  border-radius: 8px 8px 4px 4px;
+  background: linear-gradient(180deg, var(--accent), rgba(56, 189, 248, 0.22));
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
+  transition: height 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.chart-bar-val { color: var(--text); font-variant-numeric: tabular-nums; font-size: 0.72rem; }
+.chart-bar-label { color: var(--muted); }
+
+@media (max-width: 720px) {
+  .dash-charts { grid-template-columns: 1fr; }
+}
