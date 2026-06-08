@@ -410,6 +410,17 @@ def _job_status(body: JsonDict) -> JsonDict:
     return job
 
 
+def _knowledge_diff(body: JsonDict) -> JsonDict:
+    from investment_assistant import knowledge
+
+    return knowledge.run_knowledge_diff(
+        db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        snapshot_path=str(body.get("snapshot_path") or knowledge.DEFAULT_SNAPSHOT_PATH),
+        save=_as_bool(body.get("save"), True),
+    )
+
+
 def _storage_prune(body: JsonDict) -> JsonDict:
     from investment_assistant import maintenance
     from investment_assistant.ingestion.fetcher import DEFAULT_HTTP_CACHE_PATH
@@ -836,6 +847,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
     ("POST", "/api/jobs/status"): _job_status,
     ("POST", "/api/storage/prune"): _storage_prune,
+    ("POST", "/api/knowledge/diff"): _knowledge_diff,
 }
 
 
