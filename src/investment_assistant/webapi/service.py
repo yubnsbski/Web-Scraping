@@ -399,6 +399,26 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
     )
 
 
+def _storage_prune(body: JsonDict) -> JsonDict:
+    from investment_assistant import maintenance
+    from investment_assistant.ingestion.fetcher import DEFAULT_HTTP_CACHE_PATH
+
+    raw_roots = body.get("docs_roots")
+    roots: list[str | Path] = (
+        [str(item) for item in raw_roots]
+        if isinstance(raw_roots, list) and raw_roots
+        else ["local_docs/edinet", "local_docs/crawl"]
+    )
+    prune_cache = _as_bool(body.get("prune_cache"), True)
+    cache_path = str(body.get("cache_path") or DEFAULT_HTTP_CACHE_PATH) if prune_cache else None
+    return maintenance.run_storage_prune(
+        docs_roots=roots,
+        cache_path=cache_path,
+        keep_per_dir=_as_int(body.get("keep_per_dir"), 8),
+        http_max_rows=_as_int(body.get("http_max_rows"), 500),
+    )
+
+
 def _portfolio_dividends(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/portfolio_dividends_sample.csv")
     return summarize_dividends(load_dividends(path))
@@ -802,6 +822,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
     ("POST", "/api/edinet/ingest"): _edinet_ingest,
+    ("POST", "/api/storage/prune"): _storage_prune,
 }
 
 

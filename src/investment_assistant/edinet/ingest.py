@@ -39,7 +39,7 @@ from investment_assistant.edinet.models import (
     select_recent_documents,
 )
 from investment_assistant.edinet.registry import EdinetTarget
-from investment_assistant.financials import compare_financials
+from investment_assistant.financials import compare_financials, load_financials
 from investment_assistant.financials.models import FinancialPoint
 from investment_assistant.ingestion.fetcher import reject_path_traversal
 from investment_assistant.observability import get_logger
@@ -138,6 +138,10 @@ def ingest_targets(
             results.append(record)
 
     deduped = dedupe_points(points)
+    # Merge with the durable history so pruning bulky filing files never loses
+    # the (tiny) dividend record. This run's points win on overlap.
+    csv_path = base_dir / FINANCIALS_CSV_NAME
+    merged = dedupe_points([*deduped, *_load_existing_points(csv_path)])
     summary: dict[str, object] = {
         "output_dir": str(base_dir),
         "scanned_dates": scanned_dates,
@@ -146,14 +150,22 @@ def ingest_targets(
         "ingested_count": ingested,
         "cached_count": cached,
         "financial_points": len(deduped),
+        "financial_points_total": len(merged),
         "results": results,
     }
-    if deduped:
-        summary["financials_csv"] = write_financials_csv(
-            deduped, base_dir / FINANCIALS_CSV_NAME
-        )
-        summary["comparison"] = compare_financials(deduped)
+    if merged:
+        summary["financials_csv"] = write_financials_csv(merged, csv_path)
+        summary["comparison"] = compare_financials(merged)
     return summary
+
+
+def _load_existing_points(csv_path: Path) -> list[FinancialPoint]:
+    if not csv_path.is_file():
+        return []
+    try:
+        return load_financials(csv_path)
+    except (ValueError, OSError):
+        return []
 
 
 def _ingest_document(

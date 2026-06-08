@@ -447,6 +447,26 @@ def run_crawl(
     return output
 
 
+def run_storage_prune(
+    *,
+    docs_dirs: list[str] | None = None,
+    keep_per_dir: int = 8,
+    http_max_rows: int = 500,
+    prune_cache: bool = True,
+) -> dict[str, object]:
+    """Bound disk growth: keep recent filings per ticker and trim the HTTP cache."""
+
+    from investment_assistant import maintenance
+
+    roots: list[str | Path] = list(docs_dirs or ["local_docs/edinet", "local_docs/crawl"])
+    return maintenance.run_storage_prune(
+        docs_roots=roots,
+        cache_path=DEFAULT_HTTP_CACHE_PATH if prune_cache else None,
+        keep_per_dir=keep_per_dir,
+        http_max_rows=http_max_rows,
+    )
+
+
 def _save_crawl_pages(report: CrawlReport, folder: Path) -> list[str]:
     saved: list[str] = []
     for index, page in enumerate(report.target_pages, start=1):
@@ -1262,6 +1282,12 @@ def main(argv: list[str] | None = None) -> int:
     edinet_documents_parser.add_argument("--ticker")
     edinet_documents_parser.add_argument("--all-doc-types", action="store_true")
 
+    storage_prune_parser = subparsers.add_parser("storage-prune")
+    storage_prune_parser.add_argument("--docs-dir", action="append", dest="docs_dirs")
+    storage_prune_parser.add_argument("--keep-per-dir", type=int, default=8)
+    storage_prune_parser.add_argument("--http-max-rows", type=int, default=500)
+    storage_prune_parser.add_argument("--no-cache", action="store_true")
+
     crawl_parser = subparsers.add_parser("crawl")
     crawl_parser.add_argument("--path", required=True)
     crawl_parser.add_argument("--output-dir", default="local_docs/crawl")
@@ -1437,6 +1463,13 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             date=args.date,
             ticker=args.ticker,
             financial_only=not args.all_doc_types,
+        )
+    if command == "storage-prune":
+        return run_storage_prune(
+            docs_dirs=args.docs_dirs,
+            keep_per_dir=args.keep_per_dir,
+            http_max_rows=args.http_max_rows,
+            prune_cache=not args.no_cache,
         )
     if command == "crawl":
         return run_crawl(

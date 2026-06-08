@@ -22,30 +22,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from investment_assistant.scheduling import next_weekly_run  # noqa: E402
 
-API_URL = "http://127.0.0.1:8000/api/edinet/ingest"
+API_BASE = "http://127.0.0.1:8000/api"
+API_URL = f"{API_BASE}/edinet/ingest"
+PRUNE_URL = f"{API_BASE}/storage/prune"
 STATE_PATH = Path(".cache/investment_assistant/edinet_schedule_state.json")
 REGISTRY_PATH = "examples/source_registry_nikkei225_edinet.yaml"
 SCAN_DAYS = 7
+# Retain the most recent N filings per ticker so storage stays bounded; the
+# durable dividend history lives in financials.csv and is not pruned.
+KEEP_PER_DIR = 8
+
+
+def _post(url: str, body: dict[str, object]) -> dict[str, object]:
+    req = Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(req, timeout=300) as res:  # noqa: S310 - fixed localhost endpoint
+        result: dict[str, object] = json.loads(res.read().decode("utf-8"))
+    return result
 
 
 def run_once() -> None:
-    body = json.dumps(
+    payload = _post(
+        API_URL,
         {
             "registry_path": REGISTRY_PATH,
             "days": SCAN_DAYS,
             "db_path": ".cache/investment_assistant/rag.sqlite",
             "index_after_fetch": True,
-        }
-    ).encode("utf-8")
-
-    req = Request(
-        API_URL,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        },
     )
-    with urlopen(req, timeout=300) as res:  # noqa: S310 - fixed localhost endpoint
-        payload = json.loads(res.read().decode("utf-8"))
+    # Auto-delete old data so weekly accumulation cannot grow unbounded.
+    payload["storage_prune"] = _post(PRUNE_URL, {"keep_per_dir": KEEP_PER_DIR})
 
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(
