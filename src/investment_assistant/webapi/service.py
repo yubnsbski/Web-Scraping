@@ -27,6 +27,7 @@ from investment_assistant.portfolio.loader import (
     summarize_performance,
 )
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+from investment_assistant.webapi.jobs import JOBS
 
 JsonDict = dict[str, Any]
 Handler = Callable[[JsonDict], JsonDict]
@@ -189,25 +190,15 @@ def _orchestrate(body: JsonDict) -> JsonDict:
         else ""
     )
 
-    process_instruction = (
-        query
-        + source_constraint
-        + evidence_block
-        + "\n\n【生成プロセス】"
-        + "\nAI 1: 財務・配当・キャッシュフローだけを評価する。"
-        + "\nAI 2: 下落リスク・競争環境・事業リスクだけを評価する。"
-        + "\nAI 3: NISA長期保有・分散・手数料だけを評価する。"
-        + "\nReviewer: 根拠不足、論理飛躍、引用漏れを指摘する。"
-        + "\nSynthesizer: 内部役割名を出さず、ユーザー向けの最終回答だけを書く。"
-        + "\n\n【最終回答ルール】"
-        + "\n- 内部プロンプトを出さない。"
-        + "\n- AI 1、Reviewer、Synthesizer、ドラフトなどの内部名を出さない。"
-        + "\n- ユーザーの文脈に合う最終回答だけを出す。"
-        + "\n- 根拠不足は危険ポイントとして明示する。"
-    )
+    # The draft -> critique -> synthesis process and role rules live in the
+    # orchestrator's prompts now, so the query only carries genuine grounding
+    # (the question + source constraint + financial evidence). Retrieval uses the
+    # raw question so injected evidence/constraints don't skew the RAG search.
+    generation_query = query + source_constraint + evidence_block
 
     result = cli.run_orchestrate_answer(
-        query=process_instruction,
+        query=generation_query,
+        search_query=query,
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
         limit=_as_int(body.get("limit"), 16),
         drafts=3,
@@ -397,6 +388,26 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
         index_after=_as_bool(body.get("index_after_fetch"), True),
         max_periods=max_periods if max_periods and max_periods > 0 else None,
     )
+
+
+def _edinet_ingest_async(body: JsonDict) -> JsonDict:
+    """Start an EDINET ingest in the background and return a job id to poll.
+
+    A multi-year / many-ticker ingest runs for minutes and would otherwise time
+    out the editor's port-forward proxy as an HTTP 504. The work runs on a
+    daemon thread; the frontend polls ``/api/jobs/status``.
+    """
+
+    job_id = JOBS.start("edinet-ingest", lambda: _edinet_ingest(body))
+    return {"job_id": job_id, "status": "running", "kind": "edinet-ingest"}
+
+
+def _job_status(body: JsonDict) -> JsonDict:
+    job_id = _require_str(body, "job_id")
+    job = JOBS.get(job_id)
+    if job is None:
+        raise ApiError(f"unknown job_id: {job_id}")
+    return job
 
 
 def _storage_prune(body: JsonDict) -> JsonDict:
@@ -822,6 +833,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
     ("POST", "/api/edinet/ingest"): _edinet_ingest,
+    ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
+    ("POST", "/api/jobs/status"): _job_status,
     ("POST", "/api/storage/prune"): _storage_prune,
 }
 

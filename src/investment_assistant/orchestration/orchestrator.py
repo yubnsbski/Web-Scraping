@@ -19,11 +19,12 @@ DRAFT_TASK_TYPE = "rag_answer"
 CRITIQUE_TASK_TYPE = "important_report_summary"
 SYNTHESIS_TASK_TYPE = "rag_answer"
 
-# Default perspectives used to diversify self-consistency drafts.
+# Default perspectives used to diversify self-consistency drafts. Aligned to the
+# investment angles the offline client recognizes so each draft is specialized.
 _DEFAULT_PERSPECTIVES = (
-    "コスト・手数料の観点",
-    "リスク・ボラティリティの観点",
-    "分散・長期保有の観点",
+    "配当・財務安全性",
+    "下落リスク・競争環境",
+    "NISA長期保有・分散",
 )
 
 
@@ -163,7 +164,7 @@ class MultiModelOrchestrator:
             and "統合最終回答" not in result.answer
             and not result.answer.startswith("FINAL")
         ):
-            result.answer = f"統合最終回答\\n\\n{result.answer}"
+            result.answer = f"統合最終回答\n\n{result.answer}"
         _logger.info(
             "orchestration done drafts=%d critique=%s synthesis_source=%s",
             len(draft_texts),

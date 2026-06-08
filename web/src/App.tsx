@@ -278,6 +278,30 @@ function useAsync<T>() {
   return { loading, error, data, run };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Start a background job and poll until it finishes, so long operations (e.g. a
+// multi-minute EDINET ingest) don't time out the port-forward proxy (HTTP 504).
+// Falls back to a synchronous result if the backend didn't return a job id.
+async function runJob(
+  startPath: string,
+  body: unknown,
+  { intervalMs = 3000, maxAttempts = 600 } = {},
+): Promise<Json> {
+  const started = await api<Json>(startPath, body);
+  const jobId = String(started.job_id ?? "");
+  if (!jobId) return started;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await sleep(intervalMs);
+    const job = await api<Json>("/api/jobs/status", { job_id: jobId });
+    if (job.status === "done") return (job.result as Json) ?? {};
+    if (job.status === "error") throw new Error(String(job.error ?? "job failed"));
+  }
+  throw new Error("ジョブがタイムアウトしました（バックグラウンドでは継続中の可能性があります）");
+}
+
 function Field(props: { label: string; children: ReactNode }) {
   return (
     <label className="field">
@@ -992,7 +1016,7 @@ function ScrapeTab() {
 
   const runEdinetIngest = () =>
     edinetState.run(() =>
-      api<Json>("/api/edinet/ingest", {
+      runJob("/api/edinet/ingest-async", {
         registry_path: edinetRegistry,
         days: edinetDays,
         years: edinetYears > 0 ? edinetYears : undefined,
@@ -1244,6 +1268,30 @@ function trendLabel(value: unknown): string {
   return TREND_LABELS[String(value)] ?? String(value ?? "-");
 }
 
+function fmtYen(value: number): string {
+  return `¥${value.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}`;
+}
+
+function fmtRatio(value: number): string {
+  // EDINET reports 自己資本比率 as either a 0–1 ratio or a 0–100 percent.
+  const pct = value <= 1 ? value * 100 : value;
+  return `${pct.toFixed(1)}%`;
+}
+
+// With only one period a trend cannot be computed, so show the single latest
+// actual value (marked "1期のみ") instead of an unhelpful "データ不足".
+function trendOrSingle(
+  trend: unknown,
+  latest: unknown,
+  fmt: (value: number) => string,
+): string {
+  if (String(trend) !== "insufficient") return trendLabel(trend);
+  if (typeof latest === "number" && Number.isFinite(latest) && latest !== 0) {
+    return `${fmt(latest)}（1期のみ）`;
+  }
+  return "データ不足";
+}
+
 function EdinetComparisonTable(props: { companies: Json[] }) {
   return (
     <div className="edinet-comparison">
@@ -1269,17 +1317,17 @@ function EdinetComparisonTable(props: { companies: Json[] }) {
                   {c.ticker} {c.name}
                 </td>
                 <td>{years}</td>
-                <td>{trendLabel(c.dividend_trend)}</td>
+                <td>{trendOrSingle(c.dividend_trend, c.latest_dividend_per_share, fmtYen)}</td>
                 <td>{cuts.length > 0 ? cuts.join(", ") : "なし"}</td>
-                <td>{trendLabel(c.operating_cf_trend)}</td>
-                <td>{trendLabel(c.equity_ratio_trend)}</td>
+                <td>{trendOrSingle(c.operating_cf_trend, c.latest_operating_cf, fmtYen)}</td>
+                <td>{trendOrSingle(c.equity_ratio_trend, c.latest_equity_ratio, fmtRatio)}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
       <p className="hint">
-        減配履歴・トレンドは取得済みの複数期から機械的に算出したものです。投資助言ではありません。
+        減配履歴・トレンドは取得済みの複数期から機械的に算出したものです。1期のみの銘柄は最新の実数値（「1期のみ」）を表示します。投資助言ではありません。
       </p>
     </div>
   );

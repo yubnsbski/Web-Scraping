@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -597,6 +597,27 @@ def run_rag_index_dir(
 
 
 
+def _source_filter_matches(chunk_source: str, source_filter: str) -> bool:
+    """Match a chunk source against a target filter flexibly.
+
+    Accepts an exact path, a directory prefix (e.g. ``local_docs/edinet/9432``),
+    or a 4-digit ticker code appearing as a path segment — so selecting a ticker
+    in the UI matches its documents regardless of which corpus directory holds
+    them (EDINET filings live under ``local_docs/edinet/<ticker>/...`` while IR
+    crawls live under ``local_docs/nikkei225/<ticker>/...``).
+    """
+
+    target = source_filter.strip()
+    if not target:
+        return True
+    if chunk_source == target:
+        return True
+    if chunk_source.startswith(target.rstrip("/") + "/"):
+        return True
+    match = re.search(r"\d{4}", target)
+    return bool(match and f"/{match.group(0)}/" in f"/{chunk_source}")
+
+
 def _search_chunks_for_source(
     store: RagStore,
     *,
@@ -604,7 +625,7 @@ def _search_chunks_for_source(
     source_filter: str,
     limit: int,
 ) -> list[SearchResult]:
-    """Search chunks only from one exact RAG source path."""
+    """Search chunks restricted to one target source (exact path, prefix, or ticker)."""
 
     terms = tokenize(query)
     if not terms or limit <= 0:
@@ -612,7 +633,7 @@ def _search_chunks_for_source(
 
     results: list[SearchResult] = []
     for chunk in store.list_chunks():
-        if chunk.source != source_filter:
+        if not _source_filter_matches(chunk.source, source_filter):
             continue
 
         score = _score_source_filtered_text(chunk.text, terms)
@@ -907,31 +928,29 @@ def run_orchestrate_answer(
     alpha: float = 0.5,
     call_real_api: bool = False,
     source_filter: str | None = None,
+    search_query: str | None = None,
 ) -> dict[str, object]:
-    """Run multi-model orchestration over RAG context."""
+    """Run multi-model orchestration over RAG context.
 
-    # Embed queries in the same space the corpus was indexed with (gemini vs
-    # hashing), read from DB meta so old hashing DBs keep working.
-    embedder = resolve_embedder(read_stored_embedder_name(db_path))
-    store = RagStore(db_path, embedder=embedder)
-    # Retrieve a larger candidate pool, then diversify down so the context spans
-    # more documents instead of many redundant passages from one filing.
-    pool = max(limit, min(limit * 3, 48))
+    ``query`` is the full prompt shown to the models; ``search_query`` (when
+    given) is used for retrieval instead, so injected grounding text (financial
+    evidence, source constraints) does not skew the RAG search. Draft diversity
+    is owned by the orchestrator's perspectives — one specialized draft per
+    requested ``drafts``.
+    """
+
+
     if source_filter:
         results = _search_chunks_for_source(
             store,
-            query=query,
+            query=retrieval_query,
             source_filter=source_filter,
             limit=pool,
         )
         # Single source: dedup only, do not cap per-source.
         results = diversify_results(results, limit=limit, max_per_source=limit)
     elif hybrid:
-        results = hybrid_search(store, query=query, limit=pool, alpha=alpha, embedder=embedder)
-        results = diversify_results(results, limit=limit)
-    else:
-        results = search_chunks(store, query=query, limit=pool)
-        results = diversify_results(results, limit=limit)
+
     context = build_answer_context(results)
     if not results:
         return {
@@ -946,42 +965,18 @@ def run_orchestrate_answer(
             "skipped": True,
         }
 
-    perspectives = [
-        "配当・キャッシュフロー・財務安全性だけを評価する。株価トレンドや短期需給には触れない。",
-        "株価下落リスク・景気感応度・競争環境だけを評価する。配当利回りやNISA制度には触れない。",
-        "NISA長期保有・分散・手数料だけを評価する。短期売買判断やチャート分析には触れない。",
-        "データ不足・未検証事項・判断保留すべき危険ポイントだけを評価する。結論を急がない。",
-        "反対意見・弱気シナリオだけを評価する。楽観材料は補足に留める。",
-    ]
-    selected_perspectives = perspectives[:1]
-
-    perspective_block = "\\n".join(
-        f"ドラフト{i + 1}の専用観点: {perspective}"
-        for i, perspective in enumerate(selected_perspectives)
+    config = OrchestrationConfig(
+        n_drafts=max(1, drafts),
+        include_critique=include_critique,
     )
-    query_with_perspectives = (
-        query
-        + "\\n\\n以下の観点をドラフトごとに厳守してください。"
-        + "\\n"
-        + perspective_block
-        + "\\n各ドラフトは他ドラフトと同じ論点を主軸にしないでください。"
-    )
-
-    orchestrator = build_orchestrator(
-        config_path,
-        config=OrchestrationConfig(
-            n_drafts=1,
-            include_critique=include_critique,
-        ),
-        call_real_api=call_real_api,
-    )
-    outcome = orchestrator.run(query=query_with_perspectives, context=context)
+    orchestrator = build_orchestrator(config_path, config=config, call_real_api=call_real_api)
+    outcome = orchestrator.run(query=query, context=context)
     payload = outcome.to_dict()
     payload["context"] = context
     payload["results"] = [asdict(result) for result in results]
     payload["source_filter"] = source_filter
     payload["call_real_api"] = call_real_api
-    payload["perspectives"] = selected_perspectives
+    payload["perspectives"] = list(config.perspectives[: config.n_drafts])
     return payload
 
 
