@@ -421,6 +421,12 @@ button:disabled {
   margin-top: 12px;
 }
 
+.evidence-block {
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
 .edinet-comparison h4 {
   margin: 0 0 8px;
 }

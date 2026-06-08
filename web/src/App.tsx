@@ -697,6 +697,12 @@ function AnswerTab() {
 
       <Status loading={loading} error={error} />
       {lastData?.real_api_note && <p className="callout warn-callout">{lastData.real_api_note}</p>}
+      {lastData?.financial_evidence && (
+        <div className="callout">
+          <b>財務根拠（EDINET公式数値・減配履歴）</b>
+          <pre className="evidence-block">{String(lastData.financial_evidence)}</pre>
+        </div>
+      )}
       {lastData?.orchestration && (
         <div className="callout">
           実行方式: {lastData.orchestration.drafter} → {lastData.orchestration.critic} →{" "}
