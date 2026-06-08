@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 from investment_assistant.edinet.models import FINANCIAL_DOC_TYPES
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_generator():
+    path = _REPO_ROOT / "scripts" / "build_nikkei225_edinet_registry.py"
+    spec = importlib.util.spec_from_file_location("nikkei225_gen", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 _REGISTRY_YAML = """
 sources:
@@ -99,10 +111,27 @@ def test_shipped_nikkei225_registry_parses_with_repo_loader() -> None:
     )
     targets = {t.ticker: t for t in build_edinet_targets_from_registry(example)}
 
-    # A representative set of constituents, all multi-period annual+quarterly.
-    assert len(targets) >= 25
-    assert {"7203", "6758", "8306", "9432", "8035"} <= set(targets)
+    # Near-complete Nikkei 225 coverage, all multi-period annual+quarterly.
+    assert len(targets) >= 150
+    assert {"7203", "6758", "8306", "9432", "8035", "9984", "4502", "8001"} <= set(targets)
     toyota = targets["7203"]
     assert toyota.doc_types == ("120", "140")
     assert toyota.max_periods == 4
     assert targets["8035"].company == "東京エレクトロン"
+
+
+def test_nikkei225_registry_is_in_sync_with_generator() -> None:
+    generator = _load_generator()
+    committed = (
+        _REPO_ROOT / "examples" / "source_registry_nikkei225_edinet.yaml"
+    ).read_text(encoding="utf-8")
+    assert generator.render_yaml() == committed, (
+        "examples/source_registry_nikkei225_edinet.yaml is stale; "
+        "re-run scripts/build_nikkei225_edinet_registry.py"
+    )
+
+
+def test_nikkei225_generator_has_no_duplicate_tickers() -> None:
+    generator = _load_generator()
+    tickers = [ticker for ticker, _company in generator.COMPANIES]
+    assert len(tickers) == len(set(tickers))

@@ -26,13 +26,21 @@ from investment_assistant.edinet.models import (
     EdinetDocument,
     parse_documents,
 )
-from investment_assistant.ingestion.transport import HttpTransport, UrlLibHttpTransport
+from investment_assistant.ingestion.rate_limit import DomainRateLimiter
+from investment_assistant.ingestion.transport import (
+    HttpResponse,
+    HttpTransport,
+    UrlLibHttpTransport,
+)
 from investment_assistant.observability import get_logger
 
 _logger = get_logger("edinet.client")
 
 API_KEY_ENV_VAR = "EDINET_API_KEY"
 DEFAULT_USER_AGENT = "investment-assistant/0.1 (+edinet-reader; contact: local-user)"
+# Be polite to the shared public API: space requests to the same host so a large
+# registry (close to the full Nikkei 225) stays well within EDINET's limits.
+DEFAULT_MIN_INTERVAL_SECONDS = 0.5
 
 
 class EdinetApiError(RuntimeError):
@@ -50,12 +58,27 @@ class EdinetClient:
         user_agent: str = DEFAULT_USER_AGENT,
         timeout_seconds: float = 30.0,
         api_base: str = EDINET_API_BASE,
+        rate_limiter: DomainRateLimiter | None = None,
+        min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS,
     ) -> None:
         self.transport = transport or UrlLibHttpTransport()
         self.api_key = api_key if api_key is not None else os.getenv(API_KEY_ENV_VAR, "").strip()
         self.user_agent = user_agent
         self.timeout_seconds = timeout_seconds
         self.api_base = api_base.rstrip("/")
+        self.rate_limiter = rate_limiter or DomainRateLimiter(
+            min_interval_seconds=min_interval_seconds
+        )
+
+    def _get(self, url: str) -> HttpResponse:
+        """Fetch ``url`` after honoring the per-host rate limit."""
+
+        self.rate_limiter.wait_for_url(url)
+        return self.transport.get(
+            url,
+            timeout_seconds=self.timeout_seconds,
+            user_agent=self.user_agent,
+        )
 
     def documents_url(self, date: str, *, doc_type: int = 2) -> str:
         """Build the documents.json URL for a submission ``date`` (YYYY-MM-DD)."""
@@ -73,11 +96,7 @@ class EdinetClient:
         """Fetch and parse the list of documents submitted on ``date``."""
 
         url = self.documents_url(date)
-        response = self.transport.get(
-            url,
-            timeout_seconds=self.timeout_seconds,
-            user_agent=self.user_agent,
-        )
+        response = self._get(url)
         if response.status_code >= 400:
             raise EdinetApiError(f"EDINET documents request failed: status={response.status_code}")
         payload = json.loads(response.body.decode("utf-8", errors="replace"))
@@ -94,11 +113,7 @@ class EdinetClient:
         """Download a document archive (CSV/XBRL/PDF) as raw bytes."""
 
         url = self.document_url(doc_id, acquisition_type=acquisition_type)
-        response = self.transport.get(
-            url,
-            timeout_seconds=self.timeout_seconds,
-            user_agent=self.user_agent,
-        )
+        response = self._get(url)
         if response.status_code >= 400:
             raise EdinetApiError(
                 f"EDINET document download failed: doc_id={doc_id} status={response.status_code}"
