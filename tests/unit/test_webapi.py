@@ -106,6 +106,31 @@ def test_orchestrate_endpoint_is_offline(tmp_path) -> None:
     assert "answer" in payload
 
 
+def test_orchestrate_injects_dividend_evidence(tmp_path) -> None:
+    db = tmp_path / "rag.sqlite"
+    _index_doc(db, tmp_path)
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2023,1100000,9.5,50.0,配当性向 38%\n"
+        "8306,MUFG,2024,1200000,9.9,40.0,配当性向 42%\n",
+        encoding="utf-8",
+    )
+    status, payload = handle_api(
+        "POST",
+        "/api/orchestrate",
+        {
+            "query": "配当の持続性は？",
+            "db_path": str(db),
+            "target_source": "local_docs/nikkei225/8306/ir.txt",
+            "financials_csv": str(financials),
+        },
+    )
+    assert status == 200
+    assert payload["financial_evidence"] is not None
+    assert "減配年: 2024" in payload["financial_evidence"]
+
+
 def test_orchestrate_real_api_is_guarded_when_env_disabled(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("INVESTMENT_ASSISTANT_WEB_REAL_API", raising=False)
     db = tmp_path / "rag.sqlite"

@@ -15,6 +15,10 @@ from investment_assistant.financials import (
     compare_financials,
     load_financials,
 )
+from investment_assistant.financials.evidence import (
+    DEFAULT_FINANCIALS_CSV,
+    build_financial_evidence,
+)
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
 from investment_assistant.portfolio.loader import (
     load_dividends,
@@ -172,9 +176,23 @@ def _orchestrate(body: JsonDict) -> JsonDict:
         else ""
     )
 
+    financial_evidence = build_financial_evidence(
+        ticker=str(body.get("ticker") or "").strip() or None,
+        target_source=target_source or None,
+        csv_path=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+    )
+    evidence_block = (
+        "\n\n"
+        + financial_evidence
+        + "\n上記の減配履歴・財務トレンドを根拠として明示的に反映してください。"
+        if financial_evidence
+        else ""
+    )
+
     process_instruction = (
         query
         + source_constraint
+        + evidence_block
         + "\n\n【生成プロセス】"
         + "\nAI 1: 財務・配当・キャッシュフローだけを評価する。"
         + "\nAI 2: 下落リスク・競争環境・事業リスクだけを評価する。"
@@ -201,6 +219,7 @@ def _orchestrate(body: JsonDict) -> JsonDict:
     )
 
     result["target_source"] = target_source or None
+    result["financial_evidence"] = financial_evidence
 
     result["orchestration"] = {
         "drafter": "AI 1/2/3",
@@ -366,10 +385,13 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
     end_date = str(end_date_value).strip() if end_date_value else None
     max_periods_value = body.get("max_periods")
     max_periods = _as_int(max_periods_value, 0) if max_periods_value is not None else None
+    years_value = body.get("years")
+    years = _as_int(years_value, 0) if years_value is not None else None
     return cli.run_edinet_ingest(
         registry_path=registry_path,
         end_date=end_date or None,
         days=_as_int(body.get("days"), 7),
+        years=years if years and years > 0 else None,
         output_dir=str(body.get("output_dir") or "local_docs/edinet"),
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
         index_after=_as_bool(body.get("index_after_fetch"), True),

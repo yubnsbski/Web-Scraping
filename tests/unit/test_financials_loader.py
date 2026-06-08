@@ -42,6 +42,28 @@ def test_volatile_company_detects_cut_years() -> None:
     assert volatile["latest_dividend_per_share"] == 45.0
 
 
+def test_comparison_includes_operating_cf_and_equity_trends() -> None:
+    company = _companies()["7203"]
+    # Additive trend/series keys are present and fiscal-year ordered.
+    assert company["operating_cf_trend"] in {
+        "increasing",
+        "declining",
+        "flat",
+        "mixed",
+        "insufficient",
+    }
+    assert company["equity_ratio_trend"] in {
+        "increasing",
+        "declining",
+        "flat",
+        "mixed",
+        "insufficient",
+    }
+    assert isinstance(company["operating_cf_series"], list)
+    assert len(company["operating_cf_series"]) == len(company["years"])
+    assert len(company["equity_ratio_series"]) == len(company["years"])
+
+
 def test_companies_sorted_by_ticker() -> None:
     companies = _companies()
     assert list(companies.keys()) == ["7203", "9999"]

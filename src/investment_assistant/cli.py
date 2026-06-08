@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from investment_assistant.config.loader import load_yaml
+from investment_assistant.crawler.frontier import CrawlReport, FetchedPage, crawl
+from investment_assistant.crawler.policy import CrawlLimits, CrawlPolicy
+from investment_assistant.crawler.registry import build_crawl_targets_from_registry
 from investment_assistant.edinet.client import EdinetClient
 from investment_assistant.edinet.csv_extract import parse_csv_archive, select_metrics, to_rag_text
-from investment_assistant.edinet.ingest import ingest_targets, recent_dates
+from investment_assistant.edinet.ingest import date_range, ingest_targets, recent_dates
 from investment_assistant.edinet.models import (
     EdinetDocument,
     filter_by_doc_types,
@@ -367,11 +370,101 @@ def run_edinet_extract(
     }
 
 
+def _safe_crawl_fetch(fetcher: SafeFetcher) -> Callable[[str], FetchedPage]:
+    """Adapt SafeFetcher.fetch_document into the frontier's FetchFn."""
+
+    def fetch(url: str) -> FetchedPage:
+        document = fetcher.fetch_document(url)
+        return FetchedPage(
+            url=document.url,
+            allowed=document.allowed_by_robots,
+            html=document.html,
+            status_code=document.status_code,
+        )
+
+    return fetch
+
+
+def run_crawl(
+    *,
+    path: str | Path,
+    output_dir: str | Path = "local_docs/crawl",
+    db_path: str | Path = DEFAULT_RAG_DB_PATH,
+    max_pages: int | None = None,
+    dry_run: bool = False,
+    index_after: bool = True,
+    fetch: Callable[[str], FetchedPage] | None = None,
+) -> dict[str, object]:
+    """Run targeted IR crawls defined in a source registry (Phase 3).
+
+    Descends from each issuer_ir crawl start page toward dividend-policy /
+    financial body pages and saves the substantive ones for RAG. Requires
+    network for live runs; ``fetch`` is injectable for offline testing.
+    """
+
+    targets = build_crawl_targets_from_registry(path)
+    base_dir = reject_path_traversal(output_dir)
+    fetch_fn = fetch or _safe_crawl_fetch(SafeFetcher())
+
+    if dry_run:
+        return {
+            "path": str(path),
+            "dry_run": True,
+            "targets": [
+                {"name": str(t.get("name") or ""), "url": str(t.get("url") or "")}
+                for t in targets
+            ],
+        }
+
+    results: list[dict[str, object]] = []
+    saved_total = 0
+    for target in targets:
+        policy = CrawlPolicy.from_registry_source(target)
+        if max_pages is not None:
+            policy.limits = CrawlLimits(
+                max_depth=policy.limits.max_depth,
+                max_pages=max_pages,
+                max_elapsed_seconds=policy.limits.max_elapsed_seconds,
+            )
+        report = crawl(policy, start_url=str(target["url"]), fetch=fetch_fn)
+        folder = str(target.get("ticker") or target.get("name") or "crawl")
+        saved = _save_crawl_pages(report, base_dir / folder)
+        saved_total += len(saved)
+        summary = report.as_dict()
+        summary["name"] = str(target.get("name") or "")
+        summary["saved_paths"] = saved
+        results.append(summary)
+
+    output: dict[str, object] = {
+        "path": str(path),
+        "output_dir": str(base_dir),
+        "targets_count": len(targets),
+        "saved_pages": saved_total,
+        "results": results,
+    }
+    if index_after and saved_total:
+        output["index"] = run_rag_index_dir(path=str(base_dir), db_path=db_path)
+    return output
+
+
+def _save_crawl_pages(report: CrawlReport, folder: Path) -> list[str]:
+    saved: list[str] = []
+    for index, page in enumerate(report.target_pages, start=1):
+        path = folder / f"page_{index:02d}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = f"source_url: {page.url}\n\n"
+        path.write_text(header + page.text + "\n", encoding="utf-8")
+        saved.append(str(path))
+    return saved
+
+
 def run_edinet_ingest(
     *,
     registry_path: str | Path = "examples/source_registry_edinet_sample.yaml",
     end_date: str | None = None,
     days: int = 7,
+    start_date: str | None = None,
+    years: int | None = None,
     output_dir: str | Path = "local_docs/edinet",
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     index_after: bool = True,
@@ -380,17 +473,29 @@ def run_edinet_ingest(
 ) -> dict[str, object]:
     """Run the end-to-end EDINET ingest and optionally index the result into RAG.
 
-    Scans the last ``days`` submission dates (ending at ``end_date``, default
-    today) for the registry's EDINET targets, downloads the latest financial
-    filing per ticker, extracts the metrics, and indexes the saved text so the
-    numbers become searchable. Requires network access for live runs; the
-    ``client`` is injectable for offline testing.
+    By default scans the last ``days`` submission dates (ending at ``end_date``,
+    default today). For a multi-year backfill, pass ``start_date`` (explicit
+    range to ``end_date``) or ``years`` (that many years back from ``end_date``);
+    weekends are skipped and the scan is capped for safety. Downloads each
+    ticker's recent filings, extracts metrics, and indexes the saved text.
+    Requires network for live runs; the ``client`` is injectable for testing.
     """
 
     targets = build_edinet_targets_from_registry(registry_path)
     edinet_client = client or EdinetClient()
     effective_end = end_date or datetime.now(UTC).date().isoformat()
-    dates = recent_dates(effective_end, days)
+    if start_date:
+        dates = date_range(start_date, effective_end)
+        scan_mode = "range"
+    elif years and years > 0:
+        backfill_start = (
+            datetime.fromisoformat(effective_end).date() - timedelta(days=365 * years)
+        ).isoformat()
+        dates = date_range(backfill_start, effective_end)
+        scan_mode = f"backfill_{years}y"
+    else:
+        dates = recent_dates(effective_end, days)
+        scan_mode = "recent"
 
     result = ingest_targets(
         client=edinet_client,
@@ -402,6 +507,8 @@ def run_edinet_ingest(
     result["registry_path"] = str(registry_path)
     result["end_date"] = effective_end
     result["days"] = days
+    result["scan_mode"] = scan_mode
+    result["scanned_days_requested"] = len(dates)
 
     if index_after and result.get("ingested_count"):
         result["index"] = run_rag_index_dir(path=str(output_dir), db_path=db_path)
@@ -1155,6 +1262,14 @@ def main(argv: list[str] | None = None) -> int:
     edinet_documents_parser.add_argument("--ticker")
     edinet_documents_parser.add_argument("--all-doc-types", action="store_true")
 
+    crawl_parser = subparsers.add_parser("crawl")
+    crawl_parser.add_argument("--path", required=True)
+    crawl_parser.add_argument("--output-dir", default="local_docs/crawl")
+    crawl_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    crawl_parser.add_argument("--max-pages", type=int)
+    crawl_parser.add_argument("--dry-run", action="store_true")
+    crawl_parser.add_argument("--no-index", action="store_true")
+
     edinet_ingest_parser = subparsers.add_parser("edinet-ingest")
     edinet_ingest_parser.add_argument(
         "--registry",
@@ -1163,6 +1278,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     edinet_ingest_parser.add_argument("--end-date")
     edinet_ingest_parser.add_argument("--days", type=int, default=7)
+    edinet_ingest_parser.add_argument("--start-date")
+    edinet_ingest_parser.add_argument("--years", type=int)
     edinet_ingest_parser.add_argument("--output-dir", default="local_docs/edinet")
     edinet_ingest_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     edinet_ingest_parser.add_argument("--max-periods", type=int)
@@ -1321,11 +1438,22 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             ticker=args.ticker,
             financial_only=not args.all_doc_types,
         )
+    if command == "crawl":
+        return run_crawl(
+            path=args.path,
+            output_dir=args.output_dir,
+            db_path=args.db_path,
+            max_pages=args.max_pages,
+            dry_run=args.dry_run,
+            index_after=not args.no_index,
+        )
     if command == "edinet-ingest":
         return run_edinet_ingest(
             registry_path=args.registry_path,
             end_date=args.end_date,
             days=args.days,
+            start_date=args.start_date,
+            years=args.years,
             output_dir=args.output_dir,
             db_path=args.db_path,
             index_after=not args.no_index,

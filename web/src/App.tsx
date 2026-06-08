@@ -697,6 +697,12 @@ function AnswerTab() {
 
       <Status loading={loading} error={error} />
       {lastData?.real_api_note && <p className="callout warn-callout">{lastData.real_api_note}</p>}
+      {lastData?.financial_evidence && (
+        <div className="callout">
+          <b>財務根拠（EDINET公式数値・減配履歴）</b>
+          <pre className="evidence-block">{String(lastData.financial_evidence)}</pre>
+        </div>
+      )}
       {lastData?.orchestration && (
         <div className="callout">
           実行方式: {lastData.orchestration.drafter} → {lastData.orchestration.critic} →{" "}
@@ -907,6 +913,7 @@ function ScrapeTab() {
     "examples/source_registry_nikkei225_edinet.yaml",
   );
   const [edinetDays, setEdinetDays] = useState(7);
+  const [edinetYears, setEdinetYears] = useState(0);
   const sourceState = useAsync<Json>();
   const manualState = useAsync<Json>();
   const edinetState = useAsync<Json>();
@@ -988,6 +995,7 @@ function ScrapeTab() {
       api<Json>("/api/edinet/ingest", {
         registry_path: edinetRegistry,
         days: edinetDays,
+        years: edinetYears > 0 ? edinetYears : undefined,
         db_path: dbPath,
         index_after_fetch: true,
       }),
@@ -1138,6 +1146,15 @@ function ScrapeTab() {
               onChange={(e) => setEdinetDays(Number(e.target.value))}
             />
           </Field>
+          <Field label="遡る年数（バックフィル・0で無効）">
+            <input
+              type="number"
+              min={0}
+              max={5}
+              value={edinetYears}
+              onChange={(e) => setEdinetYears(Number(e.target.value))}
+            />
+          </Field>
           <button
             className="primary"
             onClick={runEdinetIngest}
@@ -1172,6 +1189,13 @@ function ScrapeTab() {
             {edinetState.data.index ? (
               <p className="hint">RAG登録完了: {JSON.stringify(edinetState.data.index)}</p>
             ) : null}
+            {edinetState.data.comparison &&
+              Array.isArray((edinetState.data.comparison as Json).companies) &&
+              (edinetState.data.comparison as Json).companies.length > 0 && (
+                <EdinetComparisonTable
+                  companies={(edinetState.data.comparison as Json).companies as Json[]}
+                />
+              )}
           </div>
         )}
       </div>
@@ -1205,6 +1229,59 @@ function ScrapeTab() {
         )}
       </div>
     </section>
+  );
+}
+
+const TREND_LABELS: Record<string, string> = {
+  increasing: "増加",
+  declining: "減少",
+  flat: "横ばい",
+  mixed: "増減混在",
+  insufficient: "データ不足",
+};
+
+function trendLabel(value: unknown): string {
+  return TREND_LABELS[String(value)] ?? String(value ?? "-");
+}
+
+function EdinetComparisonTable(props: { companies: Json[] }) {
+  return (
+    <div className="edinet-comparison">
+      <h4>財務トレンド / 減配履歴（EDINET公式データ・機械集計）</h4>
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>銘柄</th>
+            <th>期数</th>
+            <th>配当推移</th>
+            <th>減配年</th>
+            <th>営業CF推移</th>
+            <th>自己資本比率推移</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.companies.map((c, i) => {
+            const cuts = Array.isArray(c.dividend_cut_years) ? c.dividend_cut_years : [];
+            const years = Array.isArray(c.years) ? c.years.length : 0;
+            return (
+              <tr key={c.ticker ?? i}>
+                <td className="mono">
+                  {c.ticker} {c.name}
+                </td>
+                <td>{years}</td>
+                <td>{trendLabel(c.dividend_trend)}</td>
+                <td>{cuts.length > 0 ? cuts.join(", ") : "なし"}</td>
+                <td>{trendLabel(c.operating_cf_trend)}</td>
+                <td>{trendLabel(c.equity_ratio_trend)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="hint">
+        減配履歴・トレンドは取得済みの複数期から機械的に算出したものです。投資助言ではありません。
+      </p>
+    </div>
   );
 }
 
