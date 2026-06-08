@@ -48,6 +48,10 @@ _logger = get_logger("edinet.ingest")
 
 FINANCIALS_CSV_NAME = "financials.csv"
 
+# Safety ceiling so a multi-year backfill cannot scan an unbounded number of
+# submission dates (each is one API call). ~900 business days ≈ 3.6 years.
+DEFAULT_MAX_SCAN_DAYS = 900
+
 
 def recent_dates(end_date: str, days: int) -> list[str]:
     """Return ``days`` submission dates ending at ``end_date`` (most recent first)."""
@@ -55,6 +59,35 @@ def recent_dates(end_date: str, days: int) -> list[str]:
     end = date.fromisoformat(end_date)
     span = max(1, days)
     return [(end - timedelta(days=offset)).isoformat() for offset in range(span)]
+
+
+def date_range(
+    start_date: str,
+    end_date: str,
+    *,
+    skip_weekends: bool = True,
+    max_days: int = DEFAULT_MAX_SCAN_DAYS,
+) -> list[str]:
+    """Return submission dates between ``start_date`` and ``end_date``.
+
+    Most recent first. Weekends are skipped by default (EDINET does not accept
+    filings then), and the result is capped at ``max_days`` to keep a backfill
+    from issuing an unbounded number of API calls — the most recent dates are
+    kept when the range is larger than the cap.
+    """
+
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if start > end:
+        start, end = end, start
+
+    dates: list[str] = []
+    current = end
+    while current >= start and len(dates) < max(1, max_days):
+        if not (skip_weekends and current.weekday() >= 5):
+            dates.append(current.isoformat())
+        current -= timedelta(days=1)
+    return dates
 
 
 def ingest_targets(

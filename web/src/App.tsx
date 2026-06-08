@@ -913,6 +913,7 @@ function ScrapeTab() {
     "examples/source_registry_nikkei225_edinet.yaml",
   );
   const [edinetDays, setEdinetDays] = useState(7);
+  const [edinetYears, setEdinetYears] = useState(0);
   const sourceState = useAsync<Json>();
   const manualState = useAsync<Json>();
   const edinetState = useAsync<Json>();
@@ -994,6 +995,7 @@ function ScrapeTab() {
       api<Json>("/api/edinet/ingest", {
         registry_path: edinetRegistry,
         days: edinetDays,
+        years: edinetYears > 0 ? edinetYears : undefined,
         db_path: dbPath,
         index_after_fetch: true,
       }),
@@ -1142,6 +1144,15 @@ function ScrapeTab() {
               max={31}
               value={edinetDays}
               onChange={(e) => setEdinetDays(Number(e.target.value))}
+            />
+          </Field>
+          <Field label="遡る年数（バックフィル・0で無効）">
+            <input
+              type="number"
+              min={0}
+              max={5}
+              value={edinetYears}
+              onChange={(e) => setEdinetYears(Number(e.target.value))}
             />
           </Field>
           <button

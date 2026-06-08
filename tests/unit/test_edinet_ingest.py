@@ -4,7 +4,7 @@ import io
 import zipfile
 from pathlib import Path
 
-from investment_assistant.edinet.ingest import ingest_targets, recent_dates
+from investment_assistant.edinet.ingest import date_range, ingest_targets, recent_dates
 from investment_assistant.edinet.registry import EdinetTarget
 
 
@@ -63,6 +63,64 @@ def _mufg_doc(doc_id: str, submit: str) -> dict[str, object]:
 def test_recent_dates_returns_descending_span() -> None:
     assert recent_dates("2026-06-08", 3) == ["2026-06-08", "2026-06-07", "2026-06-06"]
     assert recent_dates("2026-06-08", 0) == ["2026-06-08"]
+
+
+def test_date_range_skips_weekends_and_is_descending() -> None:
+    # 2026-06-08 is Monday; 06-06 Sat and 06-07 Sun must be skipped.
+    dates = date_range("2026-06-01", "2026-06-08")
+    assert dates == [
+        "2026-06-08",
+        "2026-06-05",
+        "2026-06-04",
+        "2026-06-03",
+        "2026-06-02",
+        "2026-06-01",
+    ]
+
+
+def test_date_range_can_include_weekends() -> None:
+    dates = date_range("2026-06-06", "2026-06-08", skip_weekends=False)
+    assert dates == ["2026-06-08", "2026-06-07", "2026-06-06"]
+
+
+def test_date_range_caps_at_max_days_keeping_recent() -> None:
+    dates = date_range("2020-01-01", "2026-06-08", max_days=3)
+    assert dates == ["2026-06-08", "2026-06-05", "2026-06-04"]
+
+
+def test_date_range_handles_swapped_bounds() -> None:
+    assert date_range("2026-06-08", "2026-06-01") == date_range("2026-06-01", "2026-06-08")
+
+
+def test_run_edinet_ingest_backfill_years_scans_range(tmp_path: Path) -> None:
+    from investment_assistant import cli
+
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "sources:\n"
+        '  - name: "8306"\n'
+        '    ticker: "8306"\n'
+        '    company: "MUFG"\n'
+        '    source_type: "public_api"\n'
+        '    provider: "edinet"\n'
+        '    method: "api"\n'
+        "    allowed: true\n",
+        encoding="utf-8",
+    )
+    client = _FakeEdinetClient({"2026-06-08": [_mufg_doc("S100Y24", "2024-06-21 09:00")]})
+
+    result = cli.run_edinet_ingest(
+        registry_path=registry,
+        end_date="2026-06-08",
+        years=1,
+        output_dir=tmp_path / "edinet",
+        index_after=False,
+        client=client,  # type: ignore[arg-type]
+    )
+
+    assert result["scan_mode"] == "backfill_1y"
+    assert int(result["scanned_days_requested"]) > 200  # ~a year of business days
+    assert result["ingested_count"] == 1
 
 
 def test_ingest_targets_downloads_latest_and_writes_text(tmp_path: Path) -> None:

@@ -6,7 +6,7 @@ import argparse
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from investment_assistant.crawler.policy import CrawlLimits, CrawlPolicy
 from investment_assistant.crawler.registry import build_crawl_targets_from_registry
 from investment_assistant.edinet.client import EdinetClient
 from investment_assistant.edinet.csv_extract import parse_csv_archive, select_metrics, to_rag_text
-from investment_assistant.edinet.ingest import ingest_targets, recent_dates
+from investment_assistant.edinet.ingest import date_range, ingest_targets, recent_dates
 from investment_assistant.edinet.models import (
     EdinetDocument,
     filter_by_doc_types,
@@ -463,6 +463,8 @@ def run_edinet_ingest(
     registry_path: str | Path = "examples/source_registry_edinet_sample.yaml",
     end_date: str | None = None,
     days: int = 7,
+    start_date: str | None = None,
+    years: int | None = None,
     output_dir: str | Path = "local_docs/edinet",
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     index_after: bool = True,
@@ -471,17 +473,29 @@ def run_edinet_ingest(
 ) -> dict[str, object]:
     """Run the end-to-end EDINET ingest and optionally index the result into RAG.
 
-    Scans the last ``days`` submission dates (ending at ``end_date``, default
-    today) for the registry's EDINET targets, downloads the latest financial
-    filing per ticker, extracts the metrics, and indexes the saved text so the
-    numbers become searchable. Requires network access for live runs; the
-    ``client`` is injectable for offline testing.
+    By default scans the last ``days`` submission dates (ending at ``end_date``,
+    default today). For a multi-year backfill, pass ``start_date`` (explicit
+    range to ``end_date``) or ``years`` (that many years back from ``end_date``);
+    weekends are skipped and the scan is capped for safety. Downloads each
+    ticker's recent filings, extracts metrics, and indexes the saved text.
+    Requires network for live runs; the ``client`` is injectable for testing.
     """
 
     targets = build_edinet_targets_from_registry(registry_path)
     edinet_client = client or EdinetClient()
     effective_end = end_date or datetime.now(UTC).date().isoformat()
-    dates = recent_dates(effective_end, days)
+    if start_date:
+        dates = date_range(start_date, effective_end)
+        scan_mode = "range"
+    elif years and years > 0:
+        backfill_start = (
+            datetime.fromisoformat(effective_end).date() - timedelta(days=365 * years)
+        ).isoformat()
+        dates = date_range(backfill_start, effective_end)
+        scan_mode = f"backfill_{years}y"
+    else:
+        dates = recent_dates(effective_end, days)
+        scan_mode = "recent"
 
     result = ingest_targets(
         client=edinet_client,
@@ -493,6 +507,8 @@ def run_edinet_ingest(
     result["registry_path"] = str(registry_path)
     result["end_date"] = effective_end
     result["days"] = days
+    result["scan_mode"] = scan_mode
+    result["scanned_days_requested"] = len(dates)
 
     if index_after and result.get("ingested_count"):
         result["index"] = run_rag_index_dir(path=str(output_dir), db_path=db_path)
@@ -1262,6 +1278,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     edinet_ingest_parser.add_argument("--end-date")
     edinet_ingest_parser.add_argument("--days", type=int, default=7)
+    edinet_ingest_parser.add_argument("--start-date")
+    edinet_ingest_parser.add_argument("--years", type=int)
     edinet_ingest_parser.add_argument("--output-dir", default="local_docs/edinet")
     edinet_ingest_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     edinet_ingest_parser.add_argument("--max-periods", type=int)
@@ -1434,6 +1452,8 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             registry_path=args.registry_path,
             end_date=args.end_date,
             days=args.days,
+            start_date=args.start_date,
+            years=args.years,
             output_dir=args.output_dir,
             db_path=args.db_path,
             index_after=not args.no_index,
