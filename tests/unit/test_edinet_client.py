@@ -127,3 +127,32 @@ def test_client_rate_limits_requests_to_same_host() -> None:
     client.list_documents("2024-06-22")
 
     assert waits == [0.5]
+
+
+
+def test_list_documents_raises_on_api_error_payload() -> None:
+    from investment_assistant.edinet.client import EdinetApiError, EdinetClient
+    from investment_assistant.ingestion.transport import HttpResponse
+
+    class FakeTransport:
+        def get(self, url: str, *, timeout_seconds: float, user_agent: str) -> HttpResponse:
+            _ = url, timeout_seconds, user_agent
+            return HttpResponse(
+                url="https://api.edinet-fsa.go.jp/api/v2/documents.json",
+                status_code=200,
+                body=(
+                    b'{"StatusCode":401,'
+                    b'"message":"Access denied due to invalid subscription key."}'
+                ),
+                headers={},
+            )
+
+    client = EdinetClient(transport=FakeTransport(), api_key="invalid")
+
+    try:
+        client.list_documents("2026-06-05")
+    except EdinetApiError as exc:
+        assert "api_status=401" in str(exc)
+        assert "invalid subscription key" in str(exc)
+    else:
+        raise AssertionError("EdinetApiError was not raised")

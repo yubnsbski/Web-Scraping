@@ -100,6 +100,7 @@ class EdinetClient:
         if response.status_code >= 400:
             raise EdinetApiError(f"EDINET documents request failed: status={response.status_code}")
         payload = json.loads(response.body.decode("utf-8", errors="replace"))
+        self._raise_for_api_error(payload, context="documents")
         documents = parse_documents(payload)
         _logger.info("edinet documents date=%s count=%d", date, len(documents))
         return documents
@@ -125,6 +126,20 @@ class EdinetClient:
             len(response.body),
         )
         return response.body
+
+    def _raise_for_api_error(self, payload: object, *, context: str) -> None:
+        if not isinstance(payload, dict):
+            return
+
+        status_code = payload.get("StatusCode")
+        message = payload.get("message") or payload.get("Message")
+
+        if status_code is None:
+            return
+
+        raise EdinetApiError(
+            f"EDINET {context} request failed: api_status={status_code} message={message}"
+        )
 
     def _query(self, params: dict[str, str]) -> str:
         if self.api_key:

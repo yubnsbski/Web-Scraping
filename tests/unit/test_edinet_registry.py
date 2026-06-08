@@ -135,3 +135,29 @@ def test_nikkei225_generator_has_no_duplicate_tickers() -> None:
     generator = _load_generator()
     tickers = [ticker for ticker, _company in generator.COMPANIES]
     assert len(tickers) == len(set(tickers))
+
+
+
+def test_registry_accepts_doc_type_codes_alias(tmp_path):
+    path = tmp_path / "registry.yaml"
+    path.write_text(
+        """
+sources:
+  - name: ntt_annual
+    ticker: "9432"
+    company: NTT
+    source_type: public_api
+    method: api
+    provider: edinet
+    allowed: true
+    doc_type_codes: ["120"]
+    max_periods: 1
+""",
+        encoding="utf-8",
+    )
+
+    targets = build_edinet_targets_from_registry(path)
+
+    assert len(targets) == 1
+    assert targets[0].ticker == "9432"
+    assert targets[0].doc_types == ("120",)
