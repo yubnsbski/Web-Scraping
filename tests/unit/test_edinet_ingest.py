@@ -267,6 +267,64 @@ def test_ingest_builds_financials_csv_and_detects_dividend_cut(tmp_path: Path) -
     assert mufg["dividend_trend"] == "declining"
 
 
+def test_financials_csv_is_durable_across_runs_after_pruning(tmp_path: Path) -> None:
+    # The dividend record must survive retention pruning of the bulky filing
+    # files: financials.csv accumulates history independently.
+    out_dir = tmp_path / "edinet"
+    target = EdinetTarget(
+        name="8306", ticker="8306", company="MUFG", doc_types=("120",), max_periods=2
+    )
+    client1 = _FakeEdinetClient(
+        {
+            "2026-06-08": [
+                _mufg_doc("S100Y24", "2024-06-21 09:00"),  # FY2024 dps 40
+                {
+                    "docID": "S100Y23",
+                    "secCode": "83060",
+                    "filerName": "三菱UFJ",
+                    "docTypeCode": "120",
+                    "docDescription": "有価証券報告書",
+                    "periodEnd": "2023-03-31",
+                    "submitDateTime": "2023-06-21 09:00",
+                    "csvFlag": "1",
+                },
+            ],
+        },
+        archives={"S100Y24": _csv_zip(dps="40.0"), "S100Y23": _csv_zip(dps="50.0")},
+    )
+    first = ingest_targets(
+        client=client1,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=out_dir,
+    )
+    assert first["financial_points_total"] == 2
+
+    # Simulate retention pruning the older filing's working files.
+    for suffix in (".txt", ".points.json"):
+        (out_dir / "8306" / f"S100Y23{suffix}").unlink()
+
+    # Run 2 only sees the latest filing, yet the dividend cut is still detected
+    # because financials.csv retained FY2023.
+    client2 = _FakeEdinetClient(
+        {"2026-06-08": [_mufg_doc("S100Y24", "2024-06-21 09:00")]},
+        archives={"S100Y24": _csv_zip(dps="40.0")},
+    )
+    second = ingest_targets(
+        client=client2,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=out_dir,
+    )
+    assert second["financial_points"] == 1  # only FY2024 fetched/cached this run
+    assert second["financial_points_total"] == 2  # FY2023 preserved from csv
+    comparison = second["comparison"]
+    assert isinstance(comparison, dict)
+    companies = comparison["companies"]
+    assert isinstance(companies, list)
+    assert companies[0]["dividend_cut_years"] == [2024]
+
+
 def test_ingest_recovers_points_from_sidecar_on_cached_run(tmp_path: Path) -> None:
     documents = {"2026-06-08": [_mufg_doc("S100Y24", "2024-06-21 09:00")]}
     target = EdinetTarget(name="8306", ticker="8306", company="MUFG", doc_types=("120",))
