@@ -90,17 +90,11 @@ def _maybe_target(source: dict[str, object]) -> EdinetTarget | None:
         return None
 
     raw_doc_types = source.get("doc_types")
-    if isinstance(raw_doc_types, list) and raw_doc_types:
-        doc_types: tuple[str, ...] = tuple(
-            str(item).strip() for item in raw_doc_types if str(item).strip()
-        )
-    elif isinstance(raw_doc_types, str) and raw_doc_types.strip():
-        # The repo YAML loader yields scalars inside list items, so a multi-value
-        # doc_types field is written as a comma/space separated string.
-        doc_types = tuple(
-            part.strip() for part in raw_doc_types.replace(",", " ").split() if part.strip()
-        )
-    else:
+    if raw_doc_types is None:
+        raw_doc_types = source.get("doc_type_codes")
+
+    doc_types = _doc_types_from_value(raw_doc_types)
+    if not doc_types:
         doc_types = tuple(sorted(FINANCIAL_DOC_TYPES))
 
     company = str(source.get("company") or "").strip() or None
@@ -112,6 +106,30 @@ def _maybe_target(source: dict[str, object]) -> EdinetTarget | None:
         doc_types=doc_types,
         max_periods=max_periods,
     )
+
+
+def _doc_types_from_value(value: object) -> tuple[str, ...]:
+    if isinstance(value, list):
+        return tuple(
+            str(item).strip().strip('"').strip("'")
+            for item in value
+            if str(item).strip().strip('"').strip("'")
+        )
+
+    if isinstance(value, str):
+        cleaned = (
+            value.strip()
+            .removeprefix("[")
+            .removesuffix("]")
+            .replace(",", " ")
+        )
+        return tuple(
+            part.strip().strip('"').strip("'")
+            for part in cleaned.split()
+            if part.strip().strip('"').strip("'")
+        )
+
+    return ()
 
 
 def _positive_int(value: object, *, default: int) -> int:
