@@ -26,9 +26,16 @@ class LocalOrchestrationClient:
         _ = model
         query = _section(prompt, "質問", "ローカル文書コンテキスト")
         query = _normalize_query(query)
-        context_preview = " ".join(_section(prompt, "ローカル文書コンテキスト", "出力要件").split())
+        # Bound the context by whichever heading comes first: in the synthesis
+        # prompt drafts follow the context (so "ドラフト" is the real boundary),
+        # while the draft prompt ends with "出力要件". Preferring "出力要件" here
+        # would otherwise swallow the drafts/critique into the context preview
+        # and leak internal "ドラフトN" text into the offline answer.
+        context_preview = " ".join(
+            _section(prompt, "ローカル文書コンテキスト", "ドラフト1").split()
+        )
         context_preview = context_preview or " ".join(
-            _section(prompt, "ローカル文書コンテキスト", "ドラフト").split()
+            _section(prompt, "ローカル文書コンテキスト", "出力要件").split()
         )
         context_preview = context_preview[:300]
 
@@ -108,10 +115,14 @@ def _section(text: str, start_heading: str, end_heading: str) -> str:
     _, separator, remainder = text.partition(f"\n{start_heading}\n")
     if not separator:
         return ""
-    section, _, _ = remainder.partition(f"\n{end_heading}\n")
-    if not section:
-        section, _, _ = remainder.partition(f"\n{end_heading}")
-    return section.strip()
+    head, sep, _ = remainder.partition(f"\n{end_heading}\n")
+    if not sep:
+        head, sep, _ = remainder.partition(f"\n{end_heading}")
+    if not sep:
+        # End heading not found: return empty so callers can fall back to
+        # another boundary instead of swallowing the rest of the prompt.
+        return ""
+    return head.strip()
 
 
 def _normalize_query(query: str) -> str:
