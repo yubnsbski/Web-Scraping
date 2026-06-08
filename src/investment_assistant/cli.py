@@ -26,6 +26,7 @@ from investment_assistant.edinet.models import (
     securities_code,
 )
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+from investment_assistant.feedback import DEFAULT_FEEDBACK_DB_PATH, feedback_source_scores
 from investment_assistant.forecasting import service as forecast_service
 from investment_assistant.forecasting.dataset import DEFAULT_DATASET, download_dataset
 from investment_assistant.forecasting.timeseries import load_timeseries_csv
@@ -55,6 +56,7 @@ from investment_assistant.rag.embeddings import Embedder, resolve_embedder
 from investment_assistant.rag.indexer import index_directory
 from investment_assistant.rag.search import (
     SearchResult,
+    boost_by_feedback,
     build_answer_context,
     diversify_results,
     hybrid_search,
@@ -930,6 +932,7 @@ def run_orchestrate_answer(
     call_real_api: bool = False,
     source_filter: str | None = None,
     search_query: str | None = None,
+    feedback_db: str | Path = DEFAULT_FEEDBACK_DB_PATH,
 ) -> dict[str, object]:
     """Run multi-model orchestration over RAG context.
 
@@ -949,22 +952,25 @@ def run_orchestrate_answer(
     # more documents instead of many redundant passages from one filing.
     pool = max(limit, min(limit * 3, 48))
     if source_filter:
-        results = _search_chunks_for_source(
+        candidates = _search_chunks_for_source(
             store,
             query=retrieval_query,
             source_filter=source_filter,
             limit=pool,
         )
-        # Single source: dedup only, do not cap per-source.
-        results = diversify_results(results, limit=limit, max_per_source=limit)
+        max_per_source = limit  # single source: dedup only, do not cap
     elif hybrid:
-        results = hybrid_search(
+        candidates = hybrid_search(
             store, query=retrieval_query, limit=pool, alpha=alpha, embedder=embedder
         )
-        results = diversify_results(results, limit=limit)
+        max_per_source = 3
     else:
-        results = search_chunks(store, query=retrieval_query, limit=pool)
-        results = diversify_results(results, limit=limit)
+        candidates = search_chunks(store, query=retrieval_query, limit=pool)
+        max_per_source = 3
+    # Learning loop: gently re-rank the pool by accumulated user feedback per
+    # source, then diversify down so feedback influences which docs are kept.
+    candidates = boost_by_feedback(candidates, feedback_source_scores(feedback_db))
+    results = diversify_results(candidates, limit=limit, max_per_source=max_per_source)
     context = build_answer_context(results)
     if not results:
         return {
