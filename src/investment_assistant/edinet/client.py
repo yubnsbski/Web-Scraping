@@ -36,7 +36,7 @@ from investment_assistant.observability import get_logger
 
 _logger = get_logger("edinet.client")
 
-API_KEY_ENV_VAR = "0df96a44febb4c7d9160f6aa0ee2ebfc"
+API_KEY_ENV_VAR = "EDINET_API_KEY"
 DEFAULT_USER_AGENT = "investment-assistant/0.1 (+edinet-reader; contact: local-user)"
 # Be polite to the shared public API: space requests to the same host so a large
 # registry (close to the full Nikkei 225) stays well within EDINET's limits.
