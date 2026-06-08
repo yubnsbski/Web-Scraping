@@ -1244,6 +1244,30 @@ function trendLabel(value: unknown): string {
   return TREND_LABELS[String(value)] ?? String(value ?? "-");
 }
 
+function fmtYen(value: number): string {
+  return `¥${value.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}`;
+}
+
+function fmtRatio(value: number): string {
+  // EDINET reports 自己資本比率 as either a 0–1 ratio or a 0–100 percent.
+  const pct = value <= 1 ? value * 100 : value;
+  return `${pct.toFixed(1)}%`;
+}
+
+// With only one period a trend cannot be computed, so show the single latest
+// actual value (marked "1期のみ") instead of an unhelpful "データ不足".
+function trendOrSingle(
+  trend: unknown,
+  latest: unknown,
+  fmt: (value: number) => string,
+): string {
+  if (String(trend) !== "insufficient") return trendLabel(trend);
+  if (typeof latest === "number" && Number.isFinite(latest) && latest !== 0) {
+    return `${fmt(latest)}（1期のみ）`;
+  }
+  return "データ不足";
+}
+
 function EdinetComparisonTable(props: { companies: Json[] }) {
   return (
     <div className="edinet-comparison">
@@ -1269,17 +1293,17 @@ function EdinetComparisonTable(props: { companies: Json[] }) {
                   {c.ticker} {c.name}
                 </td>
                 <td>{years}</td>
-                <td>{trendLabel(c.dividend_trend)}</td>
+                <td>{trendOrSingle(c.dividend_trend, c.latest_dividend_per_share, fmtYen)}</td>
                 <td>{cuts.length > 0 ? cuts.join(", ") : "なし"}</td>
-                <td>{trendLabel(c.operating_cf_trend)}</td>
-                <td>{trendLabel(c.equity_ratio_trend)}</td>
+                <td>{trendOrSingle(c.operating_cf_trend, c.latest_operating_cf, fmtYen)}</td>
+                <td>{trendOrSingle(c.equity_ratio_trend, c.latest_equity_ratio, fmtRatio)}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
       <p className="hint">
-        減配履歴・トレンドは取得済みの複数期から機械的に算出したものです。投資助言ではありません。
+        減配履歴・トレンドは取得済みの複数期から機械的に算出したものです。1期のみの銘柄は最新の実数値（「1期のみ」）を表示します。投資助言ではありません。
       </p>
     </div>
   );
