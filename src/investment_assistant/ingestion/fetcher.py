@@ -34,6 +34,17 @@ def _default_user_agent() -> str:
 
 
 @dataclass(frozen=True)
+class FetchedDocument:
+    """Full-body fetch result used by the crawler for link extraction."""
+
+    url: str
+    status_code: int | None
+    allowed_by_robots: bool
+    html: str
+    source: str
+
+
+@dataclass(frozen=True)
 class FetchResult:
     """CLI-friendly fetch result metadata."""
 
@@ -159,6 +170,59 @@ class SafeFetcher:
             save_text=save_text,
             extract_text=extract_text,
             include_metadata=include_metadata,
+        )
+
+    def fetch_document(self, url: str) -> FetchedDocument:
+        """Fetch a URL and return its full decoded body for crawling.
+
+        Reuses the same robots check, cache, and rate limiting as :meth:`fetch`,
+        but returns the complete decoded body (not a truncated preview) so the
+        crawler can extract links from it.
+        """
+
+        decision = self.robots.can_fetch(url)
+        if not decision.allowed:
+            return FetchedDocument(
+                url=url,
+                status_code=None,
+                allowed_by_robots=False,
+                html="",
+                source=decision.reason,
+            )
+
+        cached = self.cache.get(url)
+        if cached is not None:
+            headers = json.loads(cached.headers_json)
+            response = HttpResponse(
+                url=cached.url,
+                status_code=cached.status_code,
+                headers={str(key): str(value) for key, value in headers.items()},
+                body=cached.body,
+            )
+            source = "cache"
+        else:
+            self.rate_limiter.wait_for_url(url)
+            response = self.transport.get(
+                url,
+                timeout_seconds=self.timeout_seconds,
+                user_agent=self.user_agent,
+            )
+            self.cache.set(
+                url=url,
+                status_code=response.status_code,
+                headers_json=json.dumps(response.headers, sort_keys=True),
+                body=response.body,
+            )
+            source = "network"
+
+        content_type = _header_value(response.headers, "content-type")
+        html = decode_body(response.body, content_type)
+        return FetchedDocument(
+            url=url,
+            status_code=response.status_code,
+            allowed_by_robots=True,
+            html=html,
+            source=source,
         )
 
 
