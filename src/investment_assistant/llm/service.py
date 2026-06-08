@@ -43,12 +43,18 @@ class LlmService:
         cache: LlmCache,
         budget_guard: BudgetGuard,
         fallback: FallbackConfig | None = None,
+        enforce_budget: bool = True,
     ) -> None:
         self.model = model
         self.client = client
         self.cache = cache
         self.budget_guard = budget_guard
         self.fallback = fallback or FallbackConfig()
+        # The budget guard protects the real Gemini free-tier quota. Offline /
+        # local clients never call Gemini, so they must not be throttled or
+        # counted — otherwise the offline pseudo-AI stops producing output once
+        # the daily count is reached.
+        self.enforce_budget = enforce_budget
 
     def generate(self, *, task_type: str, prompt: str, priority: str = "normal") -> LlmResponse:
         """Generate text through cache, budget guard, and fallback controls."""
@@ -57,22 +63,26 @@ class LlmService:
         cache_key = self.cache.make_key(task_type, self.model, prompt)
         cached = self.cache.get(cache_key)
         if cached is not None:
-            self.budget_guard.record_call(task_type, self.model, cache_key, cache_hit=True)
+            if self.enforce_budget:
+                self.budget_guard.record_call(task_type, self.model, cache_key, cache_hit=True)
             _logger.info(
                 "llm cache hit task=%s model=%s key=%s", task_type, self.model, cache_key[:12]
             )
             return LlmResponse(cached, "cache", cache_key)
 
-        decision = self.budget_guard.check(task_type)
-        if not decision.allowed:
-            _logger.warning(
-                "llm budget blocked task=%s reason=%s daily=%d monthly=%d",
-                task_type,
-                decision.reason,
-                decision.daily_count,
-                decision.monthly_count,
-            )
-            return self._fallback_response(decision.reason, prompt, cache_key)
+        warning = False
+        if self.enforce_budget:
+            decision = self.budget_guard.check(task_type)
+            if not decision.allowed:
+                _logger.warning(
+                    "llm budget blocked task=%s reason=%s daily=%d monthly=%d",
+                    task_type,
+                    decision.reason,
+                    decision.daily_count,
+                    decision.monthly_count,
+                )
+                return self._fallback_response(decision.reason, prompt, cache_key)
+            warning = decision.warning
 
         try:
             text = self.client.generate(prompt, model=self.model)
@@ -86,11 +96,12 @@ class LlmService:
             return self._fallback_response("error", prompt, cache_key)
 
         self.cache.set(cache_key, text)
-        self.budget_guard.record_call(task_type, self.model, cache_key, cache_hit=False)
+        if self.enforce_budget:
+            self.budget_guard.record_call(task_type, self.model, cache_key, cache_hit=False)
         _logger.info(
-            "llm call ok task=%s model=%s warning=%s", task_type, self.model, decision.warning
+            "llm call ok task=%s model=%s warning=%s", task_type, self.model, warning
         )
-        return LlmResponse(text, "gemini", cache_key, warning=decision.warning)
+        return LlmResponse(text, "gemini", cache_key, warning=warning)
 
     def _fallback_response(self, reason: str, prompt: str, cache_key: str) -> LlmResponse:
         if reason == "daily_limit_reached":

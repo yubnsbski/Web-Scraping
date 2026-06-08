@@ -67,6 +67,7 @@ def build_llm_service(
     *,
     client: TextGenerationClient | None = None,
     model: str | None = None,
+    enforce_budget: bool = True,
 ) -> LlmService:
     """Build the single approved LLM service from ``config/gemini.yaml``.
 
@@ -88,6 +89,7 @@ def build_llm_service(
         ),
         budget_guard=BudgetGuard(config.usage_db_path, config.budget),
         fallback=config.fallback,
+        enforce_budget=enforce_budget,
     )
 
 
