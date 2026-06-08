@@ -98,10 +98,16 @@ def build_orchestrator(
     """
 
     fallback_client = None if call_real_api else LocalOrchestrationClient()
+    # Only the real Gemini path consumes the free-tier quota; the offline local
+    # client must not be throttled by the budget guard (otherwise drafts go empty
+    # once the daily count is hit).
+    enforce_budget = call_real_api
 
     def make_service(model: str) -> LlmService:
         chosen: TextGenerationClient | None = client if client is not None else fallback_client
-        return build_llm_service(config_path, client=chosen, model=model)
+        return build_llm_service(
+            config_path, client=chosen, model=model, enforce_budget=enforce_budget
+        )
 
     return MultiModelOrchestrator(
         drafter=make_service(role_models.drafter),

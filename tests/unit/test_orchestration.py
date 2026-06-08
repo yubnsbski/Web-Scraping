@@ -108,6 +108,46 @@ def test_build_orchestrator_offline_uses_local_client(tmp_path) -> None:
     assert result.to_dict()["disclaimer"]
 
 
+def test_offline_orchestration_ignores_exhausted_budget(tmp_path) -> None:
+    # The Gemini budget guard must not throttle the offline local client:
+    # otherwise drafts go empty once the daily count is reached.
+    usage_db = tmp_path / "usage.sqlite"
+    config = tmp_path / "gemini.yaml"
+    config.write_text(
+        "\n".join(
+            (
+                "gemini:",
+                "  enabled: true",
+                "  model: test-model",
+                "  daily_request_limit: 1",  # tiny limit, will be exhausted below
+                "  monthly_request_limit: 2",
+                "  usage_db_path: " + str(usage_db),
+                "  cache:",
+                "    enabled: true",
+                "    ttl_days: 1",
+                "    db_path: " + str(tmp_path / "cache.sqlite"),
+                "  allowed_tasks:",
+                "    - rag_answer",
+                "    - important_report_summary",
+            )
+        ),
+        encoding="utf-8",
+    )
+    guard = BudgetGuard(
+        usage_db, BudgetConfig(daily_request_limit=1, monthly_request_limit=2)
+    )
+    for index in range(5):  # blow past the daily/monthly limits
+        guard.record_call("rag_answer", "test-model", f"k{index}", cache_hit=False)
+
+    orchestrator = build_orchestrator(
+        config, config=OrchestrationConfig(n_drafts=2), call_real_api=False
+    )
+    result = orchestrator.run(query="配当方針は?", context=CONTEXT)
+
+    assert all(draft.text.strip() for draft in result.drafts)  # drafts produced output
+    assert "統合最終回答" in result.answer
+
+
 def test_default_perspectives_are_investment_aligned() -> None:
     assert OrchestrationConfig().perspectives == (
         "配当・財務安全性",
