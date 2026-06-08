@@ -1,8 +1,16 @@
 // Minimal typed fetch wrapper for the local Python JSON API.
 // GET when no body is provided, POST (JSON) otherwise.
 
+// Same-origin by default (web / installed PWA). A packaged native app sets
+// VITE_API_BASE to a hosted backend at build time. Absolute paths pass through.
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
+
+export function apiUrl(path: string): string {
+  return /^https?:\/\//.test(path) ? path : `${API_BASE}${path}`;
+}
+
 export async function api<T = unknown>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     method: body === undefined ? "GET" : "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
