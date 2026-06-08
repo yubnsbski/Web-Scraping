@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -49,6 +50,7 @@ from investment_assistant.orchestration.factory import build_orchestrator
 from investment_assistant.orchestration.orchestrator import OrchestrationConfig
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
+from investment_assistant.rag.embeddings import Embedder, resolve_embedder
 from investment_assistant.rag.indexer import index_directory
 from investment_assistant.rag.search import (
     SearchResult,
@@ -57,7 +59,11 @@ from investment_assistant.rag.search import (
     hybrid_search,
     search_chunks,
 )
-from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
+from investment_assistant.rag.store import (
+    DEFAULT_RAG_DB_PATH,
+    RagStore,
+    read_stored_embedder_name,
+)
 from investment_assistant.rag.tokenize import tokenize
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
@@ -536,12 +542,19 @@ def run_edinet_ingest(
     return result
 
 
+def _index_embedder(embeddings: str | None) -> Embedder:
+    """Resolve the embedder for indexing from a flag or ``RAG_EMBEDDINGS`` env."""
+
+    return resolve_embedder(embeddings or os.getenv("RAG_EMBEDDINGS"))
+
+
 def run_rag_index(
     *,
     path: str | Path,
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     max_chars: int = 800,
     overlap_chars: int = 120,
+    embeddings: str | None = None,
 ) -> dict[str, object]:
     """Index a local text/Markdown file into the local RAG store."""
 
@@ -553,12 +566,13 @@ def run_rag_index(
         max_chars=max_chars,
         overlap_chars=overlap_chars,
     )
-    store = RagStore(db_path)
+    store = RagStore(db_path, embedder=_index_embedder(embeddings))
     chunk_count = store.upsert_document(document, chunks)
     return {
         "source": document.source,
         "content_hash": document.content_hash,
         "chunks_indexed": chunk_count,
+        "embedder": store.stored_embedder_name(),
         "db_path": str(db_path),
     }
 
@@ -569,6 +583,7 @@ def run_rag_index_dir(
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     max_chars: int = 800,
     overlap_chars: int = 120,
+    embeddings: str | None = None,
 ) -> dict[str, object]:
     """Recursively index local text/Markdown files into the local RAG store."""
 
@@ -577,6 +592,7 @@ def run_rag_index_dir(
         db_path=db_path,
         max_chars=max_chars,
         overlap_chars=overlap_chars,
+        embedder=_index_embedder(embeddings),
     )
 
 
@@ -894,7 +910,10 @@ def run_orchestrate_answer(
 ) -> dict[str, object]:
     """Run multi-model orchestration over RAG context."""
 
-    store = RagStore(db_path)
+    # Embed queries in the same space the corpus was indexed with (gemini vs
+    # hashing), read from DB meta so old hashing DBs keep working.
+    embedder = resolve_embedder(read_stored_embedder_name(db_path))
+    store = RagStore(db_path, embedder=embedder)
     # Retrieve a larger candidate pool, then diversify down so the context spans
     # more documents instead of many redundant passages from one filing.
     pool = max(limit, min(limit * 3, 48))
@@ -908,7 +927,7 @@ def run_orchestrate_answer(
         # Single source: dedup only, do not cap per-source.
         results = diversify_results(results, limit=limit, max_per_source=limit)
     elif hybrid:
-        results = hybrid_search(store, query=query, limit=pool, alpha=alpha)
+        results = hybrid_search(store, query=query, limit=pool, alpha=alpha, embedder=embedder)
         results = diversify_results(results, limit=limit)
     else:
         results = search_chunks(store, query=query, limit=pool)
@@ -1334,12 +1353,14 @@ def main(argv: list[str] | None = None) -> int:
     rag_index_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_index_parser.add_argument("--max-chars", type=int, default=800)
     rag_index_parser.add_argument("--overlap-chars", type=int, default=120)
+    rag_index_parser.add_argument("--embeddings", choices=["hashing", "gemini"])
 
     rag_index_dir_parser = subparsers.add_parser("rag-index-dir")
     rag_index_dir_parser.add_argument("--path", required=True)
     rag_index_dir_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_index_dir_parser.add_argument("--max-chars", type=int, default=800)
     rag_index_dir_parser.add_argument("--overlap-chars", type=int, default=120)
+    rag_index_dir_parser.add_argument("--embeddings", choices=["hashing", "gemini"])
 
     rag_stats_parser = subparsers.add_parser("rag-stats")
     rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
@@ -1517,6 +1538,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             db_path=args.db_path,
             max_chars=args.max_chars,
             overlap_chars=args.overlap_chars,
+            embeddings=args.embeddings,
         )
     if command == "rag-index-dir":
         return run_rag_index_dir(
@@ -1524,6 +1546,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             db_path=args.db_path,
             max_chars=args.max_chars,
             overlap_chars=args.overlap_chars,
+            embeddings=args.embeddings,
         )
     if command == "rag-stats":
         keywords = tuple(

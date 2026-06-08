@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from investment_assistant.rag.chunker import chunk_text, load_document
+from investment_assistant.rag.embeddings import Embedder
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 
 INDEX_EXTENSIONS = frozenset({".md", ".markdown", ".txt"})
@@ -52,6 +53,7 @@ def index_directory(
     db_path: str | Path = DEFAULT_RAG_DB_PATH,
     max_chars: int = 800,
     overlap_chars: int = 120,
+    embedder: Embedder | None = None,
 ) -> dict[str, object]:
     """Recursively index supported local files into the RAG store.
 
@@ -64,7 +66,7 @@ def index_directory(
         msg = f"path must be a directory: {root}"
         raise ValueError(msg)
 
-    store = RagStore(db_path)
+    store = RagStore(db_path, embedder=embedder)
     skipped_paths = [
         candidate
         for candidate in sorted(root.rglob("*"))
