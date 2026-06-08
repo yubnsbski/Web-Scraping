@@ -97,6 +97,19 @@ class GeminiEmbedder:
         return vectors
 
 
+def resolve_embedder(name: str | None, *, api_key: str | None = None) -> Embedder:
+    """Map an embedder name to an instance.
+
+    ``"gemini"`` selects semantic Gemini embeddings (requires ``GEMINI_API_KEY``
+    and the optional SDK; constructed lazily). Anything else — including
+    ``None`` — falls back to the dependency-free :class:`HashingEmbedder`.
+    """
+
+    if (name or "").strip().lower() == "gemini":
+        return GeminiEmbedder(api_key=api_key)
+    return HashingEmbedder()
+
+
 def cosine(left: list[float], right: list[float]) -> float:
     """Cosine similarity; assumes (but does not require) normalized inputs."""
 

@@ -100,7 +100,23 @@ class RagStore:
                         for chunk, vector in zip(chunks, vectors, strict=True)
                     ],
                 )
+                # Record which embedder produced the stored vectors so search can
+                # embed queries in the same space (avoids silent space mismatch).
+                conn.execute(
+                    "INSERT INTO rag_meta (key, value) VALUES ('embedder', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (getattr(self.embedder, "name", "hashing"),),
+                )
         return len(chunks)
+
+    def stored_embedder_name(self) -> str | None:
+        """Return the embedder name recorded at index time, if any."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM rag_meta WHERE key = 'embedder'"
+            ).fetchone()
+        return str(row[0]) if row else None
 
     def iter_embeddings(self) -> list[tuple[StoredChunk, list[float]]]:
         """Return all stored chunks paired with their embedding vectors."""
@@ -226,6 +242,9 @@ class RagStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_rag_embeddings_source ON rag_embeddings(source)"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS rag_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
             self.fts_enabled = self._ensure_fts(conn)
             self._backfill_embeddings(conn)
 
@@ -335,3 +354,24 @@ def _metadata_from_json(value: str) -> dict[str, str]:
     if not isinstance(parsed, dict):
         return {}
     return {str(key): str(item) for key, item in parsed.items()}
+
+
+def read_stored_embedder_name(db_path: str | Path) -> str | None:
+    """Read the embedder name recorded in an existing RAG DB without opening it.
+
+    Used by search to choose a query embedder matching the indexed corpus. A
+    raw read avoids triggering schema creation or embedding backfill. Returns
+    ``None`` for a missing DB or a corpus indexed before meta was tracked.
+    """
+
+    path = Path(db_path)
+    if not path.exists():
+        return None
+    with sqlite3.connect(path) as conn:
+        try:
+            row = conn.execute(
+                "SELECT value FROM rag_meta WHERE key = 'embedder'"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    return str(row[0]) if row else None
