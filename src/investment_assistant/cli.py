@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-
+import os
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -939,7 +940,14 @@ def run_orchestrate_answer(
     requested ``drafts``.
     """
 
-
+    # Embed queries in the same space the corpus was indexed with (gemini vs
+    # hashing), read from DB meta so old hashing DBs keep working.
+    embedder = resolve_embedder(read_stored_embedder_name(db_path))
+    store = RagStore(db_path, embedder=embedder)
+    retrieval_query = search_query or query
+    # Retrieve a larger candidate pool, then diversify down so the context spans
+    # more documents instead of many redundant passages from one filing.
+    pool = max(limit, min(limit * 3, 48))
     if source_filter:
         results = _search_chunks_for_source(
             store,
@@ -950,7 +958,13 @@ def run_orchestrate_answer(
         # Single source: dedup only, do not cap per-source.
         results = diversify_results(results, limit=limit, max_per_source=limit)
     elif hybrid:
-
+        results = hybrid_search(
+            store, query=retrieval_query, limit=pool, alpha=alpha, embedder=embedder
+        )
+        results = diversify_results(results, limit=limit)
+    else:
+        results = search_chunks(store, query=retrieval_query, limit=pool)
+        results = diversify_results(results, limit=limit)
     context = build_answer_context(results)
     if not results:
         return {
