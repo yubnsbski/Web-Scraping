@@ -278,6 +278,30 @@ function useAsync<T>() {
   return { loading, error, data, run };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Start a background job and poll until it finishes, so long operations (e.g. a
+// multi-minute EDINET ingest) don't time out the port-forward proxy (HTTP 504).
+// Falls back to a synchronous result if the backend didn't return a job id.
+async function runJob(
+  startPath: string,
+  body: unknown,
+  { intervalMs = 3000, maxAttempts = 600 } = {},
+): Promise<Json> {
+  const started = await api<Json>(startPath, body);
+  const jobId = String(started.job_id ?? "");
+  if (!jobId) return started;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await sleep(intervalMs);
+    const job = await api<Json>("/api/jobs/status", { job_id: jobId });
+    if (job.status === "done") return (job.result as Json) ?? {};
+    if (job.status === "error") throw new Error(String(job.error ?? "job failed"));
+  }
+  throw new Error("ジョブがタイムアウトしました（バックグラウンドでは継続中の可能性があります）");
+}
+
 function Field(props: { label: string; children: ReactNode }) {
   return (
     <label className="field">
@@ -992,7 +1016,7 @@ function ScrapeTab() {
 
   const runEdinetIngest = () =>
     edinetState.run(() =>
-      api<Json>("/api/edinet/ingest", {
+      runJob("/api/edinet/ingest-async", {
         registry_path: edinetRegistry,
         days: edinetDays,
         years: edinetYears > 0 ? edinetYears : undefined,
