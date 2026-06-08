@@ -103,5 +103,14 @@ def test_build_orchestrator_offline_uses_local_client(tmp_path) -> None:
     orchestrator = build_orchestrator(config, config=OrchestrationConfig(n_drafts=2))
     assert isinstance(orchestrator.drafter.client, LocalOrchestrationClient)
     result = orchestrator.run(query="分散投資とは?", context=CONTEXT)
-    assert "統合最終回答" in result.answer
+    assert result.answer.startswith("統合最終回答\n")  # real newline, not literal \n
+    assert "\\n" not in result.answer
     assert result.to_dict()["disclaimer"]
+
+
+def test_default_perspectives_are_investment_aligned() -> None:
+    assert OrchestrationConfig().perspectives == (
+        "配当・財務安全性",
+        "下落リスク・競争環境",
+        "NISA長期保有・分散",
+    )

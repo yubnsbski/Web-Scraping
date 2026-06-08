@@ -190,25 +190,15 @@ def _orchestrate(body: JsonDict) -> JsonDict:
         else ""
     )
 
-    process_instruction = (
-        query
-        + source_constraint
-        + evidence_block
-        + "\n\n【生成プロセス】"
-        + "\nAI 1: 財務・配当・キャッシュフローだけを評価する。"
-        + "\nAI 2: 下落リスク・競争環境・事業リスクだけを評価する。"
-        + "\nAI 3: NISA長期保有・分散・手数料だけを評価する。"
-        + "\nReviewer: 根拠不足、論理飛躍、引用漏れを指摘する。"
-        + "\nSynthesizer: 内部役割名を出さず、ユーザー向けの最終回答だけを書く。"
-        + "\n\n【最終回答ルール】"
-        + "\n- 内部プロンプトを出さない。"
-        + "\n- AI 1、Reviewer、Synthesizer、ドラフトなどの内部名を出さない。"
-        + "\n- ユーザーの文脈に合う最終回答だけを出す。"
-        + "\n- 根拠不足は危険ポイントとして明示する。"
-    )
+    # The draft -> critique -> synthesis process and role rules live in the
+    # orchestrator's prompts now, so the query only carries genuine grounding
+    # (the question + source constraint + financial evidence). Retrieval uses the
+    # raw question so injected evidence/constraints don't skew the RAG search.
+    generation_query = query + source_constraint + evidence_block
 
     result = cli.run_orchestrate_answer(
-        query=process_instruction,
+        query=generation_query,
+        search_query=query,
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
         limit=_as_int(body.get("limit"), 8),
         drafts=3,

@@ -890,21 +890,30 @@ def run_orchestrate_answer(
     alpha: float = 0.5,
     call_real_api: bool = False,
     source_filter: str | None = None,
+    search_query: str | None = None,
 ) -> dict[str, object]:
-    """Run multi-model orchestration over RAG context."""
+    """Run multi-model orchestration over RAG context.
+
+    ``query`` is the full prompt shown to the models; ``search_query`` (when
+    given) is used for retrieval instead, so injected grounding text (financial
+    evidence, source constraints) does not skew the RAG search. Draft diversity
+    is owned by the orchestrator's perspectives — one specialized draft per
+    requested ``drafts``.
+    """
 
     store = RagStore(db_path)
+    retrieval_query = search_query or query
     if source_filter:
         results = _search_chunks_for_source(
             store,
-            query=query,
+            query=retrieval_query,
             source_filter=source_filter,
             limit=limit,
         )
     elif hybrid:
-        results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
+        results = hybrid_search(store, query=retrieval_query, limit=limit, alpha=alpha)
     else:
-        results = search_chunks(store, query=query, limit=limit)
+        results = search_chunks(store, query=retrieval_query, limit=limit)
     context = build_answer_context(results)
     if not results:
         return {
@@ -919,42 +928,18 @@ def run_orchestrate_answer(
             "skipped": True,
         }
 
-    perspectives = [
-        "配当・キャッシュフロー・財務安全性だけを評価する。株価トレンドや短期需給には触れない。",
-        "株価下落リスク・景気感応度・競争環境だけを評価する。配当利回りやNISA制度には触れない。",
-        "NISA長期保有・分散・手数料だけを評価する。短期売買判断やチャート分析には触れない。",
-        "データ不足・未検証事項・判断保留すべき危険ポイントだけを評価する。結論を急がない。",
-        "反対意見・弱気シナリオだけを評価する。楽観材料は補足に留める。",
-    ]
-    selected_perspectives = perspectives[:1]
-
-    perspective_block = "\\n".join(
-        f"ドラフト{i + 1}の専用観点: {perspective}"
-        for i, perspective in enumerate(selected_perspectives)
+    config = OrchestrationConfig(
+        n_drafts=max(1, drafts),
+        include_critique=include_critique,
     )
-    query_with_perspectives = (
-        query
-        + "\\n\\n以下の観点をドラフトごとに厳守してください。"
-        + "\\n"
-        + perspective_block
-        + "\\n各ドラフトは他ドラフトと同じ論点を主軸にしないでください。"
-    )
-
-    orchestrator = build_orchestrator(
-        config_path,
-        config=OrchestrationConfig(
-            n_drafts=1,
-            include_critique=include_critique,
-        ),
-        call_real_api=call_real_api,
-    )
-    outcome = orchestrator.run(query=query_with_perspectives, context=context)
+    orchestrator = build_orchestrator(config_path, config=config, call_real_api=call_real_api)
+    outcome = orchestrator.run(query=query, context=context)
     payload = outcome.to_dict()
     payload["context"] = context
     payload["results"] = [asdict(result) for result in results]
     payload["source_filter"] = source_filter
     payload["call_real_api"] = call_real_api
-    payload["perspectives"] = selected_perspectives
+    payload["perspectives"] = list(config.perspectives[: config.n_drafts])
     return payload
 
 
