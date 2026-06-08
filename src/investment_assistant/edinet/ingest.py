@@ -13,6 +13,7 @@ skipped so a single bad response never aborts the whole run.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
@@ -23,6 +24,13 @@ from investment_assistant.edinet.csv_extract import (
     select_metrics,
     to_rag_text,
 )
+from investment_assistant.edinet.financials_bridge import (
+    build_financial_point,
+    dedupe_points,
+    point_from_mapping,
+    point_to_row,
+    write_financials_csv,
+)
 from investment_assistant.edinet.models import (
     ACQUISITION_CSV,
     EdinetDocument,
@@ -31,10 +39,14 @@ from investment_assistant.edinet.models import (
     select_recent_documents,
 )
 from investment_assistant.edinet.registry import EdinetTarget
+from investment_assistant.financials import compare_financials
+from investment_assistant.financials.models import FinancialPoint
 from investment_assistant.ingestion.fetcher import reject_path_traversal
 from investment_assistant.observability import get_logger
 
 _logger = get_logger("edinet.ingest")
+
+FINANCIALS_CSV_NAME = "financials.csv"
 
 
 def recent_dates(end_date: str, days: int) -> list[str]:
@@ -67,6 +79,7 @@ def ingest_targets(
     documents, scanned_dates = _collect_documents(client, dates)
 
     results: list[dict[str, object]] = []
+    points: list[FinancialPoint] = []
     ingested = 0
     cached = 0
     for target in targets:
@@ -81,23 +94,33 @@ def ingest_targets(
             continue
 
         for document in selected:
-            record = _ingest_document(client, target, document, base_dir)
+            record, point = _ingest_document(client, target, document, base_dir)
             status = record["status"]
             if status == "ingested":
                 ingested += 1
             elif status == "cached":
                 cached += 1
+            if point is not None:
+                points.append(point)
             results.append(record)
 
-    return {
+    deduped = dedupe_points(points)
+    summary: dict[str, object] = {
         "output_dir": str(base_dir),
         "scanned_dates": scanned_dates,
         "documents_seen": len(documents),
         "targets_count": len(targets),
         "ingested_count": ingested,
         "cached_count": cached,
+        "financial_points": len(deduped),
         "results": results,
     }
+    if deduped:
+        summary["financials_csv"] = write_financials_csv(
+            deduped, base_dir / FINANCIALS_CSV_NAME
+        )
+        summary["comparison"] = compare_financials(deduped)
+    return summary
 
 
 def _ingest_document(
@@ -105,28 +128,36 @@ def _ingest_document(
     target: EdinetTarget,
     document: EdinetDocument,
     base_dir: Path,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], FinancialPoint | None]:
     if not document.has_csv:
-        return _status(target, "no_csv", doc_id=document.doc_id)
+        return _status(target, "no_csv", doc_id=document.doc_id), None
 
     out_path = base_dir / target.ticker / f"{document.doc_id}.txt"
+    sidecar = out_path.with_name(f"{document.doc_id}.points.json")
     if out_path.exists():
         record = _status(target, "cached", doc_id=document.doc_id)
         record["saved_path"] = str(out_path)
         record["period_end"] = document.period_end
-        return record
+        return record, _read_sidecar_point(sidecar)
 
     try:
         archive = client.download_document(document.doc_id, acquisition_type=ACQUISITION_CSV)
     except (OSError, EdinetApiError) as exc:
         _logger.warning("edinet download failed doc_id=%s error=%s", document.doc_id, exc)
-        return _status(target, "download_failed", doc_id=document.doc_id)
+        return _status(target, "download_failed", doc_id=document.doc_id), None
 
     values = parse_csv_archive(archive)
     text = to_rag_text(document, values, company=target.company)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding="utf-8")
-    return {
+
+    point = build_financial_point(document, values, ticker=target.ticker, company=target.company)
+    if point is not None:
+        sidecar.write_text(
+            json.dumps(point_to_row(point), ensure_ascii=False), encoding="utf-8"
+        )
+
+    record = {
         "name": target.name,
         "ticker": target.ticker,
         "status": "ingested",
@@ -137,6 +168,19 @@ def _ingest_document(
         "values_extracted": len(values),
         "metrics": sorted(select_metrics(values).keys()),
     }
+    return record, point
+
+
+def _read_sidecar_point(sidecar: Path) -> FinancialPoint | None:
+    if not sidecar.is_file():
+        return None
+    try:
+        row = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(row, dict):
+        return None
+    return point_from_mapping(row)
 
 
 def _collect_documents(

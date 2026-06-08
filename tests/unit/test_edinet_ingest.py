@@ -8,7 +8,7 @@ from investment_assistant.edinet.ingest import ingest_targets, recent_dates
 from investment_assistant.edinet.registry import EdinetTarget
 
 
-def _csv_zip(cf: str = "1234567", payout: str = "40.1") -> bytes:
+def _csv_zip(cf: str = "1234567", payout: str = "40.1", dps: str = "41.0") -> bytes:
     columns = [
         "要素ID", "項目名", "コンテキストID", "相対年度", "連結・個別",
         "期間・時点", "ユニットID", "単位", "値",
@@ -16,6 +16,7 @@ def _csv_zip(cf: str = "1234567", payout: str = "40.1") -> bytes:
     rows = [
         f"x:Cf\t営業活動によるキャッシュ・フロー\tCY\t当期\t連結\t期間\tJPY\t百万円\t{cf}",
         f"x:Po\t配当性向\tCY\t当期\t連結\t期間\tPure\t％\t{payout}",
+        f"x:Dps\t１株当たり配当\tCY\t当期\t連結\t期間\tJPY\t円\t{dps}",
     ]
     text = "\r\n".join(["\t".join(columns), *rows]) + "\r\n"
     buffer = io.BytesIO()
@@ -27,8 +28,13 @@ def _csv_zip(cf: str = "1234567", payout: str = "40.1") -> bytes:
 class _FakeEdinetClient:
     """Returns canned document lists per date and a canned archive per doc id."""
 
-    def __init__(self, documents_by_date: dict[str, list[dict[str, object]]]) -> None:
+    def __init__(
+        self,
+        documents_by_date: dict[str, list[dict[str, object]]],
+        archives: dict[str, bytes] | None = None,
+    ) -> None:
         self._documents_by_date = documents_by_date
+        self._archives = archives or {}
         self.downloaded: list[str] = []
 
     def list_documents(self, date: str):  # type: ignore[no-untyped-def]
@@ -38,7 +44,7 @@ class _FakeEdinetClient:
 
     def download_document(self, doc_id: str, *, acquisition_type: int = 5) -> bytes:
         self.downloaded.append(doc_id)
-        return _csv_zip()
+        return self._archives.get(doc_id, _csv_zip())
 
 
 def _mufg_doc(doc_id: str, submit: str) -> dict[str, object]:
@@ -156,6 +162,78 @@ def test_ingest_targets_skips_already_saved_documents(tmp_path: Path) -> None:
     assert second["ingested_count"] == 0
     assert second["cached_count"] == 1
     assert second_client.downloaded == []
+
+
+def test_ingest_builds_financials_csv_and_detects_dividend_cut(tmp_path: Path) -> None:
+    # Two annual filings: FY2024 dividend lower than FY2023 -> a cut in 2024.
+    client = _FakeEdinetClient(
+        {
+            "2026-06-08": [
+                _mufg_doc("S100Y24", "2024-06-21 09:00"),  # period_end 2024-03-31
+                {
+                    "docID": "S100Y23",
+                    "secCode": "83060",
+                    "filerName": "三菱UFJ",
+                    "docTypeCode": "120",
+                    "docDescription": "有価証券報告書",
+                    "periodEnd": "2023-03-31",
+                    "submitDateTime": "2023-06-21 09:00",
+                    "csvFlag": "1",
+                },
+            ],
+        },
+        archives={
+            "S100Y24": _csv_zip(dps="40.0"),
+            "S100Y23": _csv_zip(dps="50.0"),
+        },
+    )
+    target = EdinetTarget(
+        name="8306", ticker="8306", company="MUFG", doc_types=("120",), max_periods=2
+    )
+
+    result = ingest_targets(
+        client=client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=tmp_path / "edinet",
+    )
+
+    assert result["financial_points"] == 2
+    assert Path(str(result["financials_csv"])).is_file()
+    comparison = result["comparison"]
+    assert isinstance(comparison, dict)
+    companies = comparison["companies"]
+    assert isinstance(companies, list)
+    mufg = companies[0]
+    assert mufg["dividend_cut_years"] == [2024]
+    assert mufg["dividend_trend"] == "declining"
+
+
+def test_ingest_recovers_points_from_sidecar_on_cached_run(tmp_path: Path) -> None:
+    documents = {"2026-06-08": [_mufg_doc("S100Y24", "2024-06-21 09:00")]}
+    target = EdinetTarget(name="8306", ticker="8306", company="MUFG", doc_types=("120",))
+    out_dir = tmp_path / "edinet"
+
+    first = ingest_targets(
+        client=_FakeEdinetClient(documents),  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=out_dir,
+    )
+    assert first["financial_points"] == 1
+
+    # Second run: filing is cached, but its point is recovered from the sidecar.
+    second_client = _FakeEdinetClient(documents)
+    second = ingest_targets(
+        client=second_client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=out_dir,
+    )
+    assert second["cached_count"] == 1
+    assert second_client.downloaded == []
+    assert second["financial_points"] == 1
+    assert "comparison" in second
 
 
 def test_ingest_targets_reports_missing_documents(tmp_path: Path) -> None:

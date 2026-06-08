@@ -417,6 +417,14 @@ button:disabled {
   gap: 12px;
 }
 
+.edinet-comparison {
+  margin-top: 12px;
+}
+
+.edinet-comparison h4 {
+  margin: 0 0 8px;
+}
+
 .chat-window {
   display: grid;
   gap: 12px;

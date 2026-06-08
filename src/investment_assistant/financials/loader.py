@@ -86,16 +86,24 @@ def _dividend_trend(rows: list[FinancialPoint]) -> str:
     """Classify the dividend path: increasing / flat / cut / mixed."""
 
     ordered = sorted(rows, key=lambda r: r.fiscal_year)
-    if len(ordered) < 2:
+    return _series_trend([r.dividend_per_share for r in ordered])
+
+
+def _series_trend(series: list[float]) -> str:
+    """Classify a fiscal-year-ordered numeric series.
+
+    increasing / declining / flat / mixed / insufficient. Shared by dividend and
+    operating cash-flow trends so the classification stays consistent.
+    """
+
+    if len(series) < 2:
         return "insufficient"
-    ups = downs = flats = 0
-    for prev, curr in zip(ordered, ordered[1:], strict=False):
-        if curr.dividend_per_share > prev.dividend_per_share:
+    ups = downs = 0
+    for prev, curr in zip(series, series[1:], strict=False):
+        if curr > prev:
             ups += 1
-        elif curr.dividend_per_share < prev.dividend_per_share:
+        elif curr < prev:
             downs += 1
-        else:
-            flats += 1
     if downs == 0 and ups > 0:
         return "increasing"
     if downs > 0 and ups == 0:
@@ -126,9 +134,13 @@ def compare_financials(points: list[FinancialPoint]) -> dict[str, object]:
                 "latest_dividend_per_share": latest.dividend_per_share,
                 "dividend_cut_years": _dividend_cut_years(ordered),
                 "dividend_trend": _dividend_trend(ordered),
+                "operating_cf_trend": _series_trend([r.operating_cf for r in ordered]),
+                "equity_ratio_trend": _series_trend([r.equity_ratio for r in ordered]),
                 "payout_policy": latest.payout_policy,
                 "years": [r.fiscal_year for r in ordered],
                 "dividend_series": [r.dividend_per_share for r in ordered],
+                "operating_cf_series": [r.operating_cf for r in ordered],
+                "equity_ratio_series": [r.equity_ratio for r in ordered],
             }
         )
     companies.sort(key=lambda c: str(c["ticker"]))
