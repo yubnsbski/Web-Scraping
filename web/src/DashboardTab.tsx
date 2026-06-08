@@ -16,50 +16,36 @@ function pct(value: unknown): string {
   return `${toNumber(value).toFixed(2)}%`;
 }
 
-function Metric(props: { label: string; value: string }) {
+type Tone = "accent" | "pos" | "neg" | "warn";
+
+function Metric(props: { label: string; value: string; tone?: Tone }) {
   return (
-    <article className="metric-card">
+    <article className={`metric-card${props.tone ? ` ${props.tone}` : ""}`}>
       <span>{props.label}</span>
       <b>{props.value}</b>
     </article>
   );
 }
 
-function BarChart(props: { rows: Json[]; valueKey: string }) {
-  const max = Math.max(...props.rows.map((r) => toNumber(r[props.valueKey])), 1);
+function BarChart(props: { rows: Json[]; valueKey: string; fmt?: (v: number) => string }) {
+  if (props.rows.length === 0) return <p className="hint">データがありません。</p>;
+  const values = props.rows.map((r) => toNumber(r[props.valueKey]));
+  const max = Math.max(...values, 1);
 
   return (
-    <div style={{ display: "flex", gap: 10, alignItems: "end", minHeight: 160 }}>
+    <div className="chart-bars">
       {props.rows.map((row, index) => {
         const value = toNumber(row[props.valueKey]);
-        const height = Math.max(6, (value / max) * 120);
-
+        const height = `${Math.max(3, (value / max) * 100)}%`;
         return (
-          <div
-            key={`${row.period ?? index}`}
-            style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}
-          >
-            <div
-              style={{
-                height: 120,
-                border: "1px solid currentColor",
-                borderRadius: 8,
-                display: "flex",
-                alignItems: "end",
-                overflow: "hidden",
-                opacity: 0.75,
-              }}
-            >
-              <span
-                style={{
-                  display: "block",
-                  width: "100%",
-                  height,
-                  background: "currentColor",
-                }}
-              />
+          <div className="chart-bar" key={`${row.period ?? index}`}>
+            <small className="chart-bar-val">
+              {props.fmt ? props.fmt(value) : value.toLocaleString()}
+            </small>
+            <div className="chart-bar-track">
+              <i style={{ height }} />
             </div>
-            <small style={{ textAlign: "center" }}>{String(row.period ?? "")}</small>
+            <small className="chart-bar-label">{String(row.period ?? "")}</small>
           </div>
         );
       })}
@@ -67,34 +53,59 @@ function BarChart(props: { rows: Json[]; valueKey: string }) {
   );
 }
 
-function LineChart(props: { rows: Json[]; valueKey: string; label: string }) {
+function AreaChart(props: {
+  rows: Json[];
+  valueKey: string;
+  label: string;
+  tone?: "accent" | "good" | "bad";
+  fmt?: (v: number) => string;
+}) {
   const values = props.rows.map((r) => toNumber(r[props.valueKey]));
   if (values.length === 0) return <p className="hint">データがありません。</p>;
 
-  const width = 360;
-  const height = 160;
-  const pad = 18;
+  const width = 480;
+  const height = 170;
+  const pad = 24;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
+  const xs = (i: number) => pad + ((width - pad * 2) * i) / Math.max(values.length - 1, 1);
+  const ys = (v: number) => height - pad - ((v - min) / range) * (height - pad * 2);
 
-  const points = values
-    .map((value, index) => {
-      const x = pad + ((width - pad * 2) * index) / Math.max(values.length - 1, 1);
-      const y = height - pad - ((value - min) / range) * (height - pad * 2);
-      return `${x},${y}`;
-    })
-    .join(" ");
+  const line = values.map((v, i) => `${xs(i)},${ys(v)}`).join(" ");
+  const area = `${pad},${height - pad} ${line} ${xs(values.length - 1)},${height - pad}`;
+  const stroke =
+    props.tone === "good" ? "var(--safe)" : props.tone === "bad" ? "var(--error)" : "var(--accent)";
+  const gid = `dash-grad-${props.valueKey}-${props.tone ?? "accent"}`;
+  const last = values[values.length - 1];
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={props.label}>
-      <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="currentColor" opacity="0.25" />
-      <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="currentColor" opacity="0.25" />
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="3" />
-      {points.split(" ").map((point, index) => {
-        const [x, y] = point.split(",");
-        return <circle key={`${point}-${index}`} cx={x} cy={y} r="3" fill="currentColor" />;
+    <svg className="area-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={props.label}>
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={stroke} stopOpacity="0.34" />
+          <stop offset="100%" stopColor={stroke} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {[0, 0.5, 1].map((t) => {
+        const y = pad + t * (height - pad * 2);
+        return (
+          <line key={t} x1={pad} y1={y} x2={width - pad} y2={y} stroke="var(--line)" strokeOpacity="0.5" />
+        );
       })}
+      <polygon points={area} fill={`url(#${gid})`} />
+      <polyline
+        points={line}
+        fill="none"
+        stroke={stroke}
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle cx={xs(values.length - 1)} cy={ys(last)} r="4" fill={stroke} />
+      <text x={width - pad} y={ys(last) - 9} textAnchor="end" className="area-last" fill={stroke}>
+        {props.fmt ? props.fmt(last) : last.toLocaleString()}
+      </text>
     </svg>
   );
 }
@@ -132,13 +143,15 @@ export function DashboardTab() {
 
   const dividendSeries: Json[] = Array.isArray(dividends?.series) ? dividends.series : [];
   const performanceSeries: Json[] = Array.isArray(performance?.series) ? performance.series : [];
+  const pnl = toNumber(performance?.pnl);
+  const pnlPositive = pnl >= 0;
 
   return (
     <section className="tool-section">
       <div className="section-head">
         <div>
           <p className="eyebrow">Dashboard</p>
-          <h2>配当・運用グラフ</h2>
+          <h2>運用実績</h2>
         </div>
         <span className="badge">Portfolio CSV</span>
       </div>
@@ -167,28 +180,43 @@ export function DashboardTab() {
       {error && <p className="status error">エラー: {error}</p>}
 
       <section className="metric-grid">
-        <Metric label="年間配当" value={yen(dividends?.latest_annual)} />
-        <Metric label="平均利回り" value={pct(dividends?.avg_yield_pct)} />
-        <Metric label="増配継続" value={`${Math.round(toNumber(dividends?.increase_streak))}期`} />
-        <Metric label="評価額" value={yen(performance?.market_value)} />
-        <Metric label="損益" value={yen(performance?.pnl)} />
-        <Metric label="最大DD" value={pct(performance?.max_drawdown_pct)} />
+        <Metric label="評価額" value={yen(performance?.market_value)} tone="accent" />
+        <Metric label="損益" value={yen(performance?.pnl)} tone={pnlPositive ? "pos" : "neg"} />
+        <Metric label="最大DD" value={pct(performance?.max_drawdown_pct)} tone="warn" />
+        <Metric label="年間配当" value={yen(dividends?.latest_annual)} tone="pos" />
+        <Metric label="平均利回り" value={pct(dividends?.avg_yield_pct)} tone="accent" />
+        <Metric
+          label="増配継続"
+          value={`${Math.round(toNumber(dividends?.increase_streak))}期`}
+        />
       </section>
 
-      <section className="guide-grid">
-        <article className="guide-card">
-          <b>年間配当</b>
-          <BarChart rows={dividendSeries} valueKey="dividend_received" />
-        </article>
-
-        <article className="guide-card">
+      <section className="dash-charts">
+        <article className="guide-card chart-card chart-card-wide">
           <b>評価額推移</b>
-          <LineChart rows={performanceSeries} valueKey="market_value" label="評価額推移" />
+          <AreaChart
+            rows={performanceSeries}
+            valueKey="market_value"
+            label="評価額推移"
+            tone="accent"
+            fmt={(v) => yen(v)}
+          />
         </article>
 
-        <article className="guide-card">
+        <article className="guide-card chart-card">
           <b>損益率</b>
-          <LineChart rows={performanceSeries} valueKey="pnl_pct" label="損益率" />
+          <AreaChart
+            rows={performanceSeries}
+            valueKey="pnl_pct"
+            label="損益率"
+            tone={pnlPositive ? "good" : "bad"}
+            fmt={(v) => `${v.toFixed(2)}%`}
+          />
+        </article>
+
+        <article className="guide-card chart-card chart-card-wide">
+          <b>年間配当</b>
+          <BarChart rows={dividendSeries} valueKey="dividend_received" fmt={(v) => yen(v)} />
         </article>
       </section>
 
