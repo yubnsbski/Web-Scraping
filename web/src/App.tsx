@@ -65,6 +65,7 @@ const TABS = [
   { id: "scoring", label: "Score" },
   { id: "forecast", label: "Forecast" },
   { id: "scrape", label: "Data Intake" },
+  { id: "analysis", label: "解析" },
   { id: "ops", label: "Ops" },
 ] as const;
 
@@ -251,6 +252,7 @@ export function App() {
         {tab === "scoring" && <ScoringTab />}
         {tab === "forecast" && <ForecastTab />}
         {tab === "scrape" && <ScrapeTab />}
+        {tab === "analysis" && <AnalysisTab />}
         {tab === "ops" && <OpsTab />}
       </main>
       <footer className="footer">
@@ -1361,6 +1363,153 @@ function FetchResultsTable(props: { results: Json[] }) {
 }
 
 // --- Budget / cache --------------------------------------------------------
+
+function diffVal(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
+}
+
+function ChangeChip({ change }: { change: Json }) {
+  const field = String(change.field ?? "");
+  const from = change.from;
+  const to = change.to;
+  let tone = "";
+  if (field === "1株配当" && typeof from === "number" && typeof to === "number") {
+    tone = to < from ? " neg" : to > from ? " pos" : "";
+  }
+  if (field === "新規減配年") tone = " neg";
+  const body =
+    from !== undefined && from !== null ? `${diffVal(from)} → ${diffVal(to)}` : diffVal(to);
+  return (
+    <span className={`diff-chip${tone}`}>
+      <b>{field}</b> {body}
+    </span>
+  );
+}
+
+function AnalysisTab() {
+  const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
+  const state = useAsync<Json>();
+  const analyze = () => state.run(() => api<Json>("/api/knowledge/diff", { db_path: dbPath }));
+  useEffect(() => {
+    void analyze();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const data = state.data;
+  const snap: Json = data?.snapshot ?? {};
+  const rag: Json = snap.rag ?? {};
+  const fin: Json = snap.financials ?? {};
+  const diff: Json = data?.diff ?? {};
+  const ragDiff: Json = diff.rag ?? {};
+  const changes: Json[] = Array.isArray(diff.financial_changes) ? diff.financial_changes : [];
+  const newSources: string[] = Array.isArray(ragDiff.new_sources) ? ragDiff.new_sources : [];
+
+  const delta = (n: unknown) => {
+    const v = Number(n ?? 0);
+    if (!v) return null;
+    return <small className={v > 0 ? "delta up" : "delta down"}>{v > 0 ? `+${v}` : v}</small>;
+  };
+
+  return (
+    <section className="tool-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Context</p>
+          <h2>コンテキスト解析</h2>
+        </div>
+        <span className="badge">差分</span>
+      </div>
+      <p className="hint">
+        RAG・財務知識のスナップショットを取り、前回からの差分（学習の更新）を可視化します。
+      </p>
+      <div className="form compact-form">
+        <label className="field">
+          <span>RAG DBパス</span>
+          <input value={dbPath} onChange={(e) => setDbPath(e.target.value)} />
+        </label>
+        <button className="primary" onClick={() => void analyze()} disabled={state.loading}>
+          解析
+        </button>
+      </div>
+      <Status loading={state.loading} error={state.error} />
+
+      {data && (
+        <>
+          <section className="metric-grid">
+            <article className="metric-card accent">
+              <span>RAGソース</span>
+              <b>
+                {String(rag.sources ?? 0)} {delta(ragDiff.sources_delta)}
+              </b>
+            </article>
+            <article className="metric-card accent">
+              <span>チャンク</span>
+              <b>
+                {String(rag.chunks ?? 0)} {delta(ragDiff.chunks_delta)}
+              </b>
+            </article>
+            <article className="metric-card">
+              <span>追跡銘柄</span>
+              <b>{Object.keys(fin).length}</b>
+            </article>
+            <article className="metric-card">
+              <span>変化銘柄</span>
+              <b>{changes.length}</b>
+            </article>
+          </section>
+
+          {data.previous_at
+            ? !diff.has_changes && (
+                <p className="status">前回スナップショットから変化はありません。</p>
+              )
+            : (
+                <p className="hint">
+                  初回スナップショットを保存しました。次回以降の解析で差分を表示します。
+                </p>
+              )}
+
+          {newSources.length > 0 && (
+            <div className="diff-block">
+              <b>🆕 新規ソース（{newSources.length}）</b>
+              <ul className="kv">
+                {newSources.slice(0, 12).map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {changes.length > 0 && (
+            <div className="diff-block">
+              <b>💴 財務・配当の変化（{changes.length}）</b>
+              <div className="diff-list">
+                {changes.map((c) => (
+                  <article className="diff-card" key={String(c.ticker)}>
+                    <header className="diff-card-head">
+                      <b>
+                        {String(c.ticker)} {String(c.name ?? "")}
+                      </b>
+                      {c.kind === "new" && <span className="badge safe">新規</span>}
+                    </header>
+                    <div className="diff-chips">
+                      {(Array.isArray(c.changes) ? c.changes : []).map(
+                        (ch: Json, i: number) => (
+                          <ChangeChip change={ch} key={i} />
+                        ),
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 function OpsTab() {
   const budget = useAsync<Json>();

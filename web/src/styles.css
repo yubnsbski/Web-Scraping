@@ -677,3 +677,49 @@ details summary {
 @media (max-width: 720px) {
   .dash-charts { grid-template-columns: 1fr; }
 }
+
+/* --- Context analysis (差分) ---------------------------------------- */
+.delta { margin-left: 6px; font-size: 0.72rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.delta.up { color: var(--safe); }
+.delta.down { color: var(--error); }
+
+.diff-block { margin-top: 18px; }
+.diff-block > b { display: block; margin-bottom: 10px; color: var(--text); letter-spacing: 0.02em; }
+
+.diff-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.diff-card {
+  background: linear-gradient(180deg, rgba(21, 31, 50, 0.95), rgba(11, 18, 32, 0.95));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  position: relative;
+  overflow: hidden;
+}
+.diff-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+.diff-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.diff-card-head b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.diff-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.diff-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(56, 189, 248, 0.06);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.diff-chip b { color: var(--text); font-weight: 600; }
+.diff-chip.pos { border-color: rgba(34, 197, 94, 0.5); background: rgba(34, 197, 94, 0.08); color: var(--safe); }
+.diff-chip.pos b { color: var(--safe); }
+.diff-chip.neg { border-color: rgba(248, 113, 113, 0.5); background: rgba(248, 113, 113, 0.08); color: var(--error); }
+.diff-chip.neg b { color: var(--error); }

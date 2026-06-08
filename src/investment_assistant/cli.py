@@ -1324,6 +1324,12 @@ def main(argv: list[str] | None = None) -> int:
     storage_prune_parser.add_argument("--http-max-rows", type=int, default=500)
     storage_prune_parser.add_argument("--no-cache", action="store_true")
 
+    knowledge_diff_parser = subparsers.add_parser("knowledge-diff")
+    knowledge_diff_parser.add_argument("--db-path", default=DEFAULT_RAG_DB_PATH)
+    knowledge_diff_parser.add_argument("--financials-csv")
+    knowledge_diff_parser.add_argument("--snapshot-path")
+    knowledge_diff_parser.add_argument("--no-save", action="store_true")
+
     crawl_parser = subparsers.add_parser("crawl")
     crawl_parser.add_argument("--path", required=True)
     crawl_parser.add_argument("--output-dir", default="local_docs/crawl")
@@ -1508,6 +1514,16 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             keep_per_dir=args.keep_per_dir,
             http_max_rows=args.http_max_rows,
             prune_cache=not args.no_cache,
+        )
+    if command == "knowledge-diff":
+        from investment_assistant import knowledge
+        from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
+
+        return knowledge.run_knowledge_diff(
+            db_path=args.db_path,
+            financials_csv=args.financials_csv or DEFAULT_FINANCIALS_CSV,
+            snapshot_path=args.snapshot_path or knowledge.DEFAULT_SNAPSHOT_PATH,
+            save=not args.no_save,
         )
     if command == "crawl":
         return run_crawl(
