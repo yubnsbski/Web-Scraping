@@ -57,3 +57,22 @@ def test_build_financial_evidence_none_when_csv_missing(tmp_path: Path) -> None:
 
 def test_build_financial_evidence_none_for_unknown_ticker(tmp_path: Path) -> None:
     assert build_financial_evidence(ticker="9999", csv_path=_csv(tmp_path)) is None
+
+
+def test_single_period_evidence_shows_latest_values_and_note(tmp_path: Path) -> None:
+    path = tmp_path / "financials.csv"
+    path.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "9602,東宝,2024,500000,52.0,40.0,配当性向 30%\n",
+        encoding="utf-8",
+    )
+    comparison = load_comparison(path)
+    assert comparison is not None
+    company = comparison["companies"][0]  # type: ignore[index]
+    text = dividend_evidence_text(company)
+
+    # With one period the trend is unavailable, but the latest actuals are shown.
+    assert "1株配当=40.0" in text
+    assert "自己資本比率=52.0" in text
+    assert "現在1期のみ取得" in text
+    assert "データ不足" in text

@@ -70,6 +70,9 @@ def dividend_evidence_text(company: dict[str, object]) -> str:
     )
     cut_note = f"（減配年: {', '.join(cut_years)}）" if cut_years else "（減配履歴なし）"
 
+    years = company.get("years")
+    n_periods = len(years) if isinstance(years, list) else 0
+
     lines = [
         "【財務根拠（EDINET公式数値・機械集計）】",
         f"対象: {company.get('ticker')} {company.get('name')}",
@@ -78,12 +81,17 @@ def dividend_evidence_text(company: dict[str, object]) -> str:
         f"営業CF推移: {_trend(company.get('operating_cf_trend'))}",
         f"自己資本比率推移: {_trend(company.get('equity_ratio_trend'))}",
         (
-            f"最新: 営業CF={company.get('latest_operating_cf')} / "
+            f"最新(FY{company.get('latest_fiscal_year')}): "
+            f"営業CF={company.get('latest_operating_cf')} / "
             f"自己資本比率={company.get('latest_equity_ratio')} / "
             f"1株配当={company.get('latest_dividend_per_share')}"
         ),
-        "※ 取得済みEDINETデータの機械的集計であり、投資助言ではありません。",
     ]
+    if n_periods <= 1:
+        lines.append(
+            "※ 現在1期のみ取得。推移は次期取得後に算出（上記「最新」は取得済みの実数値）。"
+        )
+    lines.append("※ 取得済みEDINETデータの機械的集計であり、投資助言ではありません。")
     return "\n".join(lines)
 
 
