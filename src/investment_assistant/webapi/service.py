@@ -27,6 +27,7 @@ from investment_assistant.portfolio.loader import (
     summarize_performance,
 )
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+from investment_assistant.webapi.jobs import JOBS
 
 JsonDict = dict[str, Any]
 Handler = Callable[[JsonDict], JsonDict]
@@ -397,6 +398,26 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
         index_after=_as_bool(body.get("index_after_fetch"), True),
         max_periods=max_periods if max_periods and max_periods > 0 else None,
     )
+
+
+def _edinet_ingest_async(body: JsonDict) -> JsonDict:
+    """Start an EDINET ingest in the background and return a job id to poll.
+
+    A multi-year / many-ticker ingest runs for minutes and would otherwise time
+    out the editor's port-forward proxy as an HTTP 504. The work runs on a
+    daemon thread; the frontend polls ``/api/jobs/status``.
+    """
+
+    job_id = JOBS.start("edinet-ingest", lambda: _edinet_ingest(body))
+    return {"job_id": job_id, "status": "running", "kind": "edinet-ingest"}
+
+
+def _job_status(body: JsonDict) -> JsonDict:
+    job_id = _require_str(body, "job_id")
+    job = JOBS.get(job_id)
+    if job is None:
+        raise ApiError(f"unknown job_id: {job_id}")
+    return job
 
 
 def _storage_prune(body: JsonDict) -> JsonDict:
@@ -822,6 +843,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
     ("POST", "/api/edinet/ingest"): _edinet_ingest,
+    ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
+    ("POST", "/api/jobs/status"): _job_status,
     ("POST", "/api/storage/prune"): _storage_prune,
 }
 
