@@ -723,3 +723,104 @@ details summary {
 .diff-chip.pos b { color: var(--safe); }
 .diff-chip.neg { border-color: rgba(248, 113, 113, 0.5); background: rgba(248, 113, 113, 0.08); color: var(--error); }
 .diff-chip.neg b { color: var(--error); }
+
+/* ===================================================================
+   Mobile-first / bold / app-like redesign
+   大きく・太く・わかりやすく。スマホ＆PWA最適化。
+   =================================================================== */
+:root { --tap: 52px; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.6;
+  /* PWA: avoid content under the iOS home indicator / notches */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+h1 { font-weight: 900; letter-spacing: -0.02em; }
+h2 { font-size: clamp(22px, 5.2vw, 30px); font-weight: 800; letter-spacing: -0.01em; }
+.eyebrow { font-size: 13px; font-weight: 800; letter-spacing: 0.16em; }
+.hint { font-size: 14.5px; line-height: 1.65; }
+
+/* Big, bold, finger-friendly controls */
+button,
+.tab {
+  min-height: var(--tap);
+  font-size: 16px;
+  font-weight: 700;
+  border-radius: 14px;
+}
+button.primary {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+input,
+textarea,
+select {
+  font-size: 16px;           /* >=16px stops iOS auto-zoom on focus */
+  border-radius: 13px;
+}
+input,
+select { min-height: var(--tap); }
+textarea { min-height: 140px; }
+.field span { font-size: 14px; font-weight: 700; color: var(--text); }
+
+/* Sticky, horizontally-scrollable bold pill tab bar (app navigation) */
+.tabs {
+  position: sticky;
+  top: 8px;
+  z-index: 30;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  background: rgba(7, 11, 18, 0.82);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  flex: 0 0 auto;
+  padding: 12px 18px;
+  white-space: nowrap;
+}
+.tab.active { font-weight: 800; }
+
+/* Bigger KPI numbers */
+.metric-card b { font-size: clamp(20px, 4.6vw, 26px); font-weight: 800; }
+.metric-card span,
+.metric-card small { font-size: 13px; font-weight: 600; }
+
+.badge { font-size: 13px; font-weight: 700; min-height: 28px; }
+
+/* Phone layout: single column, full-width taps, tighter chrome */
+@media (max-width: 640px) {
+  .app { padding: 12px; gap: 16px; }
+  .terminal-hero { padding: 18px 16px; gap: 12px; }
+  .hero-lead { font-size: 15px; }
+  .hero-badges { gap: 6px; }
+  .tool-section { padding: 16px 14px; border-radius: 18px; }
+  .section-head { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .form,
+  .compact-form { grid-template-columns: 1fr; gap: 12px; }
+  /* Full-width action buttons inside forms (not the scrollable tabs) */
+  .form button,
+  .compact-form button,
+  .tool-section > button,
+  button.primary { width: 100%; }
+  .diff-list { grid-template-columns: 1fr; }
+  pre { font-size: 13px; }
+}
+
+/* Larger phones / small tablets */
+@media (min-width: 641px) and (max-width: 900px) {
+  .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
