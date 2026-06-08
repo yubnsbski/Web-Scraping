@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -580,6 +581,27 @@ def run_rag_index_dir(
 
 
 
+def _source_filter_matches(chunk_source: str, source_filter: str) -> bool:
+    """Match a chunk source against a target filter flexibly.
+
+    Accepts an exact path, a directory prefix (e.g. ``local_docs/edinet/9432``),
+    or a 4-digit ticker code appearing as a path segment — so selecting a ticker
+    in the UI matches its documents regardless of which corpus directory holds
+    them (EDINET filings live under ``local_docs/edinet/<ticker>/...`` while IR
+    crawls live under ``local_docs/nikkei225/<ticker>/...``).
+    """
+
+    target = source_filter.strip()
+    if not target:
+        return True
+    if chunk_source == target:
+        return True
+    if chunk_source.startswith(target.rstrip("/") + "/"):
+        return True
+    match = re.search(r"\d{4}", target)
+    return bool(match and f"/{match.group(0)}/" in f"/{chunk_source}")
+
+
 def _search_chunks_for_source(
     store: RagStore,
     *,
@@ -587,7 +609,7 @@ def _search_chunks_for_source(
     source_filter: str,
     limit: int,
 ) -> list[SearchResult]:
-    """Search chunks only from one exact RAG source path."""
+    """Search chunks restricted to one target source (exact path, prefix, or ticker)."""
 
     terms = tokenize(query)
     if not terms or limit <= 0:
@@ -595,7 +617,7 @@ def _search_chunks_for_source(
 
     results: list[SearchResult] = []
     for chunk in store.list_chunks():
-        if chunk.source != source_filter:
+        if not _source_filter_matches(chunk.source, source_filter):
             continue
 
         score = _score_source_filtered_text(chunk.text, terms)
