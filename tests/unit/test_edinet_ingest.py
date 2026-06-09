@@ -352,6 +352,53 @@ def test_ingest_recovers_points_from_sidecar_on_cached_run(tmp_path: Path) -> No
     assert "comparison" in second
 
 
+def test_edinet_save_writes_provenance_no_link_by_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("EDINET_DOC_URL_TEMPLATE", raising=False)
+    client = _FakeEdinetClient({"2026-06-08": [_mufg_doc("S100ANN", "2024-06-21 09:00")]})
+    target = EdinetTarget(name="8306", ticker="8306", company="MUFG", doc_types=("120",))
+    ingest_targets(
+        client=client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=tmp_path / "edinet",
+    )
+    text = (tmp_path / "edinet" / "8306" / "S100ANN.txt").read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    assert "edinet_doc_id: S100ANN" in text
+    assert "ticker: 8306" in text
+    assert "source_url:" not in text  # no fabricated link without opt-in
+
+
+def test_edinet_save_writes_source_url_when_template_set(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("EDINET_DOC_URL_TEMPLATE", "https://example.test/doc/{doc_id}")
+    client = _FakeEdinetClient({"2026-06-08": [_mufg_doc("S100ANN", "2024-06-21 09:00")]})
+    target = EdinetTarget(name="8306", ticker="8306", company="MUFG", doc_types=("120",))
+    out = tmp_path / "edinet"
+    ingest_targets(
+        client=client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=out,
+    )
+    text = (out / "8306" / "S100ANN.txt").read_text(encoding="utf-8")
+    assert "source_url: https://example.test/doc/S100ANN" in text
+
+    # Indexing extracts the URL as chunk metadata (so the UI can link it).
+    from investment_assistant import cli
+    from investment_assistant.rag.store import RagStore
+
+    db = tmp_path / "rag.sqlite"
+    cli.run_rag_index_dir(path=str(out), db_path=str(db))
+    chunks = RagStore(db).list_chunks()
+    assert any(
+        c.metadata.get("source_url") == "https://example.test/doc/S100ANN" for c in chunks
+    )
+
+
 def test_ingest_targets_reports_missing_documents(tmp_path: Path) -> None:
     client = _FakeEdinetClient({})
     target = EdinetTarget(name="7203", ticker="7203", company="トヨタ", doc_types=("120",))
