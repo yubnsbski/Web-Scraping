@@ -14,6 +14,7 @@ skipped so a single bad response never aborts the whole run.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
@@ -168,6 +169,31 @@ def _load_existing_points(csv_path: Path) -> list[FinancialPoint]:
         return []
 
 
+EDINET_DOC_URL_TEMPLATE_ENV = "EDINET_DOC_URL_TEMPLATE"
+
+
+def _edinet_front_matter(document: EdinetDocument, ticker: str) -> str:
+    """Build YAML front matter (provenance + an opt-in viewer URL).
+
+    EDINET has no public, key-less per-document URL — document acquisition goes
+    through the API and requires the Subscription-Key, which must not be embedded
+    in saved files. So ``source_url`` is written only when the operator opts in
+    via the ``EDINET_DOC_URL_TEMPLATE`` env (a ``{doc_id}`` template they have
+    verified), keeping provenance accurate without fabricating links.
+    """
+
+    lines = ["---", f"edinet_doc_id: {document.doc_id}"]
+    if ticker:
+        lines.append(f"ticker: {ticker}")
+    if document.period_end:
+        lines.append(f"period_end: {document.period_end}")
+    template = os.getenv(EDINET_DOC_URL_TEMPLATE_ENV, "").strip()
+    if template and "{doc_id}" in template:
+        lines.append(f"source_url: {template.replace('{doc_id}', document.doc_id)}")
+    lines.append("---")
+    return "\n".join(lines) + "\n\n"
+
+
 def _ingest_document(
     client: EdinetClient,
     target: EdinetTarget,
@@ -192,7 +218,9 @@ def _ingest_document(
         return _status(target, "download_failed", doc_id=document.doc_id), None
 
     values = parse_csv_archive(archive)
-    text = to_rag_text(document, values, company=target.company)
+    text = _edinet_front_matter(document, target.ticker) + to_rag_text(
+        document, values, company=target.company
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding="utf-8")
 
