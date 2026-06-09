@@ -60,22 +60,19 @@ const TARGET_SOURCE_OPTIONS: TargetSourceOption[] = [
 ];
 
 const TABS = [
-  { id: "search", label: "Research" },
-  { id: "answer", label: "AI Chat" },
   { id: "dashboard", label: "Dashboard" },
-  { id: "scoring", label: "Score" },
-  { id: "forecast", label: "Forecast" },
-  { id: "scrape", label: "Data Intake" },
-  { id: "analysis", label: "解析" },
-  { id: "simulate", label: "配当シミュ" },
-  { id: "ops", label: "Ops" },
+  { id: "holdings", label: "Holdings" },
+  { id: "candidates", label: "Candidates" },
+  { id: "detail", label: "Detail" },
+  { id: "report", label: "Report" },
+  { id: "evidence", label: "Evidence" },
 ] as const;
 
 const HERO_CARDS = [
-  { label: "RAG", value: "Evidence", desc: "ローカル文書だけを根拠化" },
-  { label: "Score", value: "Compare", desc: "CSVで候補を横比較" },
-  { label: "Forecast", value: "Backtest", desc: "同梱データで検証" },
-  { label: "Intake", value: "Auto / Manual", desc: "取得失敗時も手動登録" },
+  { label: "Holdings", value: "Analyze", desc: "保有・NISA・損益を集計" },
+  { label: "Candidates", value: "Screen", desc: "条件一致だけを提示" },
+  { label: "Report", value: "Evidence", desc: "計算式と根拠を保存" },
+  { label: "Detail", value: "RAG", desc: "銘柄・投信を根拠付き確認" },
 ] as const;
 
 const SUGGESTED_QUESTIONS = [
@@ -155,6 +152,16 @@ const SAMPLE_CSV =
   "高コストテーマ型,1.20,0.080,0.35,0.45\n" +
   "債券バランス型,0.35,0.030,0.08,0.80\n";
 
+const SAMPLE_HOLDINGS_CSV =
+  "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit\n" +
+  "stock,8306,MUFG,100,1000,tokutei,nisa_growth,user_csv,1200,,\n" +
+  "fund,F001,低コスト投信,50,10000,nisa,nisa_tsumitate,user_csv,11000,,30\n";
+
+const SAMPLE_FUNDS_CSV =
+  "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score\n" +
+  "F001,低コスト全世界株式,global_equity,0.12,reinvest,true,user_csv,0.95\n" +
+  "F999,高コストテーマ型,theme,1.20,distribution,false,user_csv,0.40\n";
+
 const SAMPLE_SOURCES = JSON.stringify([presetToSource(SOURCE_PRESETS[0])], null, 2);
 const DISCLOSURE_AUTO_SOURCES = [
   {
@@ -208,7 +215,7 @@ const DISCLOSURE_AUTO_SOURCES = [
 type TabId = (typeof TABS)[number]["id"];
 
 export function App() {
-  const [tab, setTab] = useState<TabId>("answer");
+  const [tab, setTab] = useState<TabId>("dashboard");
   return (
     <div className="app">
       <header className="terminal-hero">
@@ -216,7 +223,7 @@ export function App() {
           <p className="eyebrow">Investment Research Terminal</p>
           <h1>Investment Assistant</h1>
           <p className="hero-lead">
-            IR資料・ローカルメモ・CSVを根拠に、調査、比較、予測、取得を1画面で進めます。
+            日本株と投信の保有分析、候補抽出、NISA枠、根拠付きレポートを1画面で進めます。
           </p>
         </div>
         <div className="hero-badges">
@@ -248,15 +255,12 @@ export function App() {
         ))}
       </nav>
       <main className="panel">
-        {tab === "search" && <SearchTab />}
-        {tab === "answer" && <AnswerTab />}
         {tab === "dashboard" && <DashboardTab />}
-        {tab === "scoring" && <ScoringTab />}
-        {tab === "forecast" && <ForecastTab />}
-        {tab === "scrape" && <ScrapeTab />}
-        {tab === "analysis" && <AnalysisTab />}
-        {tab === "simulate" && <SimulateTab />}
-        {tab === "ops" && <OpsTab />}
+        {tab === "holdings" && <HoldingsTab />}
+        {tab === "candidates" && <CandidateScreenTab />}
+        {tab === "detail" && <AnswerTab />}
+        {tab === "report" && <InvestmentReportTab />}
+        {tab === "evidence" && <SearchTab />}
       </main>
       <footer className="footer">
         本ツールは投資助言ではありません。最終的な投資判断はユーザー本人が行います。
@@ -463,10 +467,10 @@ function SearchTab() {
     <section className="tool-section">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Research</p>
-          <h2>RAG検索</h2>
+          <p className="eyebrow">Evidence</p>
+          <h2>根拠検索</h2>
         </div>
-        <span className="badge">BM25 + Embedding</span>
+        <span className="badge">出典 / 引用</span>
       </div>
 
       <div className="form">
@@ -524,6 +528,315 @@ function SearchTab() {
           </tbody>
         </table>
       )}
+    </section>
+  );
+}
+
+// --- Investment-only MVP --------------------------------------------------
+
+function HoldingsTab() {
+  const [csv, setCsv] = useState(SAMPLE_HOLDINGS_CSV);
+  const importState = useAsync<Json>();
+  const analysisState = useAsync<Json>();
+
+  const importHoldings = () =>
+    importState.run(() => api<Json>("/api/holdings/import", { csv_text: csv }));
+  const analyze = () =>
+    analysisState.run(() => api<Json>("/api/portfolio/analyze", { csv_text: csv }));
+
+  const summary: Json = analysisState.data?.summary ?? {};
+  const rows: Json[] =
+    (analysisState.data?.holdings as Json[] | undefined) ??
+    (importState.data?.holdings as Json[] | undefined) ??
+    [];
+
+  return (
+    <section className="tool-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Holdings</p>
+          <h2>保有一覧・ポートフォリオ分析</h2>
+        </div>
+        <span className="badge">日本株 + 投信</span>
+      </div>
+      <p className="hint">
+        保有CSVまたは手入力相当のCSVから、評価額、評価損益、配当/分配金見込み、NISA枠、
+        集中度を機械的に集計します。売買推奨や注文連携は行いません。
+      </p>
+      <Field label="保有CSV">
+        <textarea rows={7} value={csv} onChange={(e) => setCsv(e.target.value)} />
+      </Field>
+      <div className="form">
+        <button onClick={importHoldings} disabled={importState.loading}>
+          形式を確認
+        </button>
+        <button className="primary" onClick={analyze} disabled={analysisState.loading}>
+          分析
+        </button>
+      </div>
+      <Status loading={importState.loading} error={importState.error} />
+      <Status loading={analysisState.loading} error={analysisState.error} />
+
+      {analysisState.data && (
+        <section className="metric-grid">
+          <article className="metric-card accent">
+            <span>評価額</span>
+            <b>{yen(summary.market_value)}</b>
+            <small>取得額 {yen(summary.cost_basis)}</small>
+          </article>
+          <article className={Number(summary.unrealized_pnl) >= 0 ? "metric-card pos" : "metric-card neg"}>
+            <span>評価損益</span>
+            <b>{yen(summary.unrealized_pnl)}</b>
+            <small>{Number(summary.unrealized_pnl_pct ?? 0).toFixed(2)}%</small>
+          </article>
+          <article className="metric-card pos">
+            <span>配当/分配金見込み</span>
+            <b>{yen(summary.annual_income_estimate)}</b>
+            <small>{Number(summary.income_yield_pct ?? 0).toFixed(2)}%</small>
+          </article>
+          <article className="metric-card warn">
+            <span>NISA総枠残</span>
+            <b>{yen(summary.nisa?.remaining_lifetime)}</b>
+            <small>成長枠残 {yen(summary.nisa?.growth_remaining)}</small>
+          </article>
+        </section>
+      )}
+
+      {rows.length > 0 && (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>種別</th>
+              <th>コード</th>
+              <th>名称</th>
+              <th>数量</th>
+              <th>評価額</th>
+              <th>損益</th>
+              <th>NISA/税区分</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${String(row.ticker_or_fund_code)}-${index}`}>
+                <td>{String(row.asset_type)}</td>
+                <td className="mono">{String(row.ticker_or_fund_code)}</td>
+                <td>{String(row.name)}</td>
+                <td className="mono">{String(row.quantity)}</td>
+                <td className="mono">{row.market_value ? yen(row.market_value) : "-"}</td>
+                <td className="mono">{row.unrealized_pnl ? yen(row.unrealized_pnl) : "-"}</td>
+                <td>{String(row.tax_wrapper)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {analysisState.data?.disclaimer && (
+        <p className="hint">{String(analysisState.data.disclaimer)}</p>
+      )}
+    </section>
+  );
+}
+
+function CandidateScreenTab() {
+  const [includeStocks, setIncludeStocks] = useState(true);
+  const [includeFunds, setIncludeFunds] = useState(true);
+  const [excludeCut, setExcludeCut] = useState(true);
+  const [minEquity, setMinEquity] = useState("40");
+  const [maxExpense, setMaxExpense] = useState("0.2");
+  const [nisaOnly, setNisaOnly] = useState(true);
+  const [minDiversification, setMinDiversification] = useState("0.8");
+  const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
+  const state = useAsync<Json>();
+
+  const screen = () =>
+    state.run(() =>
+      api<Json>("/api/candidates/screen", {
+        asset_types: [
+          ...(includeStocks ? ["stock"] : []),
+          ...(includeFunds ? ["fund"] : []),
+        ],
+        exclude_dividend_cut: excludeCut,
+        min_equity_ratio: minEquity === "" ? undefined : Number(minEquity),
+        max_expense_ratio: maxExpense === "" ? undefined : Number(maxExpense),
+        nisa_eligible_only: nisaOnly,
+        min_diversification_score:
+          minDiversification === "" ? undefined : Number(minDiversification),
+        funds_csv_text: fundsCsv,
+        sort_by: "score",
+      }),
+    );
+
+  const results: Json[] = Array.isArray(state.data?.results) ? state.data.results : [];
+  const blocked: Json[] = Array.isArray(state.data?.blocked_providers)
+    ? state.data.blocked_providers
+    : [];
+
+  return (
+    <section className="tool-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Candidates</p>
+          <h2>条件フィルタ型 候補抽出</h2>
+        </div>
+        <span className="badge">比較対象の提示のみ</span>
+      </div>
+      <p className="hint">
+        条件に合う日本株・投信を抽出します。結果は比較材料であり、買付・売却・保有継続の
+        推奨ではありません。
+      </p>
+      <div className="form">
+        <label className="field check-field">
+          <input type="checkbox" checked={includeStocks} onChange={(e) => setIncludeStocks(e.target.checked)} />
+          <span>日本株</span>
+        </label>
+        <label className="field check-field">
+          <input type="checkbox" checked={includeFunds} onChange={(e) => setIncludeFunds(e.target.checked)} />
+          <span>投信</span>
+        </label>
+        <label className="field check-field">
+          <input type="checkbox" checked={excludeCut} onChange={(e) => setExcludeCut(e.target.checked)} />
+          <span>減配履歴ありを除外</span>
+        </label>
+        <label className="field check-field">
+          <input type="checkbox" checked={nisaOnly} onChange={(e) => setNisaOnly(e.target.checked)} />
+          <span>NISA対象のみ</span>
+        </label>
+      </div>
+      <div className="form">
+        <Field label="自己資本比率下限(%)">
+          <input value={minEquity} onChange={(e) => setMinEquity(e.target.value)} />
+        </Field>
+        <Field label="信託報酬上限(%)">
+          <input value={maxExpense} onChange={(e) => setMaxExpense(e.target.value)} />
+        </Field>
+        <Field label="分散度下限(0-1)">
+          <input value={minDiversification} onChange={(e) => setMinDiversification(e.target.value)} />
+        </Field>
+      </div>
+      <Field label="投信プロファイルCSV">
+        <textarea rows={5} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
+      </Field>
+      <button className="primary" onClick={screen} disabled={state.loading}>
+        条件に一致する候補を表示
+      </button>
+      <Status loading={state.loading} error={state.error} />
+      {state.data?.non_advisory_boundary && (
+        <p className="hint">{String(state.data.non_advisory_boundary)}</p>
+      )}
+      {blocked.length > 0 && (
+        <p className="status error">
+          production利用不可provider: {blocked.map((p) => String(p.provider_id)).join(", ")}
+        </p>
+      )}
+      {results.length > 0 && (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>種別</th>
+              <th>コード</th>
+              <th>名称</th>
+              <th>条件一致</th>
+              <th>指標</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((item) => (
+              <tr key={`${String(item.asset_type)}-${String(item.code)}`}>
+                <td>{String(item.asset_type)}</td>
+                <td className="mono">{String(item.code)}</td>
+                <td>{String(item.name)}</td>
+                <td className="hint">
+                  {Array.isArray(item.matched_conditions)
+                    ? item.matched_conditions.join(" / ")
+                    : ""}
+                </td>
+                <td>
+                  <pre>{JSON.stringify(item.metrics ?? {}, null, 2)}</pre>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function InvestmentReportTab() {
+  const [holdingsCsv, setHoldingsCsv] = useState(SAMPLE_HOLDINGS_CSV);
+  const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
+  const state = useAsync<Json>();
+
+  const generate = () =>
+    state.run(async () => {
+      const candidates = await api<Json>("/api/candidates/screen", {
+        asset_types: ["stock", "fund"],
+        exclude_dividend_cut: true,
+        max_expense_ratio: 0.2,
+        nisa_eligible_only: true,
+        funds_csv_text: fundsCsv,
+      });
+      return api<Json>("/api/reports/investment-monthly", {
+        csv_text: holdingsCsv,
+        candidates: candidates.results ?? [],
+      });
+    });
+
+  const kpis: Json[] = Array.isArray(state.data?.kpis) ? state.data.kpis : [];
+  const sections: Json[] = Array.isArray(state.data?.sections) ? state.data.sections : [];
+  const evidence: Json[] = Array.isArray(state.data?.evidence) ? state.data.evidence : [];
+
+  return (
+    <section className="tool-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Report</p>
+          <h2>投資月次レポート</h2>
+        </div>
+        <span className="badge">決定論生成</span>
+      </div>
+      <p className="hint">
+        保有分析と候補抽出結果から、根拠と計算式つきの非助言レポートを生成します。
+      </p>
+      <Field label="保有CSV">
+        <textarea rows={6} value={holdingsCsv} onChange={(e) => setHoldingsCsv(e.target.value)} />
+      </Field>
+      <Field label="投信プロファイルCSV（候補抽出用）">
+        <textarea rows={4} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
+      </Field>
+      <button className="primary" onClick={generate} disabled={state.loading}>
+        レポート生成
+      </button>
+      <Status loading={state.loading} error={state.error} />
+
+      {kpis.length > 0 && (
+        <section className="metric-grid">
+          {kpis.map((kpi) => (
+            <article className="metric-card accent" key={String(kpi.metric_key)}>
+              <span>{String(kpi.label)}</span>
+              <b>{typeof kpi.value === "number" ? yen(kpi.value) : String(kpi.value ?? "-")}</b>
+              <small>{String(kpi.formula ?? "")}</small>
+            </article>
+          ))}
+        </section>
+      )}
+      {sections.length > 0 && (
+        <div className="guide-grid">
+          {sections.map((section) => (
+            <article className="guide-card" key={String(section.key)}>
+              <b>{String(section.title)}</b>
+              <p>{String(section.body)}</p>
+            </article>
+          ))}
+        </div>
+      )}
+      {evidence.length > 0 && (
+        <details className="subpanel">
+          <summary>根拠一覧（{evidence.length}件）</summary>
+          <pre>{JSON.stringify(evidence, null, 2)}</pre>
+        </details>
+      )}
+      {state.data?.disclaimer && <p className="hint">{String(state.data.disclaimer)}</p>}
     </section>
   );
 }
@@ -1837,7 +2150,6 @@ function SimulateTab() {
   const [growth, setGrowth] = useState(0);
   const [reinvest, setReinvest] = useState(true);
   const [weightMode, setWeightMode] = useState("equal");
-  const [autoCount, setAutoCount] = useState(8);
   const [universe, setUniverse] = useState<Json[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pick, setPick] = useState("");
@@ -1880,29 +2192,6 @@ function SimulateTab() {
     }
   };
 
-  const autoBuild = async () => {
-    setBusy(true);
-    try {
-      const top = universe.slice(0, autoCount);
-      const pm = await fetchPrices(top.map((u) => String(u.ticker)));
-      const rows: Holding[] = top
-        .filter((u) => Number(pm[String(u.ticker)]) > 0)
-        .map((u) => ({
-          ticker: String(u.ticker),
-          name: String(u.name ?? ""),
-          price: Number(pm[String(u.ticker)]),
-          shares: 100,
-          amount: 100000,
-        }));
-      setHoldings(rows);
-      setWeightMode("safety");
-    } catch {
-      /* ignore */
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const simulate = () =>
     run(() =>
       api<Json>("/api/portfolio/simulate", {
@@ -1932,7 +2221,8 @@ function SimulateTab() {
         <span className="badge">参考・非助言</span>
       </div>
       <p className="hint">
-        EDINETの銘柄リストから選び、市場株価を取得して年間配当を試算します。配当はボリンジャー下限で安全側に見積もります。手動／おまかせ。将来を保証しない参考値です。
+        EDINETの銘柄リストからユーザーが選び、市場株価または手入力価格で年間配当を試算します。
+        配当はボリンジャー下限で安全側に見積もります。将来を保証しない参考値です。
       </p>
 
       <div className="form">
@@ -1973,12 +2263,6 @@ function SimulateTab() {
         </Field>
         <button onClick={addHolding} disabled={!pick}>
           ＋ 追加（手動）
-        </button>
-        <Field label="おまかせ銘柄数">
-          <input type="number" value={autoCount} onChange={(e) => setAutoCount(Number(e.target.value))} />
-        </Field>
-        <button onClick={() => void autoBuild()} disabled={busy || universe.length === 0}>
-          おまかせ構成（安全性上位）
         </button>
         <button onClick={() => void updatePrices()} disabled={busy || holdings.length === 0}>
           市場価格を更新

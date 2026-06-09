@@ -544,11 +544,24 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
 
 
 def _market_prices(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.provider_policy import ensure_provider_allowed
     from investment_assistant.portfolio.prices import fetch_prices
 
     raw = body.get("tickers")
     tickers = [str(t) for t in raw] if isinstance(raw, list) else []
-    return fetch_prices(tickers)
+    provider_id = str(body.get("provider_id") or "stooq_public_csv")
+    runtime_mode = str(
+        body.get("runtime_mode")
+        or os.getenv("INVESTMENT_ASSISTANT_RUNTIME_MODE")
+        or "development"
+    )
+    try:
+        policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
+    except ValueError as exc:
+        raise ApiError(str(exc), status=400) from exc
+    result = fetch_prices(tickers)
+    result["provider_policy"] = policy.to_dict()
+    return result
 
 
 def _portfolio_performance(body: JsonDict) -> JsonDict:
@@ -559,6 +572,80 @@ def _portfolio_performance(body: JsonDict) -> JsonDict:
 def _financials_compare(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/financials_sample.csv")
     return compare_financials(load_financials(path))
+
+
+def _holdings_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.loader import holdings_from_payload
+    from investment_assistant.investment.models import DISCLAIMER, HOLDING_COLUMNS
+
+    holdings = holdings_from_payload(body)
+    return {
+        "count": len(holdings),
+        "holdings": [holding.to_dict() for holding in holdings],
+        "required_columns": list(HOLDING_COLUMNS),
+        "disclaimer": DISCLAIMER,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _portfolio_analyze(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment import analyze_portfolio, holdings_from_payload
+
+    return analyze_portfolio(
+        holdings_from_payload(body),
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+    )
+
+
+def _candidates_screen(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment import fund_profiles_from_payload, screen_candidates
+    from investment_assistant.investment.candidates import screen_from_values
+
+    raw_asset_types = body.get("asset_types")
+    asset_types = (
+        [str(item) for item in raw_asset_types]
+        if isinstance(raw_asset_types, list)
+        else ["stock", "fund"]
+    )
+    limit_value = body.get("limit")
+    screen = screen_from_values(
+        asset_types=asset_types,
+        exclude_dividend_cut=_as_bool(body.get("exclude_dividend_cut"), False),
+        min_equity_ratio=_optional_float(body.get("min_equity_ratio")),
+        max_expense_ratio=_optional_float(body.get("max_expense_ratio")),
+        nisa_eligible_only=_as_bool(body.get("nisa_eligible_only"), False),
+        min_diversification_score=_optional_float(body.get("min_diversification_score")),
+        sort_by=str(body.get("sort_by") or "score"),
+        limit=None if limit_value is None else _as_int(limit_value, 0),
+    )
+    return screen_candidates(
+        screen=screen,
+        funds=fund_profiles_from_payload(body),
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        runtime_mode=str(body.get("runtime_mode") or "development"),
+    )
+
+
+def _investment_monthly_report(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment import (
+        build_investment_monthly_report,
+        holdings_from_payload,
+    )
+
+    raw_candidates = body.get("candidates")
+    candidates: list[dict[str, object]] = []
+    if isinstance(raw_candidates, list):
+        candidates = [
+            {str(key): value for key, value in item.items()}
+            for item in raw_candidates
+            if isinstance(item, dict)
+        ]
+    return build_investment_monthly_report(
+        holdings_from_payload(body),
+        candidates=candidates,
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+    )
 
 
 # --- helpers ---------------------------------------------------------------
@@ -883,6 +970,14 @@ def _as_float(value: object, default: float) -> float:
         return default
 
 
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return _as_float(value, 0.0)
+
+
 def _as_int_tuple(value: object) -> tuple[int, ...]:
     if not isinstance(value, list):
         return ()
@@ -947,6 +1042,10 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/universe"): _portfolio_universe,
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
+    ("POST", "/api/holdings/import"): _holdings_import,
+    ("POST", "/api/portfolio/analyze"): _portfolio_analyze,
+    ("POST", "/api/candidates/screen"): _candidates_screen,
+    ("POST", "/api/reports/investment-monthly"): _investment_monthly_report,
     ("POST", "/api/financials/compare"): _financials_compare,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),

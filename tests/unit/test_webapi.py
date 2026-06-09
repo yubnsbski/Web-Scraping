@@ -331,3 +331,75 @@ def test_available_routes_includes_portfolio_endpoints() -> None:
     routes = available_routes()
     assert "POST /api/portfolio/dividends" in routes
     assert "POST /api/portfolio/performance" in routes
+
+
+def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) -> None:
+    holdings_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit\n"
+        "stock,8306,MUFG,100,1000,tokutei,nisa_growth,user_csv,1200,,\n"
+        "fund,F001,低コスト投信,50,10000,nisa,nisa_tsumitate,user_csv,11000,,30\n"
+    )
+    funds_csv = (
+        "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,"
+        "provider_id,diversification_score\n"
+        "F001,低コスト全世界株式,global_equity,0.12,reinvest,true,user_csv,0.95\n"
+    )
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2023,1000,45,40,安定\n"
+        "8306,MUFG,2024,1200,48,45,安定\n",
+        encoding="utf-8",
+    )
+
+    status, imported = handle_api("POST", "/api/holdings/import", {"csv_text": holdings_csv})
+    assert status == 200
+    assert imported["count"] == 2
+
+    status, analysis = handle_api(
+        "POST",
+        "/api/portfolio/analyze",
+        {"csv_text": holdings_csv, "financials_csv": str(financials)},
+    )
+    assert status == 200
+    assert analysis["summary"]["market_value"] == 670000.0
+
+    status, candidates = handle_api(
+        "POST",
+        "/api/candidates/screen",
+        {
+            "asset_types": ["stock", "fund"],
+            "funds_csv_text": funds_csv,
+            "financials_csv": str(financials),
+            "exclude_dividend_cut": True,
+            "max_expense_ratio": 0.2,
+            "nisa_eligible_only": True,
+        },
+    )
+    assert status == 200
+    assert candidates["count"] >= 2
+    assert candidates["auto_trading"] is False
+
+    status, report = handle_api(
+        "POST",
+        "/api/reports/investment-monthly",
+        {
+            "csv_text": holdings_csv,
+            "financials_csv": str(financials),
+            "candidates": candidates["results"],
+        },
+    )
+    assert status == 200
+    assert report["kpis"]
+    assert report["evidence"]
+
+
+def test_market_prices_reject_uncontracted_provider_in_production() -> None:
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices",
+        {"tickers": ["8306"], "runtime_mode": "production"},
+    )
+    assert status == 400
+    assert "not allowed in production" in payload["error"]
