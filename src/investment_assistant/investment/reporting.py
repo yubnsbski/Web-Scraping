@@ -23,6 +23,7 @@ def build_investment_monthly_report(
     summary = analysis["summary"]
     if not isinstance(summary, dict):
         raise ValueError("portfolio analysis did not return a summary")
+    generated_at = datetime.now(UTC).isoformat()
     evidence = list(_evidence_rows(analysis.get("evidence")))
     for item in candidates[:10]:
         evidence.append(
@@ -31,23 +32,48 @@ def build_investment_monthly_report(
                 "source_type": "candidate_screen",
                 "source_ref": item.get("asset_type"),
                 "metric_key": "matched_conditions",
+                "formula": "candidate matched the configured deterministic screen conditions",
+                "last_updated": generated_at,
                 "note": "条件一致の比較候補であり、推奨ではありません。",
             }
         )
     kpis = [
-        _kpi("market_value", "評価額", summary.get("market_value"), "holding.*.market_value"),
-        _kpi("unrealized_pnl", "評価損益", summary.get("unrealized_pnl"), "holding.*.market_value"),
+        _kpi(
+            "market_value",
+            "評価額",
+            summary.get("market_value"),
+            _claim_keys(evidence, suffix=".market_value"),
+            generated_at,
+        ),
+        _kpi(
+            "unrealized_pnl",
+            "評価損益",
+            summary.get("unrealized_pnl"),
+            [
+                *_claim_keys(evidence, suffix=".market_value"),
+                *_claim_keys(evidence, suffix=".cost_basis"),
+            ],
+            generated_at,
+        ),
         _kpi(
             "annual_income_estimate",
             "配当/分配金見込み",
             summary.get("annual_income_estimate"),
-            "holding.*.dividend",
+            _claim_keys(evidence, suffix=".annual_income")
+            or _claim_keys(evidence, suffix=".dividend"),
+            generated_at,
         ),
-        _kpi("nisa_remaining", "NISA残枠", _nisa_remaining(summary), "nisa.cost_basis"),
+        _kpi(
+            "nisa_remaining",
+            "NISA残枠",
+            _nisa_remaining(summary),
+            _claim_keys(evidence, prefix="portfolio.nisa"),
+            generated_at,
+        ),
     ]
     return {
         "title": "投資月次レポート",
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": generated_at,
         "kpis": kpis,
         "sections": [
             {
@@ -101,13 +127,21 @@ def build_investment_monthly_report(
     }
 
 
-def _kpi(key: str, label: str, value: object, evidence_key: str) -> dict[str, object]:
+def _kpi(
+    key: str,
+    label: str,
+    value: object,
+    evidence_keys: Sequence[str],
+    last_updated: str,
+) -> dict[str, object]:
     return {
         "metric_key": key,
         "label": label,
         "value": value,
-        "evidence_keys": [evidence_key],
+        "evidence_keys": list(dict.fromkeys(evidence_keys)),
         "formula": _formula(key),
+        "last_updated": last_updated,
+        "disclaimer": DISCLAIMER,
     }
 
 
@@ -125,6 +159,25 @@ def _evidence_rows(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _claim_keys(
+    evidence: Sequence[dict[str, object]],
+    *,
+    prefix: str | None = None,
+    suffix: str | None = None,
+) -> list[str]:
+    keys: list[str] = []
+    for row in evidence:
+        key = row.get("claim_key")
+        if not isinstance(key, str):
+            continue
+        if prefix is not None and not key.startswith(prefix):
+            continue
+        if suffix is not None and not key.endswith(suffix):
+            continue
+        keys.append(key)
+    return keys
 
 
 def _nisa_remaining(summary: dict[str, object]) -> object:

@@ -70,6 +70,12 @@ fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provi
 diversification_score
 ```
 
+サンプルCSV:
+
+- `../examples/investment_holdings_sample.csv`
+- `../examples/investment_funds_sample.csv`
+- `../examples/financials_sample.csv`
+
 ## API（投資MVP）
 
 - `POST /api/holdings/import`
