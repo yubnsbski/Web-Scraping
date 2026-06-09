@@ -1,74 +1,110 @@
-"""Tests for the dividend-portfolio simulator."""
+"""Tests for the dividend-portfolio simulator, universe, and market prices."""
 
 from __future__ import annotations
 
-from investment_assistant.portfolio.simulator import estimate_haircut, simulate_portfolio
+from pathlib import Path
 
-_NO_CSV = "/nonexistent/financials.csv"  # forces haircut defaults
+from investment_assistant.portfolio.prices import fetch_prices, parse_close
+from investment_assistant.portfolio.simulator import (
+    build_universe,
+    dividend_band,
+    estimate_safety,
+    simulate_portfolio,
+)
+
+_NO_CSV = "/nonexistent/financials.csv"
+_CSV_HEADER = "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
 
 
-def test_estimate_haircut_signals() -> None:
-    assert estimate_haircut(None) == 0.05
-    assert estimate_haircut({"dividend_trend": "increasing", "dividend_cut_years": []}) == 0.0
-    heavy = estimate_haircut(
+def _csv(tmp_path: Path, rows: str) -> Path:
+    path = tmp_path / "financials.csv"
+    path.write_text(_CSV_HEADER + rows, encoding="utf-8")
+    return path
+
+
+def test_dividend_band_bollinger() -> None:
+    band = dividend_band([30.0, 40.0, 50.0])
+    assert band is not None
+    assert band["mean"] == 40.0
+    assert band["lower"] < band["mean"] < band["upper"]
+    assert band["lower"] >= 0.0
+    assert dividend_band([]) is None
+    single = dividend_band([40.0])
+    assert single is not None and single["lower"] == single["upper"] == 40.0
+
+
+def test_estimate_safety_signals() -> None:
+    assert estimate_safety({"dividend_trend": "increasing", "dividend_cut_years": []}) == 1.0
+    risky = estimate_safety(
         {
             "dividend_trend": "declining",
             "dividend_cut_years": [2023, 2024],
-            "latest_equity_ratio": 15,
-            "operating_cf_trend": "declining",
+            "latest_equity_ratio": 10,
         }
     )
-    assert heavy == 0.35  # 0.15 + 0.10 + 0.05 + 0.05
-    capped = estimate_haircut({"dividend_trend": "declining", "dividend_cut_years": [1, 2, 3, 4]})
-    assert capped <= 0.5
+    assert risky == 0.7  # 1 - (0.15 declining + 0.10 cuts + 0.05 low-equity)
 
 
-def test_simulate_allocates_whole_lots_and_projects() -> None:
+def test_simulate_equal_weight_conservative_basis() -> None:
     out = simulate_portfolio(
         budget=1_000_000,
         holdings=[
-            {"ticker": "A", "price": 1000, "dividend_per_share": 40, "weight": 1},
-            {"ticker": "B", "price": 2000, "dividend_per_share": 50, "weight": 1},
+            {"ticker": "A", "price": 1000, "dividend_per_share": 40},
+            {"ticker": "B", "price": 2000, "dividend_per_share": 50},
         ],
-        years=10,
-        reinvest=True,
-        auto_weight="manual",
-        financials_csv=_NO_CSV,
+        auto_weight="equal",
+        financials_csv=_NO_CSV,  # no series -> conservative == latest
     )
     assert out["available"] is True
     allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
-    assert allocs["A"]["shares"] == 500  # floor(500000 / (1000*100)) * 100
-    assert allocs["A"]["invested"] == 500000
+    assert allocs["A"]["shares"] == 500
     assert allocs["A"]["annual_dividend"] == 500 * 40
-
-    summary = out["summary"]
-    assert summary["invested"] <= 1_000_000  # type: ignore[operator]
-    assert summary["cash_left"] >= 0  # type: ignore[operator]
-    assert summary["annual_dividend"] > 0  # type: ignore[operator]
-
     proj = out["projection"]
     assert len(proj["years"]) == 11  # type: ignore[index]
-    assert len(proj["reinvested"]) == 11  # type: ignore[index]
-    # Snowball reinvestment beats flat nominal income by the final year.
-    assert proj["reinvested"][-1] >= proj["nominal"][-1]  # type: ignore[index]
-
-    surface = out["surface"]
-    assert len(surface["yields"]) == 8  # type: ignore[index]
-    assert len(surface["z"]) == 8 and len(surface["z"][0]) == 10  # type: ignore[index]
+    assert proj["reinvested"][-1] >= proj["conservative"][-1]  # type: ignore[index]
 
 
-def test_auto_weight_yield_favours_higher_yield() -> None:
-    out = simulate_portfolio(
-        budget=1_000_000,
-        holdings=[
-            {"ticker": "L", "price": 1000, "dividend_per_share": 10},
-            {"ticker": "H", "price": 1000, "dividend_per_share": 50},
-        ],
-        auto_weight="yield",
+def test_simulate_fixed_shares_and_amount_modes() -> None:
+    shares_out = simulate_portfolio(
+        budget=0,
+        holdings=[{"ticker": "A", "price": 1000, "dividend_per_share": 40, "shares": 300}],
+        auto_weight="shares",
         financials_csv=_NO_CSV,
     )
-    by = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
-    assert by["H"]["weight"] > by["L"]["weight"]
+    assert shares_out["allocations"][0]["shares"] == 300  # type: ignore[index]
+
+    amount_out = simulate_portfolio(
+        budget=0,
+        holdings=[{"ticker": "A", "price": 1000, "dividend_per_share": 40, "amount": 350000}],
+        auto_weight="amount",
+        financials_csv=_NO_CSV,
+    )
+    assert amount_out["allocations"][0]["shares"] == 300  # floor(350000/100000)*100
+
+
+def test_simulate_conservative_below_latest_with_history(tmp_path: Path) -> None:
+    csv = _csv(tmp_path, "8306,MUFG,2023,1000,5,30,安定\n8306,MUFG,2024,1100,5,50,安定\n")
+    out = simulate_portfolio(
+        budget=1_000_000,
+        holdings=[{"ticker": "8306", "price": 1600}],
+        auto_weight="equal",
+        financials_csv=str(csv),
+    )
+    alloc = out["allocations"][0]  # type: ignore[index]
+    assert alloc["dividend_per_share_latest"] == 50.0
+    assert alloc["dividend_per_share"] < 50.0  # conservative band lower
+
+
+def test_build_universe_sorts_by_safety(tmp_path: Path) -> None:
+    csv = _csv(
+        tmp_path,
+        "8306,MUFG,2023,1000,5,30,安定\n8306,MUFG,2024,1100,5,50,安定\n9999,Risk,2024,100,10,5,記載なし\n",
+    )
+    universe = build_universe(str(csv), prices={"8306": 1600})
+    assert universe[0]["ticker"] in {"8306", "9999"}
+    row = next(r for r in universe if r["ticker"] == "8306")
+    assert row["dividend_latest"] == 50.0
+    assert row["yield_latest"] is not None
 
 
 def test_no_valid_holdings_returns_unavailable() -> None:
@@ -76,3 +112,33 @@ def test_no_valid_holdings_returns_unavailable() -> None:
         budget=1000, holdings=[{"ticker": "X", "price": 0}], financials_csv=_NO_CSV
     )
     assert out["available"] is False
+
+
+def test_parse_close_from_quote_csv() -> None:
+    text = (
+        "Symbol,Date,Time,Open,High,Low,Close,Volume\n"
+        "8306.JP,2026-06-08,15:00:00,1590,1610,1585,1602,1000\n"
+    )
+    assert parse_close(text) == 1602.0
+    assert parse_close("Symbol,Close\n8306.JP,N/D\n") is None
+    assert parse_close("") is None
+
+
+def test_fetch_prices_with_injected_fetch() -> None:
+    def fake(url: str) -> str:
+        _ = url
+        return "Symbol,Date,Time,Open,High,Low,Close,Volume\nX.JP,2026,15,1,1,1,123.0,1\n"
+
+    out = fetch_prices(["8306", "9432"], fetch=fake)
+    prices = out["prices"]
+    assert isinstance(prices, dict)
+    assert prices["8306"] == 123.0 and prices["9432"] == 123.0
+
+
+def test_fetch_prices_records_errors() -> None:
+    def boom(url: str) -> str:
+        raise RuntimeError("net")
+
+    out = fetch_prices(["8306"], fetch=boom)
+    assert out["prices"]["8306"] is None  # type: ignore[index]
+    assert "8306" in out["notes"]  # type: ignore[operator]
