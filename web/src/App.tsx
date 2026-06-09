@@ -418,6 +418,33 @@ function cleanAssistantAnswer(raw: unknown, skipped?: boolean) {
 
 // --- RAG search ------------------------------------------------------------
 
+function isHttpUrl(value: unknown): value is string {
+  return typeof value === "string" && /^https?:\/\//.test(value);
+}
+
+function SourceCite({ source, metadata }: { source: unknown; metadata?: Json }) {
+  const url = metadata?.source_url;
+  if (isHttpUrl(url)) {
+    return (
+      <a className="mono cite-link" href={url} target="_blank" rel="noreferrer">
+        {url} ↗
+      </a>
+    );
+  }
+  return <span className="mono">{String(source)}</span>;
+}
+
+function ResultText({ text, limit = 220 }: { text: unknown; limit?: number }) {
+  const full = String(text ?? "");
+  if (full.length <= limit) return <span className="result-text">{full}</span>;
+  return (
+    <details className="result-text">
+      <summary>{full.slice(0, limit)}…</summary>
+      <div className="result-full">{full}</div>
+    </details>
+  );
+}
+
 function SearchTab() {
   const [query, setQuery] = useState("配当 方針 DOE 配当性向");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
@@ -488,8 +515,8 @@ function SearchTab() {
               <tr key={r.chunk_id ?? i}>
                 <td>{i + 1}</td>
                 <td>{Number(r.score).toPrecision(3)}</td>
-                <td className="mono">{r.source}</td>
-                <td>{String(r.text).slice(0, 220)}</td>
+                <td><SourceCite source={r.source} metadata={r.metadata} /></td>
+                <td><ResultText text={r.text} /></td>
               </tr>
             ))}
           </tbody>
@@ -670,8 +697,8 @@ function AnswerTab() {
                 <ul className="source-list">
                   {message.sources.slice(0, 10).map((source, i) => (
                     <li key={source.chunk_id ?? i}>
-                      <span className="mono">{source.source}</span>
-                      <p>{String(source.text ?? "").slice(0, 160)}</p>
+                      <SourceCite source={source.source} metadata={source.metadata} />
+                      <ResultText text={source.text} limit={160} />
                     </li>
                   ))}
                 </ul>
