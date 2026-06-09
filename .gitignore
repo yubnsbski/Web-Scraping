@@ -73,3 +73,6 @@ local_reports/
 web/node_modules/
 web/dist/
 web/.vite/
+
+# Pytest temp directory
+.tmp_pytest/
