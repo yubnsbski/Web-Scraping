@@ -844,3 +844,26 @@ textarea { min-height: 140px; }
   border-radius: 999px;
 }
 .feedback-thanks { color: var(--safe); font-size: 13px; font-weight: 600; }
+
+/* --- Stock scoring (EDINET) ----------------------------------------- */
+.subpanel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.subpanel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+.subpanel > h3 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 800; color: var(--text); }
+.check-field { flex-direction: row !important; align-items: center; gap: 8px; flex: 0 0 auto; }
+.check-field input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; }
+
+.score-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.12);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.score-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.bd-bars { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; min-width: 160px; }
+.bd-bars .score-bar { margin-top: 0; }

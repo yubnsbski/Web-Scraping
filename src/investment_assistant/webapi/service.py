@@ -153,6 +153,22 @@ def _rag_answer(body: JsonDict) -> JsonDict:
     return result
 
 
+def _resolve_stock_score(
+    body: JsonDict, target_source: str, financials_csv: str
+) -> dict[str, object] | None:
+    from investment_assistant.financials.evidence import ticker_from_source
+    from investment_assistant.scoring.stock import STRATEGY_LABELS, score_for_ticker
+
+    ticker = str(body.get("ticker") or "").strip() or ticker_from_source(target_source or None)
+    if not ticker:
+        return None
+    strategy = str(body.get("strategy") or "balanced")
+    row = score_for_ticker(ticker=ticker, financials_csv=financials_csv, strategy=strategy)
+    if row is not None:
+        row["strategy_label"] = STRATEGY_LABELS.get(strategy, strategy)
+    return row
+
+
 def _orchestrate(body: JsonDict) -> JsonDict:
     call_real_api, real_api_note = _real_api_decision(body)
     real_api_requested = _as_bool(body.get("call_real_api"), False)
@@ -177,15 +193,23 @@ def _orchestrate(body: JsonDict) -> JsonDict:
         else ""
     )
 
+    financials_csv = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
     financial_evidence = build_financial_evidence(
         ticker=str(body.get("ticker") or "").strip() or None,
         target_source=target_source or None,
-        csv_path=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        csv_path=financials_csv,
     )
+    # Inject the dividend-quality score for the resolved ticker (Chat <- Score).
+    stock_score = _resolve_stock_score(body, target_source, financials_csv)
+    if stock_score is not None and financial_evidence:
+        financial_evidence += (
+            f"\n配当品質スコア: {stock_score['total_score']} / 1.0"
+            f"（戦略: {stock_score.get('strategy_label', 'バランス')}）"
+        )
     evidence_block = (
         "\n\n"
         + financial_evidence
-        + "\n上記の減配履歴・財務トレンドを根拠として明示的に反映してください。"
+        + "\n上記の減配履歴・財務トレンド・スコアを根拠として明示的に反映してください。"
         if financial_evidence
         else ""
     )
@@ -211,6 +235,7 @@ def _orchestrate(body: JsonDict) -> JsonDict:
 
     result["target_source"] = target_source or None
     result["financial_evidence"] = financial_evidence
+    result["stock_score"] = stock_score
 
     result["orchestration"] = {
         "drafter": "AI 1/2/3",
@@ -291,6 +316,21 @@ def _scoring_rank(body: JsonDict) -> JsonDict:
     return cli.run_scoring_rank(
         path=_require_str(body, "path"),
         limit=_as_int(body.get("limit"), 10),
+    )
+
+
+def _scoring_stocks(body: JsonDict) -> JsonDict:
+    from investment_assistant.scoring.stock import run_stock_scoring
+
+    min_equity = body.get("min_equity_ratio")
+    limit_value = _as_int(body.get("limit"), 0)
+    return run_stock_scoring(
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        strategy=str(body.get("strategy") or "balanced"),
+        exclude_dividend_cut=_as_bool(body.get("exclude_dividend_cut"), False),
+        min_equity_ratio=_as_float(min_equity, 0.0) if min_equity is not None else None,
+        min_periods=_as_int(body.get("min_periods"), 1),
+        limit=limit_value or None,
     )
 
 
@@ -859,6 +899,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/rag/index-dir"): _rag_index_dir,
     ("POST", "/api/manual-doc/save"): _manual_doc_save,
     ("POST", "/api/scoring/rank"): _scoring_rank,
+    ("POST", "/api/scoring/stocks"): _scoring_stocks,
     ("POST", "/api/forecast/evaluate"): _forecast_evaluate,
     ("POST", "/api/forecast/predict"): _forecast_predict,
     ("POST", "/api/portfolio/dividends"): _portfolio_dividends,

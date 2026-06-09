@@ -828,6 +828,138 @@ function AnswerTab() {
 
 // --- Scoring ---------------------------------------------------------------
 
+const STRATEGY_OPTIONS: { value: string; label: string }[] = [
+  { value: "balanced", label: "バランス" },
+  { value: "high_yield", label: "高配当重視" },
+  { value: "defensive", label: "安定・ディフェンシブ" },
+  { value: "growth", label: "増配・成長" },
+];
+
+const BREAKDOWN_KEYS = [
+  "dividend_level",
+  "dividend_trend",
+  "dividend_safety",
+  "equity_ratio",
+  "operating_cf",
+];
+
+function ScoreBar({ value }: { value: number }) {
+  const pct = Math.max(0, Math.min(100, (Number(value) || 0) * 100));
+  return (
+    <div className="score-bar">
+      <i style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+function StockScorePanel() {
+  const [strategy, setStrategy] = useState("balanced");
+  const [excludeCut, setExcludeCut] = useState(false);
+  const [minEquity, setMinEquity] = useState("");
+  const [limit, setLimit] = useState(20);
+  const { loading, error, data, run } = useAsync<Json>();
+
+  const score = () =>
+    run(() =>
+      api<Json>("/api/scoring/stocks", {
+        strategy,
+        exclude_dividend_cut: excludeCut,
+        min_equity_ratio: minEquity === "" ? undefined : Number(minEquity),
+        limit,
+      }),
+    );
+
+  const results: Json[] = data?.results ?? [];
+  return (
+    <div className="subpanel">
+      <h3>EDINET銘柄スコア（自動・配当品質）</h3>
+      <p className="hint">
+        取得済みの財務（配当・減配履歴・自己資本比率・営業CF）から銘柄を自動採点します。手動CSV不要。売買推奨ではありません。
+      </p>
+      <div className="form">
+        <Field label="戦略プリセット">
+          <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+            {STRATEGY_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="自己資本比率の下限(%)">
+          <input
+            type="number"
+            value={minEquity}
+            placeholder="例: 40（任意）"
+            onChange={(e) => setMinEquity(e.target.value)}
+          />
+        </Field>
+        <Field label="上位件数">
+          <input type="number" value={limit} onChange={(e) => setLimit(Number(e.target.value))} />
+        </Field>
+        <label className="field check-field">
+          <input
+            type="checkbox"
+            checked={excludeCut}
+            onChange={(e) => setExcludeCut(e.target.checked)}
+          />
+          <span>減配ありを除外</span>
+        </label>
+        <button className="primary" onClick={score} disabled={loading}>
+          採点
+        </button>
+      </div>
+      <Status loading={loading} error={error} />
+      {data && data.available === false && (
+        <p className="status">{String(data.hint ?? "financials.csv が見つかりません")}</p>
+      )}
+      {data && data.available !== false && (
+        <p className="hint">
+          対象 {String(data.count)} / {String(data.universe)} 銘柄（戦略:{" "}
+          {String(data.strategy_label)}）
+        </p>
+      )}
+      {results.length > 0 && (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>順位</th>
+              <th>銘柄</th>
+              <th>総合</th>
+              <th>内訳（配当/増配/安全/自己資本/CF）</th>
+              <th>根拠</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((r) => (
+              <tr key={String(r.ticker)}>
+                <td>{r.rank}</td>
+                <td>
+                  <b>{r.ticker}</b> {r.name}
+                </td>
+                <td className="mono">
+                  {Number(r.total_score).toFixed(3)}
+                  <ScoreBar value={Number(r.total_score)} />
+                </td>
+                <td>
+                  <div className="bd-bars">
+                    {BREAKDOWN_KEYS.map((k) => (
+                      <ScoreBar key={k} value={Number(r.breakdown?.[k] ?? 0)} />
+                    ))}
+                  </div>
+                </td>
+                <td className="hint">
+                  {Array.isArray(r.rationale) ? r.rationale.join(" / ") : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function ScoringTab() {
   const [csv, setCsv] = useState(SAMPLE_CSV);
   const [limit, setLimit] = useState(10);
@@ -842,9 +974,14 @@ function ScoringTab() {
           <p className="eyebrow">Score</p>
           <h2>投資スコアリング</h2>
         </div>
-        <span className="badge">CSV compare</span>
+        <span className="badge">EDINET / CSV</span>
       </div>
-      <p className="hint">経費率・リターン・リスク・分散度を正規化して比較します。売買推奨ではありません。</p>
+
+      <StockScorePanel />
+
+      <div className="subpanel">
+        <h3>ファンド/ETF比較（CSV）</h3>
+        <p className="hint">経費率・リターン・リスク・分散度を正規化して比較します。売買推奨ではありません。</p>
       <div className="form">
         <Field label="CSV（name,expense_ratio,annual_return,volatility,diversification_score）">
           <textarea rows={6} value={csv} onChange={(e) => setCsv(e.target.value)} />
@@ -885,6 +1022,7 @@ function ScoringTab() {
           </tbody>
         </table>
       )}
+      </div>
     </section>
   );
 }
