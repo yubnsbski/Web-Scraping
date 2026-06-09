@@ -67,6 +67,7 @@ const TABS = [
   { id: "forecast", label: "Forecast" },
   { id: "scrape", label: "Data Intake" },
   { id: "analysis", label: "解析" },
+  { id: "simulate", label: "配当シミュ" },
   { id: "ops", label: "Ops" },
 ] as const;
 
@@ -254,6 +255,7 @@ export function App() {
         {tab === "forecast" && <ForecastTab />}
         {tab === "scrape" && <ScrapeTab />}
         {tab === "analysis" && <AnalysisTab />}
+        {tab === "simulate" && <SimulateTab />}
         {tab === "ops" && <OpsTab />}
       </main>
       <footer className="footer">
@@ -1721,6 +1723,255 @@ function AnalysisTab() {
               </div>
             </div>
           )}
+        </>
+      )}
+    </section>
+  );
+}
+
+// --- Dividend portfolio simulator ------------------------------------------
+
+const SAMPLE_HOLDINGS = "8306, 1600\n9432, 155\n2914, 4000";
+
+function yen(value: unknown): string {
+  return `${Math.round(Number(value) || 0).toLocaleString()}円`;
+}
+
+function parseHoldings(text: string): Json[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [ticker, price, dps, weight] = line.split(/[,\t]/).map((s) => s.trim());
+      const h: Json = { ticker, price: Number(price) || 0 };
+      if (dps) h.dividend_per_share = Number(dps);
+      if (weight) h.weight = Number(weight);
+      return h;
+    })
+    .filter((h) => h.ticker && h.price > 0);
+}
+
+function MultiLineChart({
+  series,
+}: {
+  series: { label: string; values: number[]; color: string }[];
+}) {
+  const w = 540;
+  const h = 210;
+  const pad = 30;
+  const n = Math.max(...series.map((s) => s.values.length), 1);
+  const max = Math.max(...series.flatMap((s) => s.values), 1);
+  const xs = (i: number) => pad + ((w - pad * 2) * i) / Math.max(n - 1, 1);
+  const ys = (v: number) => h - pad - (v / max) * (h - pad * 2);
+  return (
+    <div>
+      <svg className="area-chart" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="配当推移">
+        {[0, 0.5, 1].map((t) => {
+          const y = pad + t * (h - pad * 2);
+          return <line key={t} x1={pad} y1={y} x2={w - pad} y2={y} stroke="var(--line)" strokeOpacity="0.5" />;
+        })}
+        {series.map((s) => (
+          <polyline
+            key={s.label}
+            points={s.values.map((v, i) => `${xs(i)},${ys(v)}`).join(" ")}
+            fill="none"
+            stroke={s.color}
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ))}
+      </svg>
+      <div className="chart-legend">
+        {series.map((s) => (
+          <span key={s.label}>
+            <i style={{ background: s.color }} />
+            {s.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Heatmap({ surface }: { surface: Json }) {
+  const yields: number[] = surface?.yields ?? [];
+  const years: number[] = surface?.years ?? [];
+  const z: number[][] = surface?.z ?? [];
+  const max = Math.max(...z.flat(), 1);
+  return (
+    <table className="grid heat">
+      <thead>
+        <tr>
+          <th>利回り＼年</th>
+          {years.map((y) => (
+            <th key={y}>{y}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {yields.map((yl, ri) => (
+          <tr key={yl}>
+            <th>{Math.round(yl * 100)}%</th>
+            {(z[ri] ?? []).map((v, ci) => (
+              <td
+                key={ci}
+                className="heat-cell"
+                style={{ background: `rgba(56,189,248,${Math.min(0.85, v / max)})` }}
+                title={yen(v)}
+              />
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function SimulateTab() {
+  const [budget, setBudget] = useState(1000000);
+  const [years, setYears] = useState(10);
+  const [growth, setGrowth] = useState(0);
+  const [reinvest, setReinvest] = useState(true);
+  const [weightMode, setWeightMode] = useState("equal");
+  const [holdingsText, setHoldingsText] = useState(SAMPLE_HOLDINGS);
+  const { loading, error, data, run } = useAsync<Json>();
+
+  const simulate = () =>
+    run(() =>
+      api<Json>("/api/portfolio/simulate", {
+        budget,
+        years,
+        growth_rate: growth / 100,
+        reinvest,
+        auto_weight: weightMode,
+        holdings: parseHoldings(holdingsText),
+      }),
+    );
+
+  const summary: Json = data?.summary ?? {};
+  const allocations: Json[] = data?.allocations ?? [];
+  const projection: Json = data?.projection ?? {};
+
+  return (
+    <section className="tool-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Simulate</p>
+          <h2>配当ポートフォリオ シミュレーション</h2>
+        </div>
+        <span className="badge">参考・非助言</span>
+      </div>
+      <p className="hint">
+        予算と購入予定銘柄（ticker, 株価）を入れると、単元(100株)で自動配分し年間配当・利回りを試算します。1株配当はEDINET財務から自動補完、減配リスクで調整。将来を保証しない参考値です。
+      </p>
+
+      <div className="form">
+        <Field label="投資予算(円)">
+          <input type="number" value={budget} onChange={(e) => setBudget(Number(e.target.value))} />
+        </Field>
+        <Field label="年数">
+          <input type="number" value={years} onChange={(e) => setYears(Number(e.target.value))} />
+        </Field>
+        <Field label="配当成長率(%/年)">
+          <input type="number" value={growth} onChange={(e) => setGrowth(Number(e.target.value))} />
+        </Field>
+        <Field label="重み付け">
+          <select value={weightMode} onChange={(e) => setWeightMode(e.target.value)}>
+            <option value="equal">均等</option>
+            <option value="yield">利回り比例</option>
+            <option value="safety">安全性比例</option>
+            <option value="manual">手動（4列目）</option>
+          </select>
+        </Field>
+        <label className="field check-field">
+          <input type="checkbox" checked={reinvest} onChange={(e) => setReinvest(e.target.checked)} />
+          <span>配当を再投資（スノーボール）</span>
+        </label>
+      </div>
+      <Field label="購入予定銘柄（1行 = ticker, 株価, [1株配当], [重み]）">
+        <textarea rows={4} value={holdingsText} onChange={(e) => setHoldingsText(e.target.value)} />
+      </Field>
+      <button className="primary" onClick={simulate} disabled={loading}>
+        ポートフォリオを作成
+      </button>
+
+      <Status loading={loading} error={error} />
+      {data && data.available === false && <p className="status">{String(data.hint)}</p>}
+
+      {data && data.available !== false && (
+        <>
+          <section className="metric-grid">
+            <article className="metric-card accent">
+              <span>投資額 / 残現金</span>
+              <b>{yen(summary.invested)}</b>
+              <small>残 {yen(summary.cash_left)}</small>
+            </article>
+            <article className="metric-card pos">
+              <span>年間配当</span>
+              <b>{yen(summary.annual_dividend)}</b>
+              <small>減配調整後 {yen(summary.annual_dividend_adjusted)}</small>
+            </article>
+            <article className="metric-card accent">
+              <span>利回り</span>
+              <b>{(Number(summary.portfolio_yield) * 100).toFixed(2)}%</b>
+              <small>調整後 {(Number(summary.portfolio_yield_adjusted) * 100).toFixed(2)}%</small>
+            </article>
+            <article className="metric-card">
+              <span>銘柄数</span>
+              <b>{String(summary.holdings)}</b>
+            </article>
+          </section>
+
+          {allocations.length > 0 && (
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>銘柄</th>
+                  <th>株価</th>
+                  <th>株数</th>
+                  <th>投資額</th>
+                  <th>年配当</th>
+                  <th>利回り</th>
+                  <th>減配率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allocations.map((a) => (
+                  <tr key={String(a.ticker)}>
+                    <td>
+                      <b>{a.ticker}</b> {a.name}
+                    </td>
+                    <td className="mono">{yen(a.price)}</td>
+                    <td className="mono">{String(a.shares)}</td>
+                    <td className="mono">{yen(a.invested)}</td>
+                    <td className="mono">{yen(a.annual_dividend)}</td>
+                    <td className="mono">{(Number(a.yield) * 100).toFixed(2)}%</td>
+                    <td className="mono">{(Number(a.haircut) * 100).toFixed(0)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="guide-card chart-card chart-card-wide">
+            <b>配当推移の予測（参考）</b>
+            <MultiLineChart
+              series={[
+                { label: "名目", values: projection.nominal ?? [], color: "var(--accent)" },
+                { label: "減配調整後", values: projection.adjusted ?? [], color: "var(--warn)" },
+                { label: "再投資スノーボール", values: projection.reinvested ?? [], color: "var(--safe)" },
+              ]}
+            />
+          </div>
+
+          <div className="guide-card chart-card chart-card-wide">
+            <b>累積配当のヒートマップ（年数 × 利回り・再投資・参考）</b>
+            <Heatmap surface={data.surface} />
+          </div>
+
+          {data.disclaimer && <p className="hint">{String(data.disclaimer)}</p>}
         </>
       )}
     </section>

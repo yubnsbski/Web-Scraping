@@ -511,6 +511,22 @@ def _portfolio_dividends(body: JsonDict) -> JsonDict:
     return summarize_dividends(load_dividends(path))
 
 
+def _portfolio_simulate(body: JsonDict) -> JsonDict:
+    from investment_assistant.portfolio.simulator import simulate_portfolio
+
+    raw = body.get("holdings")
+    holdings = [h for h in raw if isinstance(h, dict)] if isinstance(raw, list) else []
+    return simulate_portfolio(
+        budget=_as_float(body.get("budget"), 0.0),
+        holdings=holdings,
+        years=_as_int(body.get("years"), 10),
+        reinvest=_as_bool(body.get("reinvest"), True),
+        growth_rate=_as_float(body.get("growth_rate"), 0.0),
+        auto_weight=str(body.get("auto_weight") or "manual"),
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+    )
+
+
 def _portfolio_performance(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/portfolio_performance_sample.csv")
     return summarize_performance(load_performance(path))
@@ -903,6 +919,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/forecast/evaluate"): _forecast_evaluate,
     ("POST", "/api/forecast/predict"): _forecast_predict,
     ("POST", "/api/portfolio/dividends"): _portfolio_dividends,
+    ("POST", "/api/portfolio/simulate"): _portfolio_simulate,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/financials/compare"): _financials_compare,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
