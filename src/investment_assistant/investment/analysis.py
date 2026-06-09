@@ -23,6 +23,7 @@ def analyze_portfolio(
     if not holdings:
         raise ValueError("At least one holding is required.")
 
+    generated_at = datetime.now(UTC).isoformat()
     companies = _company_index(financials_csv)
     rows: list[dict[str, object]] = []
     evidence: list[dict[str, object]] = []
@@ -72,9 +73,36 @@ def analyze_portfolio(
                 "source_type": "user_holding",
                 "source_ref": holding.source,
                 "metric_key": "market_value",
+                "formula": "quantity * current_price; falls back to avg_cost when missing",
+                "last_updated": generated_at,
                 "note": "quantity × current_price（未入力時はavg_cost）",
             }
         )
+        evidence.append(
+            {
+                "claim_key": f"holding.{holding.ticker_or_fund_code}.cost_basis",
+                "source_type": "user_holding",
+                "source_ref": holding.source,
+                "metric_key": "cost_basis",
+                "formula": "quantity * avg_cost",
+                "last_updated": generated_at,
+                "note": "User-provided quantity and average acquisition cost.",
+            }
+        )
+        if income_source != "not_available":
+            evidence.append(
+                {
+                    "claim_key": f"holding.{holding.ticker_or_fund_code}.annual_income",
+                    "source_type": income_source,
+                    "source_ref": str(financials_csv)
+                    if income_source == "edinet_latest_dividend_per_share"
+                    else holding.source,
+                    "metric_key": "annual_income_estimate",
+                    "formula": "quantity * dividend_or_distribution_per_unit",
+                    "last_updated": generated_at,
+                    "note": "Income estimate is deterministic and not a future guarantee.",
+                }
+            )
         if company is not None:
             evidence.append(
                 {
@@ -82,6 +110,8 @@ def analyze_portfolio(
                     "source_type": "edinet_financials",
                     "source_ref": str(financials_csv),
                     "metric_key": "latest_dividend_per_share",
+                    "formula": "latest_dividend_per_share * quantity",
+                    "last_updated": generated_at,
                     "note": "取得済みEDINET financials.csv の機械集計",
                 }
             )
@@ -112,9 +142,20 @@ def analyze_portfolio(
             "growth_remaining": round(max(_NISA_GROWTH_CAP - nisa_growth_cost, 0.0), 2),
         },
     }
+    evidence.append(
+        {
+            "claim_key": "portfolio.nisa.used_cost_basis",
+            "source_type": "user_holding",
+            "source_ref": "holdings.tax_wrapper",
+            "metric_key": "nisa_used_cost_basis",
+            "formula": "sum(cost_basis where normalized tax_wrapper starts with nisa)",
+            "last_updated": generated_at,
+            "note": "NISA remaining capacity uses acquisition cost basis, not market value.",
+        }
+    )
     return {
         "available": True,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": generated_at,
         "summary": summary,
         "holdings": rows,
         "evidence": evidence,
