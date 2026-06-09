@@ -867,3 +867,27 @@ textarea { min-height: 140px; }
 }
 .bd-bars { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; min-width: 160px; }
 .bd-bars .score-bar { margin-top: 0; }
+
+/* --- Citation / full-text in RAG results ---------------------------- */
+.cite-link { color: var(--accent); text-decoration: none; word-break: break-all; }
+.cite-link:hover { text-decoration: underline; }
+.result-text { color: var(--text); }
+.result-text > summary {
+  cursor: pointer;
+  color: var(--muted);
+  list-style: revert;
+}
+.result-text > summary:hover { color: var(--text); }
+.result-full {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(7, 11, 18, 0.6);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+  max-height: 360px;
+  overflow: auto;
+}
+.source-list .cite-link, .source-list .mono { display: inline-block; margin-bottom: 4px; }
