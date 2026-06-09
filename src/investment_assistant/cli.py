@@ -1443,6 +1443,17 @@ def main(argv: list[str] | None = None) -> int:
     scoring_parser.add_argument("--overwrite", action="store_true")
     scoring_parser.add_argument("--format", choices=("json", "table"), default="json")
 
+    score_stocks_parser = subparsers.add_parser("score-stocks")
+    score_stocks_parser.add_argument("--financials-csv")
+    score_stocks_parser.add_argument(
+        "--strategy",
+        choices=("balanced", "high_yield", "defensive", "growth"),
+        default="balanced",
+    )
+    score_stocks_parser.add_argument("--exclude-cut", action="store_true")
+    score_stocks_parser.add_argument("--min-equity", type=float)
+    score_stocks_parser.add_argument("--limit", type=int, default=0)
+
 
     scoring_validate_parser = subparsers.add_parser("scoring-validate")
     scoring_validate_parser.add_argument("--path", required=True)
@@ -1652,6 +1663,17 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             hybrid=args.hybrid,
             alpha=args.alpha,
             call_real_api=args.call_real_api,
+        )
+    if command == "score-stocks":
+        from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
+        from investment_assistant.scoring.stock import run_stock_scoring
+
+        return run_stock_scoring(
+            financials_csv=args.financials_csv or DEFAULT_FINANCIALS_CSV,
+            strategy=args.strategy,
+            exclude_dividend_cut=args.exclude_cut,
+            min_equity_ratio=args.min_equity,
+            limit=args.limit or None,
         )
     if command == "scoring-rank":
         report = run_scoring_rank(path=args.path, limit=args.limit)

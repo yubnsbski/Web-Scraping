@@ -137,8 +137,13 @@ export function DashboardTab() {
     }
   }
 
+  const [topStocks, setTopStocks] = useState<Json[]>([]);
+
   useEffect(() => {
     void load();
+    api<Json>("/api/scoring/stocks", { strategy: "balanced", limit: 5 })
+      .then((r) => setTopStocks(Array.isArray(r.results) ? r.results : []))
+      .catch(() => setTopStocks([]));
   }, []);
 
   const dividendSeries: Json[] = Array.isArray(dividends?.series) ? dividends.series : [];
@@ -219,6 +224,32 @@ export function DashboardTab() {
           <BarChart rows={dividendSeries} valueKey="dividend_received" fmt={(v) => yen(v)} />
         </article>
       </section>
+
+      {topStocks.length > 0 && (
+        <article className="guide-card chart-card chart-card-wide">
+          <b>配当品質スコア 上位（EDINET・バランス戦略）</b>
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>順位</th>
+                <th>銘柄</th>
+                <th>スコア</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topStocks.map((s) => (
+                <tr key={String(s.ticker)}>
+                  <td>{String(s.rank)}</td>
+                  <td>
+                    <b>{String(s.ticker)}</b> {String(s.name ?? "")}
+                  </td>
+                  <td className="mono">{Number(s.total_score).toFixed(3)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </article>
+      )}
 
       {(dividends?.disclaimer || performance?.disclaimer) && (
         <p className="hint">{String(dividends?.disclaimer ?? performance?.disclaimer)}</p>
