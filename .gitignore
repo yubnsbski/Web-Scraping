@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Runtime/data artifacts
+.cache/
+data/
+artifacts/
+models/
+rag_index/
+local_docs/
+local_data/
+*.sqlite
+*.db
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local job definitions
+local_jobs/
+local_reports/
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+web/.vite/

@@ -1,0 +1,65 @@
+sources:
+  - name: "9432_NTT_ir_top"
+    ticker: "9432"
+    company: "NTT"
+    source_type: "issuer_ir"
+    method: "html"
+    allowed: true
+    url: "https://group.ntt/jp/ir/"
+    output_path: "local_docs/nikkei225/9432/ir_top.txt"
+    query_hint: "9432 NTT 配当 方針 株主還元 DOE 配当性向 IR"
+    extract_text: true
+    include_metadata: true
+    preview_chars: 800
+
+  - name: "2914_JT_ir_top"
+    ticker: "2914"
+    company: "JT"
+    source_type: "issuer_ir"
+    method: "html"
+    allowed: true
+    url: "https://www.jti.co.jp/investors/"
+    output_path: "local_docs/nikkei225/2914/ir_top.txt"
+    query_hint: "2914 JT 日本たばこ産業 配当 方針 株主還元 IR"
+    extract_text: true
+    include_metadata: true
+    preview_chars: 800
+
+  - name: "8306_MUFG_ir_top"
+    ticker: "8306"
+    company: "MUFG"
+    source_type: "issuer_ir"
+    method: "html"
+    allowed: true
+    url: "https://www.mufg.jp/ir/"
+    output_path: "local_docs/nikkei225/8306/ir_top.txt"
+    query_hint: "8306 MUFG 三菱UFJ 配当 方針 株主還元 IR"
+    extract_text: true
+    include_metadata: true
+    preview_chars: 800
+
+  - name: "edinet_api_placeholder"
+    source_type: "public_api"
+    method: "api"
+    allowed: true
+    reason: "API connector is not implemented in fetch-job yet"
+
+  - name: "broker_public_ranking_example"
+    source_type: "broker_public"
+    method: "html"
+    allowed: false
+    url: "https://example-broker.invalid/ranking"
+    output_path: "local_docs/broker/ranking.txt"
+    reason: "証券会社公開ページは利用規約確認まで自動取得しない"
+
+  - name: "broker_login_account_example"
+    source_type: "broker_login"
+    method: "login"
+    allowed: false
+    reason: "ログイン後情報・個人情報・規約リスクのため取得禁止"
+
+  - name: "realtime_market_data_example"
+    source_type: "market_data_realtime"
+    method: "api"
+    allowed: false
+    reason: "リアルタイム市場データはライセンス確認まで取得禁止"

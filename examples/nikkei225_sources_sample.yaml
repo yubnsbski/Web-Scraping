@@ -1,0 +1,43 @@
+# 日経225サンプル（3社）fetch-job 雛形。
+#
+# 使い方:
+#   cp examples/nikkei225_sources_sample.yaml local_jobs/nikkei225_sources.yaml
+#   investment-assistant fetch-job --path local_jobs/nikkei225_sources.yaml --dry-run
+#   （dry-runでrobots許可を確認してから本取得）
+#
+# 注意:
+# - 売買推奨・自動売買・証券口座連携は行いません。Gemini APIも呼びません。
+# - 本取得の前に必ず fetch-job --dry-run で robots.txt を確認してください。
+# - output_path は local_docs/nikkei225/ 配下（コミットしない生成物）にしています。
+# - URLは各社の公式IRページを必ず事前確認のうえ設定してください。
+#   この環境ではネットワーク検証ができないため、確実でないURLには TODO を残しています。
+
+sources:
+  - name: "9432_NTT_ir"
+    # NTT（日本電信電話）IR。仕様で指定されたURL。
+    url: "https://group.ntt/jp/ir/"
+    output_path: "local_docs/nikkei225/9432/ir.txt"
+    query_hint: "9432 NTT 配当 方針 DOE 配当性向 IR"
+    extract_text: true
+    include_metadata: true
+    preview_chars: 500
+
+  - name: "2914_JT_ir"
+    # 日本たばこ産業（JT）IR。
+    # TODO: 公式IRページURLを確認して確定すること（候補: https://www.jti.co.jp/investors/）。
+    url: "https://www.jti.co.jp/investors/"
+    output_path: "local_docs/nikkei225/2914/ir.txt"
+    query_hint: "2914 日本たばこ産業 JT 配当 方針 DOE 配当性向 IR"
+    extract_text: true
+    include_metadata: true
+    preview_chars: 500
+
+  - name: "8306_MUFG_ir"
+    # 三菱UFJフィナンシャル・グループ（MUFG）IR。
+    # TODO: 公式IRページURLを確認して確定すること（候補: https://www.mufg.jp/ir/）。
+    url: "https://www.mufg.jp/ir/"
+    output_path: "local_docs/nikkei225/8306/ir.txt"
+    query_hint: "8306 三菱UFJ MUFG 配当 方針 DOE 配当性向 IR"
+    extract_text: true
+    include_metadata: true
+    preview_chars: 500
