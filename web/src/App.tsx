@@ -67,6 +67,7 @@ const TABS = [
   { id: "forecast", label: "Forecast" },
   { id: "scrape", label: "Data Intake" },
   { id: "analysis", label: "解析" },
+  { id: "simulate", label: "配当シミュ" },
   { id: "ops", label: "Ops" },
 ] as const;
 
@@ -254,6 +255,7 @@ export function App() {
         {tab === "forecast" && <ForecastTab />}
         {tab === "scrape" && <ScrapeTab />}
         {tab === "analysis" && <AnalysisTab />}
+        {tab === "simulate" && <SimulateTab />}
         {tab === "ops" && <OpsTab />}
       </main>
       <footer className="footer">
@@ -1721,6 +1723,389 @@ function AnalysisTab() {
               </div>
             </div>
           )}
+        </>
+      )}
+    </section>
+  );
+}
+
+// --- Dividend portfolio simulator ------------------------------------------
+
+function yen(value: unknown): string {
+  return `${Math.round(Number(value) || 0).toLocaleString()}円`;
+}
+
+const WEIGHT_MODES: { value: string; label: string }[] = [
+  { value: "equal", label: "均等" },
+  { value: "safety", label: "安全性比例" },
+  { value: "amount", label: "投資額（手動）" },
+  { value: "shares", label: "株数（手動）" },
+];
+
+type Holding = { ticker: string; name: string; price: number; shares: number; amount: number };
+
+function MultiLineChart({
+  series,
+  band,
+}: {
+  series: { label: string; values: number[]; color: string }[];
+  band?: { lower: number[]; upper: number[] };
+}) {
+  const w = 540;
+  const h = 210;
+  const pad = 30;
+  const n = Math.max(...series.map((s) => s.values.length), band?.upper.length ?? 0, 1);
+  const max = Math.max(...series.flatMap((s) => s.values), ...(band?.upper ?? []), 1);
+  const xs = (i: number) => pad + ((w - pad * 2) * i) / Math.max(n - 1, 1);
+  const ys = (v: number) => h - pad - (v / max) * (h - pad * 2);
+  let areaPts = "";
+  if (band && band.upper.length > 0) {
+    const up = band.upper.map((v, i) => `${xs(i)},${ys(v)}`);
+    const lo = band.lower.map((v, i) => `${xs(i)},${ys(v)}`).reverse();
+    areaPts = up.concat(lo).join(" ");
+  }
+  return (
+    <div>
+      <svg className="area-chart" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="配当推移">
+        {[0, 0.5, 1].map((t) => {
+          const y = pad + t * (h - pad * 2);
+          return <line key={t} x1={pad} y1={y} x2={w - pad} y2={y} stroke="var(--line)" strokeOpacity="0.5" />;
+        })}
+        {areaPts && <polygon points={areaPts} fill="rgba(245,158,11,0.13)" stroke="none" />}
+        {series.map((s) => (
+          <polyline
+            key={s.label}
+            points={s.values.map((v, i) => `${xs(i)},${ys(v)}`).join(" ")}
+            fill="none"
+            stroke={s.color}
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ))}
+      </svg>
+      <div className="chart-legend">
+        {band && (
+          <span>
+            <i style={{ background: "rgba(245,158,11,0.5)" }} />
+            配当ボリンジャー帯
+          </span>
+        )}
+        {series.map((s) => (
+          <span key={s.label}>
+            <i style={{ background: s.color }} />
+            {s.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Heatmap({ surface }: { surface: Json }) {
+  const yields: number[] = surface?.yields ?? [];
+  const years: number[] = surface?.years ?? [];
+  const z: number[][] = surface?.z ?? [];
+  const max = Math.max(...z.flat(), 1);
+  return (
+    <table className="grid heat">
+      <thead>
+        <tr>
+          <th>利回り＼年</th>
+          {years.map((y) => (
+            <th key={y}>{y}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {yields.map((yl, ri) => (
+          <tr key={yl}>
+            <th>{Math.round(yl * 100)}%</th>
+            {(z[ri] ?? []).map((v, ci) => (
+              <td key={ci} className="heat-cell" style={{ background: `rgba(56,189,248,${Math.min(0.85, v / max)})` }} title={yen(v)} />
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function SimulateTab() {
+  const [budget, setBudget] = useState(1000000);
+  const [years, setYears] = useState(10);
+  const [growth, setGrowth] = useState(0);
+  const [reinvest, setReinvest] = useState(true);
+  const [weightMode, setWeightMode] = useState("equal");
+  const [autoCount, setAutoCount] = useState(8);
+  const [universe, setUniverse] = useState<Json[]>([]);
+  const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { loading, error, data, run } = useAsync<Json>();
+
+  useEffect(() => {
+    api<Json>("/api/portfolio/universe", {})
+      .then((r) => setUniverse(Array.isArray(r.universe) ? r.universe : []))
+      .catch(() => setUniverse([]));
+  }, []);
+
+  const addHolding = () => {
+    const u = universe.find((x) => String(x.ticker) === pick);
+    if (!u || holdings.some((h) => h.ticker === String(u.ticker))) return;
+    setHoldings([
+      ...holdings,
+      { ticker: String(u.ticker), name: String(u.name ?? ""), price: Number(u.price) || 0, shares: 100, amount: 100000 },
+    ]);
+  };
+  const patch = (i: number, p: Partial<Holding>) =>
+    setHoldings(holdings.map((h, idx) => (idx === i ? { ...h, ...p } : h)));
+  const removeAt = (i: number) => setHoldings(holdings.filter((_, idx) => idx !== i));
+
+  const fetchPrices = async (tickers: string[]): Promise<Record<string, number | null>> => {
+    const r = await api<Json>("/api/market/prices", { tickers });
+    return (r.prices ?? {}) as Record<string, number | null>;
+  };
+
+  const updatePrices = async () => {
+    if (holdings.length === 0) return;
+    setBusy(true);
+    try {
+      const pm = await fetchPrices(holdings.map((h) => h.ticker));
+      setHoldings((hs) => hs.map((h) => (pm[h.ticker] != null ? { ...h, price: Number(pm[h.ticker]) } : h)));
+    } catch {
+      /* leave prices as-is */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const autoBuild = async () => {
+    setBusy(true);
+    try {
+      const top = universe.slice(0, autoCount);
+      const pm = await fetchPrices(top.map((u) => String(u.ticker)));
+      const rows: Holding[] = top
+        .filter((u) => Number(pm[String(u.ticker)]) > 0)
+        .map((u) => ({
+          ticker: String(u.ticker),
+          name: String(u.name ?? ""),
+          price: Number(pm[String(u.ticker)]),
+          shares: 100,
+          amount: 100000,
+        }));
+      setHoldings(rows);
+      setWeightMode("safety");
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const simulate = () =>
+    run(() =>
+      api<Json>("/api/portfolio/simulate", {
+        budget,
+        years,
+        growth_rate: growth / 100,
+        reinvest,
+        auto_weight: weightMode,
+        dividend_basis: "conservative",
+        holdings: holdings.map((h) => ({ ticker: h.ticker, price: h.price, shares: h.shares, amount: h.amount })),
+      }),
+    );
+
+  const summary: Json = data?.summary ?? {};
+  const allocations: Json[] = data?.allocations ?? [];
+  const projection: Json = data?.projection ?? {};
+  const showShares = weightMode === "shares";
+  const showAmount = weightMode === "amount";
+
+  return (
+    <section className="tool-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Simulate</p>
+          <h2>配当ポートフォリオ シミュレーション</h2>
+        </div>
+        <span className="badge">参考・非助言</span>
+      </div>
+      <p className="hint">
+        EDINETの銘柄リストから選び、市場株価を取得して年間配当を試算します。配当はボリンジャー下限で安全側に見積もります。手動／おまかせ。将来を保証しない参考値です。
+      </p>
+
+      <div className="form">
+        <Field label="投資予算(円)">
+          <input type="number" value={budget} onChange={(e) => setBudget(Number(e.target.value))} />
+        </Field>
+        <Field label="年数">
+          <input type="number" value={years} onChange={(e) => setYears(Number(e.target.value))} />
+        </Field>
+        <Field label="配当成長率(%/年)">
+          <input type="number" value={growth} onChange={(e) => setGrowth(Number(e.target.value))} />
+        </Field>
+        <Field label="重み付け">
+          <select value={weightMode} onChange={(e) => setWeightMode(e.target.value)}>
+            {WEIGHT_MODES.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <label className="field check-field">
+          <input type="checkbox" checked={reinvest} onChange={(e) => setReinvest(e.target.checked)} />
+          <span>配当を再投資</span>
+        </label>
+      </div>
+
+      <div className="form">
+        <Field label="銘柄を選択（EDINET・安全性順）">
+          <select value={pick} onChange={(e) => setPick(e.target.value)}>
+            <option value="">― 選択 ―</option>
+            {universe.map((u) => (
+              <option key={String(u.ticker)} value={String(u.ticker)}>
+                {String(u.ticker)} {String(u.name ?? "")}（安全性 {Number(u.safety).toFixed(2)}）
+              </option>
+            ))}
+          </select>
+        </Field>
+        <button onClick={addHolding} disabled={!pick}>
+          ＋ 追加（手動）
+        </button>
+        <Field label="おまかせ銘柄数">
+          <input type="number" value={autoCount} onChange={(e) => setAutoCount(Number(e.target.value))} />
+        </Field>
+        <button onClick={() => void autoBuild()} disabled={busy || universe.length === 0}>
+          おまかせ構成（安全性上位）
+        </button>
+        <button onClick={() => void updatePrices()} disabled={busy || holdings.length === 0}>
+          市場価格を更新
+        </button>
+      </div>
+
+      {holdings.length > 0 && (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>銘柄</th>
+              <th>株価</th>
+              {showShares && <th>株数</th>}
+              {showAmount && <th>投資額</th>}
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {holdings.map((h, i) => (
+              <tr key={h.ticker}>
+                <td>
+                  <b>{h.ticker}</b> {h.name}
+                </td>
+                <td>
+                  <input type="number" value={h.price} onChange={(e) => patch(i, { price: Number(e.target.value) })} />
+                </td>
+                {showShares && (
+                  <td>
+                    <input type="number" value={h.shares} onChange={(e) => patch(i, { shares: Number(e.target.value) })} />
+                  </td>
+                )}
+                {showAmount && (
+                  <td>
+                    <input type="number" value={h.amount} onChange={(e) => patch(i, { amount: Number(e.target.value) })} />
+                  </td>
+                )}
+                <td>
+                  <button onClick={() => removeAt(i)}>削除</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <button className="primary" onClick={simulate} disabled={loading || holdings.length === 0}>
+        ポートフォリオを作成
+      </button>
+
+      <Status loading={loading} error={error} />
+      {busy && <p className="status">市場価格を取得中…</p>}
+      {data && data.available === false && <p className="status">{String(data.hint)}</p>}
+
+      {data && data.available !== false && (
+        <>
+          <section className="metric-grid">
+            <article className="metric-card accent">
+              <span>投資額 / 残現金</span>
+              <b>{yen(summary.invested)}</b>
+              <small>残 {yen(summary.cash_left)}</small>
+            </article>
+            <article className="metric-card pos">
+              <span>年間配当（安全側）</span>
+              <b>{yen(summary.annual_dividend)}</b>
+              <small>名目 {yen(summary.annual_dividend_latest)}</small>
+            </article>
+            <article className="metric-card accent">
+              <span>利回り（安全側）</span>
+              <b>{(Number(summary.portfolio_yield) * 100).toFixed(2)}%</b>
+              <small>名目 {(Number(summary.portfolio_yield_latest) * 100).toFixed(2)}%</small>
+            </article>
+            <article className="metric-card warn">
+              <span>配当レンジ(ボリンジャー)</span>
+              <b>{yen(summary.annual_band_lower)}</b>
+              <small>〜 {yen(summary.annual_band_upper)}</small>
+            </article>
+          </section>
+
+          {allocations.length > 0 && (
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>銘柄</th>
+                  <th>株価</th>
+                  <th>株数</th>
+                  <th>投資額</th>
+                  <th>年配当(安全側)</th>
+                  <th>利回り</th>
+                  <th>安全性</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allocations.map((a) => (
+                  <tr key={String(a.ticker)}>
+                    <td>
+                      <b>{a.ticker}</b> {a.name}
+                    </td>
+                    <td className="mono">{yen(a.price)}</td>
+                    <td className="mono">{String(a.shares)}</td>
+                    <td className="mono">{yen(a.invested)}</td>
+                    <td className="mono">{yen(a.annual_dividend)}</td>
+                    <td className="mono">{(Number(a.yield) * 100).toFixed(2)}%</td>
+                    <td className="mono">{(Number(a.safety) * 100).toFixed(0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="guide-card chart-card chart-card-wide">
+            <b>配当推移の予測（ボリンジャー帯・参考）</b>
+            <MultiLineChart
+              series={[
+                { label: "名目", values: projection.nominal ?? [], color: "var(--accent)" },
+                { label: "安全側(下限基準)", values: projection.conservative ?? [], color: "var(--warn)" },
+                { label: "再投資スノーボール", values: projection.reinvested ?? [], color: "var(--safe)" },
+              ]}
+              band={{ lower: projection.band_lower ?? [], upper: projection.band_upper ?? [] }}
+            />
+          </div>
+
+          <div className="guide-card chart-card chart-card-wide">
+            <b>累積配当のヒートマップ（年数 × 利回り・再投資・参考）</b>
+            <Heatmap surface={data.surface} />
+          </div>
+
+          {data.disclaimer && <p className="hint">{String(data.disclaimer)}</p>}
         </>
       )}
     </section>

@@ -891,3 +891,11 @@ textarea { min-height: 140px; }
   overflow: auto;
 }
 .source-list .cite-link, .source-list .mono { display: inline-block; margin-bottom: 4px; }
+
+/* --- Dividend simulator --------------------------------------------- */
+.chart-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.chart-legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.heat { font-size: 11px; }
+.heat th { white-space: nowrap; }
+.heat-cell { height: 26px; min-width: 26px; padding: 0 !important; }
