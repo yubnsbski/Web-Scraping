@@ -10,6 +10,11 @@ _SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from investment_assistant.webapi.server import _Handler as handler  # noqa: E402
+from investment_assistant.webapi.server import _Handler  # noqa: E402
+
+
+class handler(_Handler):
+    """Vercel requires an explicit top-level handler symbol."""
+
 
 __all__ = ["handler"]
