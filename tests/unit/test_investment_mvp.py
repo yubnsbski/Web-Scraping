@@ -14,7 +14,10 @@ from investment_assistant.investment import (
     screen_candidates,
 )
 from investment_assistant.investment.candidates import screen_from_values
-from investment_assistant.investment.provider_policy import ensure_provider_allowed
+from investment_assistant.investment.provider_policy import (
+    ensure_provider_allowed,
+    provider_policy_ledger,
+)
 from investment_assistant.portfolio.simulator import plan_for_target_dividend
 
 HOLDINGS_CSV = (
@@ -227,6 +230,26 @@ def test_provider_policy_blocks_uncontracted_production_provider() -> None:
         ensure_provider_allowed("stooq_public_csv", runtime_mode="production")
 
     assert ensure_provider_allowed("user_csv", runtime_mode="production").production_allowed
+
+
+def test_provider_policy_ledger_marks_production_blockers() -> None:
+    ledger = provider_policy_ledger(
+        runtime_mode="production",
+        provider_ids=["user_csv", "edinet", "stooq_public_csv"],
+    )
+
+    rows = {
+        str(item["provider_id"]): item
+        for item in ledger["providers"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert ledger["runtime_mode"] == "production"
+    assert rows["user_csv"]["runtime_decision"] == "allowed"
+    assert rows["edinet"]["runtime_decision"] == "allowed"
+    assert rows["stooq_public_csv"]["runtime_decision"] == "blocked_until_contracted"
+    assert rows["stooq_public_csv"]["recommended_use"] == "development_only"
+    assert ledger["auto_trading"] is False
+    assert ledger["call_real_api"] is False
 
 
 def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None:
