@@ -371,6 +371,50 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
         encoding="utf-8",
     )
 
+    status, validation = handle_api(
+        "POST",
+        "/api/holdings/validate",
+        {"csv_text": holdings_csv},
+    )
+    assert status == 200
+    assert validation["valid"] is True
+    assert validation["row_count"] == 2
+    assert validation["valid_row_count"] == 2
+    assert validation["auto_trading"] is False
+
+    bad_holdings_csv = holdings_csv.replace(",100,1000,", ",not-a-number,1000,")
+    status, validation = handle_api(
+        "POST",
+        "/api/holdings/validate",
+        {"csv_text": bad_holdings_csv},
+    )
+    assert status == 200
+    assert validation["valid"] is False
+    assert validation["error_count"] == 1
+    assert validation["errors"][0]["row"] == 2
+    assert validation["errors"][0]["column"] == "quantity"
+
+    status, fund_validation = handle_api(
+        "POST",
+        "/api/funds/validate",
+        {"funds_csv_text": funds_csv},
+    )
+    assert status == 200
+    assert fund_validation["valid"] is True
+    assert fund_validation["row_count"] == 1
+    assert fund_validation["valid_row_count"] == 1
+
+    bad_funds_csv = funds_csv.replace(",0.12,", ",not-a-number,")
+    status, fund_validation = handle_api(
+        "POST",
+        "/api/funds/validate",
+        {"funds_csv_text": bad_funds_csv},
+    )
+    assert status == 200
+    assert fund_validation["valid"] is False
+    assert fund_validation["errors"][0]["row"] == 2
+    assert fund_validation["errors"][0]["column"] == "expense_ratio"
+
     status, imported = handle_api("POST", "/api/holdings/import", {"csv_text": holdings_csv})
     assert status == 200
     assert imported["count"] == 2
