@@ -426,11 +426,15 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
             "candidates": candidates["results"],
             "target_annual_dividend": 10_000,
             "optimization": "balanced",
+            "history_dir": str(tmp_path / "report_history"),
         },
     )
     assert status == 200
     assert report["kpis"]
     assert report["evidence"]
+    history_summary = report["history"]
+    assert history_summary["id"]
+    assert history_summary["market_value"] == 670000.0
     metric_keys = {
         str(item.get("metric_key"))
         for item in report["kpis"]  # type: ignore[index]
@@ -445,6 +449,27 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     }
     assert "portfolio.target.required_budget" in evidence_keys
     assert "portfolio.concentration.current" in evidence_keys
+
+    status, history = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history",
+        {"history_dir": str(tmp_path / "report_history")},
+    )
+    assert status == 200
+    assert history["count"] == 1
+    assert history["reports"][0]["id"] == history_summary["id"]
+    assert history["reports"][0]["target_required_budget"] is not None
+
+    status, saved = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history/load",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert saved["summary"]["id"] == history_summary["id"]
+    assert saved["report"]["kpis"]
+    assert saved["report"]["evidence"]
+    assert "csv_text" not in saved["report"]
 
 
 def test_market_prices_reject_uncontracted_provider_in_production() -> None:
