@@ -1,4 +1,38 @@
 # Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual envs
+env/
+ENV/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vite / build
+web/dist/
+web/dev-server-out.log
+
+# Uvicorn logs
+backend/uvicorn*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.local
+.venv/
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -9,6 +43,9 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+
+# Specific named virtualenv used during testing
+.venv311/
 
 # Secrets
 .env
@@ -39,3 +76,6 @@ local_reports/
 web/node_modules/
 web/dist/
 web/.vite/
+
+# Pytest temp directory
+.tmp_pytest/
