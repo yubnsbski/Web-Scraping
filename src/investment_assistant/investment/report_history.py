@@ -7,6 +7,7 @@ the UI; raw CSV request bodies and provider credentials are not stored here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -35,12 +36,22 @@ def save_investment_report(
     folder.mkdir(parents=True, exist_ok=True)
     saved_at = datetime.now(UTC).isoformat()
     report_id = _new_report_id()
-    summary = _summary(report, report_id=report_id, saved_at=saved_at)
+    stored_report = dict(report)
+    report_hash = _report_hash(stored_report)
+    summary = _summary(
+        stored_report,
+        report_id=report_id,
+        saved_at=saved_at,
+        report_hash=report_hash,
+        integrity_status="ok",
+    )
     entry: JsonDict = {
         "id": report_id,
         "saved_at": saved_at,
         "summary": summary,
-        "report": dict(report),
+        "report": stored_report,
+        "report_hash": report_hash,
+        "integrity_status": "ok",
     }
     _write_json(_entry_path(folder, report_id), entry)
     _prune(folder, max_entries=max_entries)
@@ -82,7 +93,26 @@ def load_investment_report(
     entry = _read_json(path)
     if not isinstance(entry, dict):
         raise ValueError(f"invalid report history entry: {safe_id}")
-    return entry
+    return _entry_with_integrity(entry)
+
+
+def verify_investment_report_history(
+    report_id: str,
+    *,
+    history_dir: str | Path | None = None,
+) -> JsonDict:
+    """Verify the stored hash for one report history entry."""
+
+    entry = load_investment_report(report_id, history_dir=history_dir)
+    return {
+        "id": entry.get("id"),
+        "saved_at": entry.get("saved_at"),
+        "report_hash": entry.get("report_hash"),
+        "calculated_report_hash": entry.get("calculated_report_hash"),
+        "integrity_status": entry.get("integrity_status"),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def delete_investment_report(
@@ -136,6 +166,8 @@ def _summary(
     *,
     report_id: str,
     saved_at: str,
+    report_hash: str | None = None,
+    integrity_status: str = "unknown",
 ) -> JsonDict:
     kpis = _kpi_index(report.get("kpis"))
     return {
@@ -153,15 +185,20 @@ def _summary(
         "evidence_count": _sequence_len(report.get("evidence")),
         "publish_audit_status": _publish_audit_value(report, "status", "unknown"),
         "publish_audit_issue_count": _publish_audit_value(report, "issue_count", None),
+        "report_hash": report_hash,
+        "integrity_status": integrity_status,
         "auto_trading": False,
         "call_real_api": False,
     }
 
 
 def _entry_summary(entry: Mapping[str, object]) -> JsonDict:
+    integrity = _verify_entry_integrity(entry)
     summary = entry.get("summary")
     if isinstance(summary, dict):
-        return dict(summary)
+        out = dict(summary)
+        out.update(_summary_integrity_fields(integrity))
+        return out
     report_id = str(entry.get("id") or "")
     saved_at = str(entry.get("saved_at") or "")
     report = entry.get("report")
@@ -169,7 +206,21 @@ def _entry_summary(entry: Mapping[str, object]) -> JsonDict:
         report if isinstance(report, Mapping) else {},
         report_id=report_id,
         saved_at=saved_at,
+        report_hash=_text_or_none(integrity.get("report_hash")),
+        integrity_status=str(integrity.get("integrity_status") or "unknown"),
     )
+
+
+def _entry_with_integrity(entry: Mapping[str, object]) -> JsonDict:
+    integrity = _verify_entry_integrity(entry)
+    out = dict(entry)
+    out.update(_summary_integrity_fields(integrity))
+    summary = out.get("summary")
+    if isinstance(summary, dict):
+        next_summary = dict(summary)
+        next_summary.update(_summary_integrity_fields(integrity))
+        out["summary"] = next_summary
+    return out
 
 
 def _kpi_index(value: object) -> dict[str, Mapping[str, object]]:
@@ -202,6 +253,49 @@ def _publish_audit_value(
     if not isinstance(audit, Mapping):
         return fallback
     return audit.get(key, fallback)
+
+
+def _summary_integrity_fields(integrity: Mapping[str, object]) -> JsonDict:
+    return {
+        "report_hash": integrity.get("report_hash"),
+        "calculated_report_hash": integrity.get("calculated_report_hash"),
+        "integrity_status": integrity.get("integrity_status"),
+    }
+
+
+def _verify_entry_integrity(entry: Mapping[str, object]) -> JsonDict:
+    stored_hash = _text_or_none(entry.get("report_hash"))
+    report = entry.get("report")
+    if not isinstance(report, Mapping):
+        return {
+            "report_hash": stored_hash,
+            "calculated_report_hash": None,
+            "integrity_status": "tampered",
+        }
+    calculated_hash = _report_hash(report)
+    if stored_hash is None:
+        status = "unknown"
+    elif stored_hash == calculated_hash:
+        status = "ok"
+    else:
+        status = "tampered"
+    return {
+        "report_hash": stored_hash,
+        "calculated_report_hash": calculated_hash,
+        "integrity_status": status,
+    }
+
+
+def _report_hash(report: Mapping[str, object]) -> str:
+    payload = json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _text_or_none(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 def _read_entries(folder: Path) -> list[JsonDict]:

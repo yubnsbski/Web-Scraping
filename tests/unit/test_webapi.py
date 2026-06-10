@@ -482,6 +482,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert history_summary["market_value"] == 670000.0
     assert history_summary["publish_audit_status"] == "ok"
     assert history_summary["publish_audit_issue_count"] == 0
+    assert history_summary["integrity_status"] == "ok"
+    assert isinstance(history_summary["report_hash"], str)
     metric_keys = {
         str(item.get("metric_key"))
         for item in report["kpis"]  # type: ignore[index]
@@ -515,6 +517,7 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert history["count"] == 1
     assert history["reports"][0]["id"] == history_summary["id"]
     assert history["reports"][0]["target_required_budget"] is not None
+    assert history["reports"][0]["integrity_status"] == "ok"
 
     status, saved = handle_api(
         "POST",
@@ -523,9 +526,19 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     )
     assert status == 200
     assert saved["summary"]["id"] == history_summary["id"]
+    assert saved["integrity_status"] == "ok"
+    assert saved["summary"]["integrity_status"] == "ok"
     assert saved["report"]["kpis"]
     assert saved["report"]["evidence"]
     assert "csv_text" not in saved["report"]
+
+    status, verified_history = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history/verify",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert verified_history["integrity_status"] == "ok"
 
     status, saved_audit = handle_api(
         "POST",

@@ -1641,6 +1641,14 @@ function InvestmentReportTab() {
                     <dt>根拠</dt>
                     <dd>{Number(item.evidence_count ?? 0).toLocaleString()}件</dd>
                   </div>
+                  <div>
+                    <dt>integrity</dt>
+                    <dd>
+                      <span className={`badge ${String(item.integrity_status) === "ok" ? "safe" : "warn"}`}>
+                        {String(item.integrity_status ?? "unknown")}
+                      </span>
+                    </dd>
+                  </div>
                 </dl>
                 <div className="history-actions">
                   <button onClick={() => loadSavedReport(String(item.id))} disabled={state.loading}>
