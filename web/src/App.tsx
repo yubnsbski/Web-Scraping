@@ -787,6 +787,9 @@ function HoldingsTab() {
   const nisaAlerts: Json[] = Array.isArray(summary.nisa?.alerts)
     ? summary.nisa.alerts
     : [];
+  const dataAlerts: Json[] = Array.isArray(summary.data_quality?.alerts)
+    ? summary.data_quality.alerts
+    : [];
 
   return (
     <section className="tool-section">
@@ -870,6 +873,45 @@ function HoldingsTab() {
                     %
                   </td>
                   <td className="mono">{yen(alert.remaining)}</td>
+                  <td>{String(alert.message)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {dataAlerts.length > 0 && (
+        <div className="subpanel data-alert-panel">
+          <h3>Data freshness alerts</h3>
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>level</th>
+                <th>source</th>
+                <th>reason</th>
+                <th>age</th>
+                <th>message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dataAlerts.map((alert, index) => (
+                <tr key={`${String(alert.code)}-${String(alert.security_code ?? alert.source_ref)}-${index}`}>
+                  <td>
+                    <span className={String(alert.level) === "error" ? "badge warn" : "badge"}>
+                      {String(alert.level)}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="mono">
+                      {String(alert.security_code ?? alert.source_ref ?? alert.provider_id ?? "-")}
+                    </span>
+                    <small>{String(alert.provider_id ?? alert.field ?? "")}</small>
+                  </td>
+                  <td>{String(alert.code)}</td>
+                  <td className="mono">
+                    {alert.age_days !== undefined ? `${Number(alert.age_days).toFixed(1)}d` : "-"}
+                  </td>
                   <td>{String(alert.message)}</td>
                 </tr>
               ))}

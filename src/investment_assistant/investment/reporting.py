@@ -17,10 +17,15 @@ def build_investment_monthly_report(
     candidates: Sequence[dict[str, object]] = (),
     target_result: Mapping[str, object] | None = None,
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    runtime_mode: str = "development",
 ) -> dict[str, object]:
     """Build a non-advisory monthly report from computed facts."""
 
-    analysis = analyze_portfolio(holdings, financials_csv=financials_csv)
+    analysis = analyze_portfolio(
+        holdings,
+        financials_csv=financials_csv,
+        runtime_mode=runtime_mode,
+    )
     summary = analysis["summary"]
     if not isinstance(summary, dict):
         raise ValueError("portfolio analysis did not return a summary")
@@ -215,6 +220,28 @@ def build_investment_monthly_report(
             ),
         },
     ]
+    data_quality = _mapping(summary.get("data_quality"))
+    data_alert_count = data_quality.get("alert_count") if data_quality is not None else 0
+    if (
+        data_quality is not None
+        and isinstance(data_alert_count, int | float)
+        and data_alert_count > 0
+    ):
+        sections.append(
+            {
+                "key": "data_quality",
+                "title": "Data quality",
+                "body": (
+                    f"Status {data_quality.get('status')}; "
+                    f"alerts {data_alert_count}; "
+                    f"provider blocks {data_quality.get('provider_blocked_count')}; "
+                    f"missing price {data_quality.get('missing_price_count')}; "
+                    f"stale price {data_quality.get('stale_price_count')}; "
+                    f"stale financials {data_quality.get('stale_financials_count')}. "
+                    "These are data review prompts, not trading recommendations."
+                ),
+            }
+        )
     if target is not None:
         reachability = "到達可能" if target.get("reachable") is True else "要条件見直し"
         sections.append(

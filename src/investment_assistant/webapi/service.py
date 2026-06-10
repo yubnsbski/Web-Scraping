@@ -614,6 +614,7 @@ def _portfolio_analyze(body: JsonDict) -> JsonDict:
     return analyze_portfolio(
         holdings_from_payload(body),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        runtime_mode=str(body.get("runtime_mode") or "development"),
     )
 
 
@@ -700,6 +701,7 @@ def _investment_monthly_report(body: JsonDict) -> JsonDict:
         candidates=candidates,
         target_result=target_result,
         financials_csv=financials_csv,
+        runtime_mode=str(body.get("runtime_mode") or "development"),
     )
     if _as_bool(body.get("save_history"), True):
         report["history"] = save_investment_report(

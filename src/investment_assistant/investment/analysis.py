@@ -2,32 +2,42 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, load_comparison
 from investment_assistant.investment.models import DISCLAIMER, InvestmentHolding
+from investment_assistant.investment.provider_policy import ProviderPolicy, provider_policy
 
 _NISA_LIFETIME_CAP = 18_000_000.0
 _NISA_GROWTH_CAP = 12_000_000.0
 _NISA_NEAR_LIMIT_PCT = 90.0
+_PRICE_STALE_AFTER_DAYS = 7
+_FINANCIALS_STALE_AFTER_DAYS = 120
 
 
 def analyze_portfolio(
     holdings: Sequence[InvestmentHolding],
     *,
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    runtime_mode: str = "development",
 ) -> dict[str, object]:
     """Analyze user-provided holdings without LLMs or recommendations."""
 
     if not holdings:
         raise ValueError("At least one holding is required.")
 
-    generated_at = datetime.now(UTC).isoformat()
+    generated_at_dt = datetime.now(UTC)
+    generated_at = generated_at_dt.isoformat()
     companies = _company_index(financials_csv)
+    financials_metadata = _financials_metadata(financials_csv, generated_at_dt)
     rows: list[dict[str, object]] = []
     evidence: list[dict[str, object]] = []
+    data_alerts = _financials_alerts(
+        holdings=holdings,
+        metadata=financials_metadata,
+    )
     total_market = 0.0
     total_cost = 0.0
     total_income = 0.0
@@ -42,9 +52,13 @@ def analyze_portfolio(
         cost_basis = holding.quantity * holding.avg_cost
         company = companies.get(holding.ticker_or_fund_code)
         annual_income, income_source = _annual_income(holding, company)
+        provider_id = _holding_provider_id(holding)
+        policy = provider_policy(provider_id, runtime_mode=runtime_mode)
         pnl = market_value - cost_basis
         row = {
             **holding.to_dict(),
+            "data_provider": provider_id,
+            "provider_policy": policy.to_dict(),
             "price_used": round(price, 4),
             "price_source": "current_price" if holding.current_price is not None else "avg_cost",
             "market_value": round(market_value, 2),
@@ -57,7 +71,15 @@ def analyze_portfolio(
             if market_value
             else 0.0,
         }
+        row_data_alerts = _holding_data_alerts(
+            holding=holding,
+            generated_at=generated_at_dt,
+            provider_id=provider_id,
+            policy=policy,
+        )
+        row["data_alerts"] = row_data_alerts
         rows.append(row)
+        data_alerts.extend(row_data_alerts)
         total_market += market_value
         total_cost += cost_basis
         total_income += annual_income
@@ -138,6 +160,7 @@ def analyze_portfolio(
         "asset_mix": _share_map(asset_mix, total_market),
         "tax_wrapper_mix": _share_map(tax_wrapper_mix, total_market),
         "nisa": nisa,
+        "data_quality": _data_quality_summary(data_alerts),
     }
     evidence.append(
         {
@@ -148,6 +171,19 @@ def analyze_portfolio(
             "formula": "sum(cost_basis where normalized tax_wrapper starts with nisa)",
             "last_updated": generated_at,
             "note": "NISA remaining capacity uses acquisition cost basis, not market value.",
+        }
+    )
+    evidence.append(
+        {
+            "claim_key": "portfolio.data_quality",
+            "source_type": "data_policy",
+            "source_ref": "holdings.data_provider, holdings.price_as_of, financials_csv",
+            "metric_key": "data_quality",
+            "formula": (
+                "provider policy check + price timestamp check + financials CSV mtime check"
+            ),
+            "last_updated": generated_at,
+            "note": "Data quality alerts are source-review prompts, not trading recommendations.",
         }
     )
     return {
@@ -190,6 +226,203 @@ def _annual_income(
         if dps is not None:
             return dps * holding.quantity, "edinet_latest_dividend_per_share"
     return 0.0, "not_available"
+
+
+def _holding_data_alerts(
+    *,
+    holding: InvestmentHolding,
+    generated_at: datetime,
+    provider_id: str,
+    policy: ProviderPolicy,
+) -> list[dict[str, object]]:
+    alerts: list[dict[str, object]] = []
+    base: dict[str, object] = {
+        "security_code": holding.ticker_or_fund_code,
+        "name": holding.name,
+        "asset_type": holding.asset_type,
+        "provider_id": provider_id,
+    }
+    if not policy.production_allowed:
+        alerts.append(
+            {
+                **base,
+                "level": "error",
+                "code": "provider_not_production_allowed",
+                "field": "data_provider",
+                "message": policy.license_note,
+            }
+        )
+    if holding.current_price is None:
+        alerts.append(
+            {
+                **base,
+                "level": "warn",
+                "code": "price_missing_fallback_avg_cost",
+                "field": "current_price",
+                "message": "Current price is missing; valuation falls back to avg_cost.",
+            }
+        )
+        return alerts
+
+    if not holding.price_as_of:
+        alerts.append(
+            {
+                **base,
+                "level": "info",
+                "code": "price_as_of_missing",
+                "field": "price_as_of",
+                "message": "Current price timestamp is missing; freshness cannot be verified.",
+            }
+        )
+        return alerts
+
+    parsed = _parse_timestamp(holding.price_as_of)
+    if parsed is None:
+        alerts.append(
+            {
+                **base,
+                "level": "warn",
+                "code": "price_as_of_invalid",
+                "field": "price_as_of",
+                "value": holding.price_as_of,
+                "message": "Current price timestamp could not be parsed.",
+            }
+        )
+        return alerts
+
+    age_days = (generated_at - parsed).total_seconds() / 86_400
+    if age_days < 0:
+        alerts.append(
+            {
+                **base,
+                "level": "warn",
+                "code": "price_as_of_future",
+                "field": "price_as_of",
+                "value": holding.price_as_of,
+                "message": "Current price timestamp is in the future.",
+            }
+        )
+    elif age_days > _PRICE_STALE_AFTER_DAYS:
+        alerts.append(
+            {
+                **base,
+                "level": "warn",
+                "code": "price_stale",
+                "field": "price_as_of",
+                "value": holding.price_as_of,
+                "age_days": round(age_days, 1),
+                "threshold_days": _PRICE_STALE_AFTER_DAYS,
+                "message": "Current price timestamp is older than the freshness threshold.",
+            }
+        )
+    return alerts
+
+
+def _financials_metadata(path: str | Path, generated_at: datetime) -> dict[str, object]:
+    csv_path = Path(path)
+    if not csv_path.exists():
+        return {
+            "path": str(path),
+            "exists": False,
+            "last_modified": None,
+            "age_days": None,
+            "threshold_days": _FINANCIALS_STALE_AFTER_DAYS,
+        }
+    modified = datetime.fromtimestamp(csv_path.stat().st_mtime, tz=UTC)
+    age_days = (generated_at - modified).total_seconds() / 86_400
+    return {
+        "path": str(path),
+        "exists": True,
+        "last_modified": modified.isoformat(),
+        "age_days": round(age_days, 1),
+        "threshold_days": _FINANCIALS_STALE_AFTER_DAYS,
+    }
+
+
+def _financials_alerts(
+    *,
+    holdings: Sequence[InvestmentHolding],
+    metadata: Mapping[str, object],
+) -> list[dict[str, object]]:
+    if not any(holding.asset_type == "stock" for holding in holdings):
+        return []
+    if metadata.get("exists") is False:
+        return [
+            {
+                "level": "warn",
+                "code": "financials_csv_missing",
+                "field": "financials_csv",
+                "source_ref": metadata.get("path"),
+                "message": "Financials CSV is missing; stock dividend facts may be unavailable.",
+            }
+        ]
+    age_days = _number(metadata.get("age_days"))
+    threshold_days = _number(metadata.get("threshold_days")) or _FINANCIALS_STALE_AFTER_DAYS
+    if age_days is not None and age_days > threshold_days:
+        return [
+            {
+                "level": "warn",
+                "code": "financials_csv_stale",
+                "field": "financials_csv",
+                "source_ref": metadata.get("path"),
+                "last_modified": metadata.get("last_modified"),
+                "age_days": age_days,
+                "threshold_days": threshold_days,
+                "message": "Financials CSV is older than the freshness threshold.",
+            }
+        ]
+    return []
+
+
+def _data_quality_summary(alerts: Sequence[dict[str, object]]) -> dict[str, object]:
+    alert_list = list(alerts)
+    codes = [str(alert.get("code") or "") for alert in alert_list]
+    levels = {str(alert.get("level") or "") for alert in alert_list}
+    status = "ok"
+    if "error" in levels:
+        status = "error"
+    elif "warn" in levels:
+        status = "warn"
+    elif alert_list:
+        status = "info"
+    return {
+        "status": status,
+        "alert_count": len(alert_list),
+        "provider_blocked_count": codes.count("provider_not_production_allowed"),
+        "missing_price_count": codes.count("price_missing_fallback_avg_cost"),
+        "missing_timestamp_count": codes.count("price_as_of_missing"),
+        "stale_price_count": codes.count("price_stale"),
+        "stale_financials_count": codes.count("financials_csv_stale"),
+        "price_stale_after_days": _PRICE_STALE_AFTER_DAYS,
+        "financials_stale_after_days": _FINANCIALS_STALE_AFTER_DAYS,
+        "alerts": alert_list,
+    }
+
+
+def _holding_provider_id(holding: InvestmentHolding) -> str:
+    if holding.data_provider and holding.data_provider.strip():
+        return holding.data_provider.strip().lower()
+    source = holding.source.strip().lower()
+    if not source or _looks_like_path(source):
+        return "user_csv"
+    return source
+
+
+def _looks_like_path(value: str) -> bool:
+    return "/" in value or "\\" in value or value.endswith(".csv") or value.endswith(".json")
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _concentration(rows: list[dict[str, object]], total_market: float) -> dict[str, object]:

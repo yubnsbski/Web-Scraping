@@ -948,12 +948,20 @@ textarea { min-height: 140px; }
   min-width: 640px;
 }
 
-.nisa-alert-panel {
+.nisa-alert-panel,
+.data-alert-panel {
   overflow-x: auto;
 }
 
-.nisa-alert-panel table {
+.nisa-alert-panel table,
+.data-alert-panel table {
   min-width: 720px;
+}
+
+.data-alert-panel small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
 }
 
 .kpi-details {
