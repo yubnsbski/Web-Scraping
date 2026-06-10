@@ -932,6 +932,13 @@ textarea { min-height: 140px; }
   justify-content: flex-end;
 }
 
+.markdown-output {
+  min-height: 260px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.6;
+  white-space: pre;
+}
+
 .kpi-details {
   position: relative;
   z-index: 1;

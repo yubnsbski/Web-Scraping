@@ -1153,6 +1153,7 @@ function InvestmentReportTab() {
   const [targetDividend, setTargetDividend] = useState(60000);
   const state = useAsync<Json>();
   const historyState = useAsync<Json>();
+  const markdownState = useAsync<Json>();
 
   useEffect(() => {
     void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
@@ -1190,6 +1191,14 @@ function InvestmentReportTab() {
       const entry = await api<Json>("/api/reports/investment-monthly/history/load", { id });
       return (entry.report as Json) ?? {};
     });
+  const showCurrentMarkdown = () => {
+    if (!state.data) return;
+    markdownState.run(() =>
+      api<Json>("/api/reports/investment-monthly/markdown", { report: state.data }),
+    );
+  };
+  const showSavedMarkdown = (id: string) =>
+    markdownState.run(() => api<Json>("/api/reports/investment-monthly/markdown", { id }));
   const deleteSavedReport = (id: string) => {
     if (
       typeof window !== "undefined" &&
@@ -1214,6 +1223,7 @@ function InvestmentReportTab() {
   const reports: Json[] = Array.isArray(historyState.data?.reports)
     ? historyState.data.reports
     : [];
+  const markdownText = String(markdownState.data?.markdown ?? "");
 
   return (
     <section className="tool-section">
@@ -1297,6 +1307,12 @@ function InvestmentReportTab() {
                     再表示
                   </button>
                   <button
+                    onClick={() => showSavedMarkdown(String(item.id))}
+                    disabled={markdownState.loading}
+                  >
+                    Markdown
+                  </button>
+                  <button
                     onClick={() => deleteSavedReport(String(item.id))}
                     disabled={historyState.loading}
                   >
@@ -1308,6 +1324,21 @@ function InvestmentReportTab() {
           </div>
         )}
       </div>
+
+      {state.data && (
+        <div className="form">
+          <button onClick={showCurrentMarkdown} disabled={markdownState.loading}>
+            Markdownを表示
+          </button>
+        </div>
+      )}
+      <Status loading={markdownState.loading} error={markdownState.error} />
+      {markdownText && (
+        <div className="subpanel">
+          <h3>Markdown</h3>
+          <textarea className="markdown-output" rows={12} readOnly value={markdownText} />
+        </div>
+      )}
 
       {kpis.length > 0 && (
         <section className="metric-grid">

@@ -737,6 +737,27 @@ def _investment_report_history_delete(body: JsonDict) -> JsonDict:
     return delete_investment_report(report_id, history_dir=_optional_history_dir(body))
 
 
+def _investment_report_markdown(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_history import load_investment_report
+    from investment_assistant.investment.report_markdown import render_investment_report_markdown
+
+    report = body.get("report")
+    if not isinstance(report, dict):
+        report_id = str(body.get("id") or body.get("report_id") or "").strip()
+        if not report_id:
+            raise ApiError("report or report history id is required")
+        entry = load_investment_report(report_id, history_dir=_optional_history_dir(body))
+        loaded_report = entry.get("report")
+        if not isinstance(loaded_report, dict):
+            raise ApiError("saved report is invalid")
+        report = loaded_report
+    return {
+        "markdown": render_investment_report_markdown(report),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for holding in holdings:
@@ -1184,6 +1205,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/investment/detail"): _investment_detail,
     ("POST", "/api/candidates/screen"): _candidates_screen,
     ("POST", "/api/reports/investment-monthly"): _investment_monthly_report,
+    ("POST", "/api/reports/investment-monthly/markdown"): _investment_report_markdown,
     ("GET", "/api/reports/investment-monthly/history"): _investment_report_history,
     ("POST", "/api/reports/investment-monthly/history"): _investment_report_history,
     ("POST", "/api/reports/investment-monthly/history/load"): _investment_report_history_load,

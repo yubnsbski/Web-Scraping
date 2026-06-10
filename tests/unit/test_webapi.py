@@ -471,6 +471,18 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert saved["report"]["evidence"]
     assert "csv_text" not in saved["report"]
 
+    status, markdown = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/markdown",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert markdown["auto_trading"] is False
+    assert "## KPIs" in markdown["markdown"]
+    assert "market_value" in markdown["markdown"]
+    assert "portfolio.concentration.current" in markdown["markdown"]
+    assert "## Disclaimer" in markdown["markdown"]
+
     status, deleted = handle_api(
         "POST",
         "/api/reports/investment-monthly/history/delete",
