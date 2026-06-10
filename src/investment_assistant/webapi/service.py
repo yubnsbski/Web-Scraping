@@ -668,6 +668,7 @@ def _investment_monthly_report(body: JsonDict) -> JsonDict:
         build_investment_monthly_report,
         holdings_from_payload,
     )
+    from investment_assistant.investment.report_history import save_investment_report
     from investment_assistant.portfolio.simulator import plan_for_target_dividend
 
     raw_candidates = body.get("candidates")
@@ -694,12 +695,82 @@ def _investment_monthly_report(body: JsonDict) -> JsonDict:
             dividend_basis=str(body.get("dividend_basis") or "conservative"),
             financials_csv=financials_csv,
         )
-    return build_investment_monthly_report(
+    report = build_investment_monthly_report(
         holdings,
         candidates=candidates,
         target_result=target_result,
         financials_csv=financials_csv,
     )
+    if _as_bool(body.get("save_history"), True):
+        report["history"] = save_investment_report(
+            report,
+            history_dir=_optional_history_dir(body),
+            max_entries=_as_int(body.get("history_limit"), 50),
+        )
+    return report
+
+
+def _investment_report_history(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_history import list_investment_reports
+
+    return list_investment_reports(
+        history_dir=_optional_history_dir(body),
+        limit=_as_int(body.get("limit"), 20),
+    )
+
+
+def _investment_report_history_load(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_history import load_investment_report
+
+    report_id = str(body.get("id") or body.get("report_id") or "").strip()
+    if not report_id:
+        raise ApiError("report history id is required")
+    return load_investment_report(report_id, history_dir=_optional_history_dir(body))
+
+
+def _investment_report_history_delete(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_history import delete_investment_report
+
+    report_id = str(body.get("id") or body.get("report_id") or "").strip()
+    if not report_id:
+        raise ApiError("report history id is required")
+    return delete_investment_report(report_id, history_dir=_optional_history_dir(body))
+
+
+def _investment_report_history_compare(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_compare import compare_investment_reports
+    from investment_assistant.investment.report_history import load_investment_report
+
+    base_id = str(body.get("base_id") or "").strip()
+    compare_id = str(body.get("compare_id") or "").strip()
+    if not base_id or not compare_id:
+        raise ApiError("base_id and compare_id are required")
+    history_dir = _optional_history_dir(body)
+    return compare_investment_reports(
+        load_investment_report(base_id, history_dir=history_dir),
+        load_investment_report(compare_id, history_dir=history_dir),
+    )
+
+
+def _investment_report_markdown(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_history import load_investment_report
+    from investment_assistant.investment.report_markdown import render_investment_report_markdown
+
+    report = body.get("report")
+    if not isinstance(report, dict):
+        report_id = str(body.get("id") or body.get("report_id") or "").strip()
+        if not report_id:
+            raise ApiError("report or report history id is required")
+        entry = load_investment_report(report_id, history_dir=_optional_history_dir(body))
+        loaded_report = entry.get("report")
+        if not isinstance(loaded_report, dict):
+            raise ApiError("saved report is invalid")
+        report = loaded_report
+    return {
+        "markdown": render_investment_report_markdown(report),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:
@@ -735,6 +806,14 @@ def _dividend_per_unit_for_target(holding: Any, quantity: float) -> float | None
     if distribution_per_unit is not None:
         return max(distribution_per_unit, 0.0)
     return None
+
+
+def _optional_history_dir(body: JsonDict) -> str | None:
+    raw = body.get("history_dir")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
 
 
 # --- helpers ---------------------------------------------------------------
@@ -1141,6 +1220,12 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/investment/detail"): _investment_detail,
     ("POST", "/api/candidates/screen"): _candidates_screen,
     ("POST", "/api/reports/investment-monthly"): _investment_monthly_report,
+    ("POST", "/api/reports/investment-monthly/markdown"): _investment_report_markdown,
+    ("GET", "/api/reports/investment-monthly/history"): _investment_report_history,
+    ("POST", "/api/reports/investment-monthly/history"): _investment_report_history,
+    ("POST", "/api/reports/investment-monthly/history/load"): _investment_report_history_load,
+    ("POST", "/api/reports/investment-monthly/history/delete"): _investment_report_history_delete,
+    ("POST", "/api/reports/investment-monthly/history/compare"): _investment_report_history_compare,
     ("POST", "/api/financials/compare"): _financials_compare,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),

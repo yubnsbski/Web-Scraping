@@ -815,9 +815,15 @@ textarea { min-height: 140px; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .form,
   .compact-form { grid-template-columns: 1fr; gap: 12px; }
+  .report-history-head,
+  .history-item { grid-template-columns: 1fr; }
+  .report-history-head { display: grid; }
+  .history-item dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-actions { display: grid; justify-content: stretch; }
   /* Full-width action buttons inside forms (not the scrollable tabs) */
   .form button,
   .compact-form button,
+  .history-item button,
   .tool-section > button,
   button.primary { width: 100%; }
   .diff-list { grid-template-columns: 1fr; }
@@ -853,6 +859,94 @@ textarea { min-height: 140px; }
 .subpanel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .subpanel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .subpanel > h3 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 800; color: var(--text); }
+
+.report-history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-history-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.history-item {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(260px, 2fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(142, 161, 189, 0.22);
+  border-radius: 12px;
+  background: rgba(11, 18, 32, 0.58);
+}
+
+.history-item b,
+.history-item span {
+  display: block;
+}
+
+.history-item span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.history-item dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.history-item dt,
+.history-item dd {
+  margin: 0;
+}
+
+.history-item dt {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.history-item dd {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.markdown-output {
+  min-height: 260px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.report-diff {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.report-diff table {
+  min-width: 640px;
+}
 
 .kpi-details {
   position: relative;

@@ -1152,6 +1152,13 @@ function InvestmentReportTab() {
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
   const [targetDividend, setTargetDividend] = useState(60000);
   const state = useAsync<Json>();
+  const historyState = useAsync<Json>();
+  const markdownState = useAsync<Json>();
+  const compareState = useAsync<Json>();
+
+  useEffect(() => {
+    void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
+  }, []);
 
   const generate = () =>
     state.run(async () => {
@@ -1163,7 +1170,7 @@ function InvestmentReportTab() {
         funds_csv_text: fundsCsv,
         financials_csv: SAMPLE_FINANCIALS_PATH,
       });
-      return api<Json>("/api/reports/investment-monthly", {
+      const report = await api<Json>("/api/reports/investment-monthly", {
         csv_text: holdingsCsv,
         financials_csv: SAMPLE_FINANCIALS_PATH,
         candidates: candidates.results ?? [],
@@ -1175,7 +1182,45 @@ function InvestmentReportTab() {
         optimization: "balanced",
         dividend_basis: "conservative",
       });
+      void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
+      return report;
     });
+  const refreshHistory = () =>
+    historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
+  const loadSavedReport = (id: string) =>
+    state.run(async () => {
+      const entry = await api<Json>("/api/reports/investment-monthly/history/load", { id });
+      return (entry.report as Json) ?? {};
+    });
+  const showCurrentMarkdown = () => {
+    if (!state.data) return;
+    markdownState.run(() =>
+      api<Json>("/api/reports/investment-monthly/markdown", { report: state.data }),
+    );
+  };
+  const showSavedMarkdown = (id: string) =>
+    markdownState.run(() => api<Json>("/api/reports/investment-monthly/markdown", { id }));
+  const compareLatestReports = () => {
+    if (reports.length < 2) return;
+    compareState.run(() =>
+      api<Json>("/api/reports/investment-monthly/history/compare", {
+        base_id: reports[1].id,
+        compare_id: reports[0].id,
+      }),
+    );
+  };
+  const deleteSavedReport = (id: string) => {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("保存済みレポートを削除しますか？")
+    ) {
+      return;
+    }
+    historyState.run(async () => {
+      await api<Json>("/api/reports/investment-monthly/history/delete", { id });
+      return api<Json>("/api/reports/investment-monthly/history");
+    });
+  };
   const loadReportSamples = () => {
     setHoldingsCsv(SAMPLE_HOLDINGS_CSV);
     setFundsCsv(SAMPLE_FUNDS_CSV);
@@ -1185,6 +1230,13 @@ function InvestmentReportTab() {
   const kpis: Json[] = Array.isArray(state.data?.kpis) ? state.data.kpis : [];
   const sections: Json[] = Array.isArray(state.data?.sections) ? state.data.sections : [];
   const evidence: Json[] = Array.isArray(state.data?.evidence) ? state.data.evidence : [];
+  const reports: Json[] = Array.isArray(historyState.data?.reports)
+    ? historyState.data.reports
+    : [];
+  const markdownText = String(markdownState.data?.markdown ?? "");
+  const comparedMetrics: Json[] = Array.isArray(compareState.data?.metrics)
+    ? compareState.data.metrics
+    : [];
 
   return (
     <section className="tool-section">
@@ -1219,6 +1271,119 @@ function InvestmentReportTab() {
         </button>
       </div>
       <Status loading={state.loading} error={state.error} />
+
+      <div className="subpanel report-history">
+        <div className="report-history-head">
+          <div>
+            <h3>保存済みレポート</h3>
+            <p className="hint">生成済みの投資月次レポートを最新順に再表示します。</p>
+          </div>
+          <button onClick={refreshHistory} disabled={historyState.loading}>
+            履歴を更新
+          </button>
+        </div>
+        <Status loading={historyState.loading} error={historyState.error} />
+        {reports.length >= 2 && (
+          <div className="form">
+            <button onClick={compareLatestReports} disabled={compareState.loading}>
+              Compare latest reports
+            </button>
+          </div>
+        )}
+        <Status loading={compareState.loading} error={compareState.error} />
+        {comparedMetrics.length > 0 && (
+          <div className="report-diff">
+            <table>
+              <thead>
+                <tr>
+                  <th>KPI</th>
+                  <th>Base</th>
+                  <th>Compare</th>
+                  <th>Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {comparedMetrics.map((metric) => (
+                  <tr key={String(metric.metric_key)}>
+                    <td>{String(metric.label ?? metric.metric_key)}</td>
+                    <td>{formatHistoryValue(metric.base_value, metric.value_format)}</td>
+                    <td>{formatHistoryValue(metric.compare_value, metric.value_format)}</td>
+                    <td>{formatHistoryDelta(metric)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {reports.length === 0 ? (
+          <p className="hint">まだ保存済みレポートはありません。</p>
+        ) : (
+          <div className="history-list">
+            {reports.map((item) => (
+              <article className="history-item" key={String(item.id)}>
+                <div>
+                  <b>{String(item.title ?? "Investment monthly report")}</b>
+                  <span>{formatDateTime(item.saved_at)}</span>
+                </div>
+                <dl>
+                  <div>
+                    <dt>評価額</dt>
+                    <dd>{yen(item.market_value)}</dd>
+                  </div>
+                  <div>
+                    <dt>年額見込み</dt>
+                    <dd>{yen(item.annual_income_estimate)}</dd>
+                  </div>
+                  <div>
+                    <dt>目標必要予算</dt>
+                    <dd>
+                      {item.target_required_budget == null
+                        ? "-"
+                        : yen(item.target_required_budget)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>根拠</dt>
+                    <dd>{Number(item.evidence_count ?? 0).toLocaleString()}件</dd>
+                  </div>
+                </dl>
+                <div className="history-actions">
+                  <button onClick={() => loadSavedReport(String(item.id))} disabled={state.loading}>
+                    再表示
+                  </button>
+                  <button
+                    onClick={() => showSavedMarkdown(String(item.id))}
+                    disabled={markdownState.loading}
+                  >
+                    Markdown
+                  </button>
+                  <button
+                    onClick={() => deleteSavedReport(String(item.id))}
+                    disabled={historyState.loading}
+                  >
+                    削除
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {state.data && (
+        <div className="form">
+          <button onClick={showCurrentMarkdown} disabled={markdownState.loading}>
+            Markdownを表示
+          </button>
+        </div>
+      )}
+      <Status loading={markdownState.loading} error={markdownState.error} />
+      {markdownText && (
+        <div className="subpanel">
+          <h3>Markdown</h3>
+          <textarea className="markdown-output" rows={12} readOnly value={markdownText} />
+        </div>
+      )}
 
       {kpis.length > 0 && (
         <section className="metric-grid">
@@ -2606,6 +2771,43 @@ function AnalysisTab() {
 
 function yen(value: unknown): string {
   return `${Math.round(Number(value) || 0).toLocaleString()}円`;
+}
+
+function formatDateTime(value: unknown): string {
+  const date = new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatHistoryValue(value: unknown, valueFormat: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const format = String(valueFormat ?? "");
+  if (format === "text") return String(value);
+  if (format === "percent") {
+    return `${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  }
+  if (format === "yen") return yen(value);
+  if (typeof value === "number") {
+    return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  return String(value);
+}
+
+function formatHistoryDelta(metric: Json): string {
+  const delta = metric.delta;
+  if (delta === null || delta === undefined) {
+    return metric.changed ? "changed" : "-";
+  }
+  const value = formatHistoryValue(delta, metric.value_format);
+  const pct = metric.delta_pct;
+  if (pct === null || pct === undefined) return value;
+  return `${value} (${Number(pct).toLocaleString(undefined, { maximumFractionDigits: 2 })}%)`;
 }
 
 function formatKpiValue(kpi: Json): string {

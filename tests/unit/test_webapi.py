@@ -426,11 +426,15 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
             "candidates": candidates["results"],
             "target_annual_dividend": 10_000,
             "optimization": "balanced",
+            "history_dir": str(tmp_path / "report_history"),
         },
     )
     assert status == 200
     assert report["kpis"]
     assert report["evidence"]
+    history_summary = report["history"]
+    assert history_summary["id"]
+    assert history_summary["market_value"] == 670000.0
     metric_keys = {
         str(item.get("metric_key"))
         for item in report["kpis"]  # type: ignore[index]
@@ -445,6 +449,92 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     }
     assert "portfolio.target.required_budget" in evidence_keys
     assert "portfolio.concentration.current" in evidence_keys
+
+    status, history = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history",
+        {"history_dir": str(tmp_path / "report_history")},
+    )
+    assert status == 200
+    assert history["count"] == 1
+    assert history["reports"][0]["id"] == history_summary["id"]
+    assert history["reports"][0]["target_required_budget"] is not None
+
+    status, saved = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history/load",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert saved["summary"]["id"] == history_summary["id"]
+    assert saved["report"]["kpis"]
+    assert saved["report"]["evidence"]
+    assert "csv_text" not in saved["report"]
+
+    status, markdown = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/markdown",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert markdown["auto_trading"] is False
+    assert "## KPIs" in markdown["markdown"]
+    assert "market_value" in markdown["markdown"]
+    assert "portfolio.concentration.current" in markdown["markdown"]
+    assert "## Disclaimer" in markdown["markdown"]
+
+    higher_price_csv = holdings_csv.replace("user_csv,1200,,", "user_csv,1300,,")
+    status, newer_report = handle_api(
+        "POST",
+        "/api/reports/investment-monthly",
+        {
+            "csv_text": higher_price_csv,
+            "financials_csv": str(financials),
+            "candidates": candidates["results"],
+            "target_annual_dividend": 10_000,
+            "optimization": "balanced",
+            "history_dir": str(tmp_path / "report_history"),
+        },
+    )
+    assert status == 200
+    newer_summary = newer_report["history"]
+    assert newer_summary["id"] != history_summary["id"]
+
+    status, comparison = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history/compare",
+        {
+            "history_dir": str(tmp_path / "report_history"),
+            "base_id": history_summary["id"],
+            "compare_id": newer_summary["id"],
+        },
+    )
+    assert status == 200
+    assert comparison["auto_trading"] is False
+    deltas = {
+        item["metric_key"]: item
+        for item in comparison["metrics"]
+        if isinstance(item, dict)
+    }
+    assert deltas["market_value"]["delta"] == 10000.0
+    assert deltas["annual_income_estimate"]["delta"] == 0.0
+    assert comparison["evidence"]["compare_count"] >= comparison["evidence"]["base_count"]
+
+    status, deleted = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history/delete",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert deleted["deleted"] is True
+
+    status, history = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history",
+        {"history_dir": str(tmp_path / "report_history")},
+    )
+    assert status == 200
+    assert history["count"] == 1
 
 
 def test_market_prices_reject_uncontracted_provider_in_production() -> None:
