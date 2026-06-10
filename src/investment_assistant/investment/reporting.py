@@ -242,6 +242,27 @@ def build_investment_monthly_report(
                 ),
             }
         )
+    income_quality = _mapping(summary.get("income_quality"))
+    income_alert_count = income_quality.get("alert_count") if income_quality is not None else 0
+    if (
+        income_quality is not None
+        and isinstance(income_alert_count, int | float)
+        and income_alert_count > 0
+    ):
+        sections.append(
+            {
+                "key": "income_quality",
+                "title": "Income quality",
+                "body": (
+                    f"Status {income_quality.get('status')}; "
+                    f"alerts {income_alert_count}; "
+                    f"missing income {income_quality.get('missing_income_count')}; "
+                    f"high yield {income_quality.get('high_yield_count')}; "
+                    f"negative input {income_quality.get('negative_input_count')}. "
+                    "These are data review prompts, not trading recommendations."
+                ),
+            }
+        )
     if target is not None:
         reachability = "到達可能" if target.get("reachable") is True else "要条件見直し"
         sections.append(

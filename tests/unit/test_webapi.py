@@ -385,6 +385,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert analysis["summary"]["nisa"]["status"] == "ok"
     assert analysis["summary"]["nisa"]["alerts"] == []
     assert analysis["summary"]["data_quality"]["missing_timestamp_count"] == 2
+    assert analysis["summary"]["income_quality"]["status"] == "ok"
+    assert analysis["summary"]["income_quality"]["alerts"] == []
 
     status, production_analysis = handle_api(
         "POST",
