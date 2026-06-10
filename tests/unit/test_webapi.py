@@ -331,6 +331,24 @@ def test_available_routes_includes_portfolio_endpoints() -> None:
     routes = available_routes()
     assert "POST /api/portfolio/dividends" in routes
     assert "POST /api/portfolio/performance" in routes
+    assert "POST /api/portfolio/target" in routes
+
+
+def test_portfolio_target_reverse_calc_endpoint() -> None:
+    status, body = handle_api(
+        "POST",
+        "/api/portfolio/target",
+        {
+            "target_annual_dividend": 20000,
+            "dividend_basis": "latest",
+            "financials_csv": "/nonexistent/financials.csv",
+            "holdings": [{"ticker": "A", "price": 1000, "dividend_per_share": 40}],
+        },
+    )
+    assert status == 200
+    assert body["available"] is True
+    assert body["target"]["required_budget"] == 500000
+    assert body["target"]["reachable"] is True
 
 
 def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) -> None:

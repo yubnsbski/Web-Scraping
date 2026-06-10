@@ -2615,6 +2615,7 @@ function SimulateTab() {
   const [reinvest, setReinvest] = useState(true);
   const [weightMode, setWeightMode] = useState("equal");
   const [optimizeMode, setOptimizeMode] = useState("none");
+  const [targetDividend, setTargetDividend] = useState(0);
   const [universe, setUniverse] = useState<Json[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pick, setPick] = useState("");
@@ -2671,7 +2672,23 @@ function SimulateTab() {
       }),
     );
 
+  const planTarget = () =>
+    run(() =>
+      api<Json>("/api/portfolio/target", {
+        target_annual_dividend: targetDividend,
+        years,
+        growth_rate: growth / 100,
+        reinvest,
+        auto_weight: weightMode,
+        optimization: optimizeMode,
+        dividend_basis: "conservative",
+        holdings: holdings.map((h) => ({ ticker: h.ticker, price: h.price, shares: h.shares, amount: h.amount })),
+      }),
+    );
+
   const summary: Json = data?.summary ?? {};
+  const target: Json | null = (data?.target as Json) ?? null;
+  const concentration: Json = (summary.concentration as Json) ?? {};
   const allocations: Json[] = data?.allocations ?? [];
   const projection: Json = data?.projection ?? {};
   const showShares = weightMode === "shares";
@@ -2787,11 +2804,35 @@ function SimulateTab() {
         </table>
       )}
 
-      <button className="primary" onClick={simulate} disabled={loading || holdings.length === 0}>
-        ポートフォリオを作成
-      </button>
+      <div className="form">
+        <button className="primary" onClick={simulate} disabled={loading || holdings.length === 0}>
+          予算から作成
+        </button>
+        <Field label="目標 年間配当(円)">
+          <input
+            type="number"
+            value={targetDividend}
+            onChange={(e) => setTargetDividend(Number(e.target.value))}
+            placeholder="例: 600000"
+          />
+        </Field>
+        <button
+          onClick={planTarget}
+          disabled={loading || holdings.length === 0 || targetDividend <= 0}
+          title="目標の年間配当に必要な予算とポートフォリオを逆算します"
+        >
+          目標から逆算
+        </button>
+      </div>
 
       <Status loading={loading} error={error} />
+      {data && target && (
+        <p className={`status ${target.reachable ? "" : "warn-text"}`}>
+          {target.reachable
+            ? `目標 ${yen(target.target_annual_dividend)}/年 → 必要予算 約${yen(target.required_budget)}（達成見込み ${yen(target.achieved_annual_dividend)}/年・安全側）`
+            : String(data.hint ?? "目標に到達できませんでした。")}
+        </p>
+      )}
       {busy && <p className="status">市場価格を取得中…</p>}
       {data && data.available === false && <p className="status">{String(data.hint)}</p>}
 
@@ -2817,6 +2858,14 @@ function SimulateTab() {
               <span>配当レンジ(ボリンジャー)</span>
               <b>{yen(summary.annual_band_lower)}</b>
               <small>〜 {yen(summary.annual_band_upper)}</small>
+            </article>
+            <article className={`metric-card ${Number(concentration.top_weight) >= 0.5 ? "warn" : "accent"}`}>
+              <span>集中度（最大銘柄）</span>
+              <b>{(Number(concentration.top_weight) * 100).toFixed(0)}%</b>
+              <small>
+                {String(concentration.top_ticker ?? "—")}・実効{Number(concentration.effective_names).toFixed(1)}銘柄
+                {Number(concentration.top_weight) >= 0.5 ? "・偏り大" : ""}
+              </small>
             </article>
           </section>
 

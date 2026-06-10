@@ -9,6 +9,7 @@ from investment_assistant.portfolio.simulator import (
     build_universe,
     dividend_band,
     estimate_safety,
+    plan_for_target_dividend,
     simulate_portfolio,
 )
 
@@ -173,6 +174,73 @@ def test_optimize_ignored_for_fixed_share_modes() -> None:
         financials_csv=_NO_CSV,
     )
     assert out["allocations"][0]["shares"] == 300  # type: ignore[index]
+
+
+def test_target_dividend_reverse_calc_reaches_goal() -> None:
+    # 40 yen/share annual, 100-share lots -> 4,000 yen per lot. Target 20,000 needs
+    # 5 lots = 500 shares = 500,000 yen budget.
+    out = plan_for_target_dividend(
+        target_annual_dividend=20_000,
+        holdings=[{"ticker": "A", "price": 1000, "dividend_per_share": 40}],
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+    )
+    assert out["available"] is True
+    target = out["target"]
+    assert target["reachable"] is True  # type: ignore[index]
+    assert target["achieved_annual_dividend"] >= 20_000  # type: ignore[index]
+    assert target["required_budget"] == 500_000  # type: ignore[index]
+    assert out["allocations"][0]["shares"] == 500  # type: ignore[index]
+    assert out["summary"]["cash_left"] == 0  # type: ignore[index]
+
+
+def test_target_dividend_unreachable_without_dividend_data() -> None:
+    out = plan_for_target_dividend(
+        target_annual_dividend=10_000,
+        holdings=[{"ticker": "A", "price": 1000}],  # no dps, no series
+        financials_csv=_NO_CSV,
+    )
+    assert out["target"]["reachable"] is False  # type: ignore[index]
+    assert "hint" in out
+
+
+def test_target_dividend_min_budget_prefers_best_yield() -> None:
+    # Both reach the target; dividend_max should pick the cheaper-per-yen name B
+    # and therefore need a smaller budget than the diversified round-robin.
+    holdings = [
+        {"ticker": "A", "price": 2000, "dividend_per_share": 40},  # 2% yield
+        {"ticker": "B", "price": 1000, "dividend_per_share": 40},  # 4% yield
+    ]
+    optimized = plan_for_target_dividend(
+        target_annual_dividend=40_000,
+        holdings=holdings,
+        optimization="dividend_max",
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+    )
+    spread = plan_for_target_dividend(
+        target_annual_dividend=40_000,
+        holdings=holdings,
+        optimization="none",
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+    )
+    assert optimized["target"]["required_budget"] < spread["target"]["required_budget"]  # type: ignore[index]
+
+
+def test_summary_reports_concentration() -> None:
+    out = simulate_portfolio(
+        budget=1_000_000,
+        holdings=[
+            {"ticker": "A", "price": 1000, "dividend_per_share": 40},
+            {"ticker": "B", "price": 1000, "dividend_per_share": 40},
+        ],
+        auto_weight="equal",
+        financials_csv=_NO_CSV,
+    )
+    conc = out["summary"]["concentration"]  # type: ignore[index]
+    assert 0.0 < conc["top_weight"] <= 1.0  # type: ignore[index]
+    assert conc["effective_names"] > 1.0  # two names -> behaves like ~2  # type: ignore[index]
 
 
 def test_no_valid_holdings_returns_unavailable() -> None:

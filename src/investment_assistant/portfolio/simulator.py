@@ -178,11 +178,159 @@ def simulate_portfolio(
     shares_list = _resolve_shares(prepared, weights, budget, mode, optimize, basis)
     allocations = _allocate(prepared, weights, shares_list, basis)
 
+    return _build_result(
+        allocations,
+        budget=budget,
+        years=years,
+        growth_rate=float(growth_rate),
+        reinvest=reinvest,
+        mode=mode,
+        optimize=optimize,
+        basis=basis,
+    )
+
+
+def plan_for_target_dividend(
+    *,
+    target_annual_dividend: float,
+    holdings: list[dict[str, object]],
+    years: int = 10,
+    reinvest: bool = True,
+    growth_rate: float = 0.0,
+    auto_weight: str = "equal",
+    optimization: str = "none",
+    dividend_basis: str = "conservative",
+    financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    lot_default: int = 100,
+) -> dict[str, object]:
+    """Reverse the simulator: find the budget that yields a target annual income.
+
+    Buys whole lots until the (conservative by default) annual dividend reaches
+    ``target_annual_dividend`` and reports the required budget. ``optimization``
+    of ``dividend_max`` / ``balanced`` reaches the target with the *least* budget
+    (best dividend-per-yen first); otherwise lots are spread round-robin across
+    the holdings for diversification.
+    """
+
+    target = max(0.0, float(target_annual_dividend))
+    years = max(1, min(int(years), 50))
+    mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
+    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
+    basis = "latest" if dividend_basis == "latest" else "conservative"
+    by_ticker = _index_companies(load_comparison(financials_csv))
+
+    prepared = [_prepare_holding(h, by_ticker, lot_default) for h in holdings]
+    prepared = [h for h in prepared if h.price > 0]
+    if not prepared:
+        return {
+            "available": False,
+            "hint": "有効な銘柄（ticker と price>0）を1件以上入力してください。",
+            "disclaimer": DISCLAIMER,
+        }
+
+    shares_list, reachable = _target_shares(prepared, target, optimize, basis)
+    invested = sum(shares * h.price for shares, h in zip(shares_list, prepared, strict=True))
+    # Display weights reflect the realised allocation by invested amount.
+    weights = [
+        (shares * h.price / invested) if invested > 0 else 0.0
+        for shares, h in zip(shares_list, prepared, strict=True)
+    ]
+    allocations = _allocate(prepared, weights, shares_list, basis)
+
+    result = _build_result(
+        allocations,
+        budget=invested,  # required budget == invested (no leftover cash)
+        years=years,
+        growth_rate=float(growth_rate),
+        reinvest=reinvest,
+        mode=mode,
+        optimize=optimize,
+        basis=basis,
+    )
+    achieved = sum(_num(a["annual_dividend"]) for a in allocations)
+    result["target"] = {
+        "target_annual_dividend": round(target),
+        "achieved_annual_dividend": round(achieved),
+        "required_budget": round(invested),
+        "reachable": reachable,
+    }
+    if not reachable:
+        result["hint"] = (
+            "選択銘柄の保守的配当では目標に到達できません（配当データ不足の可能性）。"
+            "銘柄を増やすか、目標額を下げてください。"
+        )
+    return result
+
+
+def _target_shares(
+    prepared: list[_Prepared], target: float, optimize: str, basis: str
+) -> tuple[list[int], bool]:
+    """Greedily buy lots until conservative annual dividend reaches ``target``."""
+
+    shares = [0 for _ in prepared]
+    if target <= 0:
+        return shares, True
+    lot_dividend = [
+        h.lot * (h.dps_conservative if basis == "conservative" else h.dps_latest)
+        for h in prepared
+    ]
+    eligible = [i for i, div in enumerate(lot_dividend) if div > 0 and prepared[i].price > 0]
+    if not eligible:
+        return shares, False
+
+    smallest = min(lot_dividend[i] for i in eligible)
+    cap = min(int(target / smallest) + len(prepared) + 1, 500_000)
+    achieved = 0.0
+    rotation = 0
+    for _ in range(cap):
+        if achieved >= target:
+            break
+        if optimize in ("dividend_max", "balanced"):
+            pick = max(eligible, key=lambda i: (_lot_score(prepared[i], optimize, basis)))
+        else:
+            pick = eligible[rotation % len(eligible)]
+            rotation += 1
+        shares[pick] += prepared[pick].lot
+        achieved += lot_dividend[pick]
+    return shares, achieved >= target
+
+
+def _concentration(allocations: list[dict[str, object]]) -> dict[str, object]:
+    """Mechanical concentration metrics over invested amounts (non-advisory)."""
+
+    invested = [_num(a["invested"]) for a in allocations]
+    total = sum(invested)
+    if total <= 0:
+        return {"top_weight": 0.0, "top_ticker": None, "hhi": 0.0, "effective_names": 0.0}
+    weights = [value / total for value in invested]
+    top_index = max(range(len(weights)), key=lambda i: weights[i])
+    hhi = sum(weight**2 for weight in weights)
+    return {
+        "top_weight": round(weights[top_index], 4),
+        "top_ticker": allocations[top_index].get("ticker"),
+        "hhi": round(hhi, 4),
+        # Inverse-HHI ≈ number of equally-weighted names the mix behaves like.
+        "effective_names": round(1.0 / hhi, 2) if hhi > 0 else 0.0,
+    }
+
+
+def _build_result(
+    allocations: list[dict[str, object]],
+    *,
+    budget: float,
+    years: int,
+    growth_rate: float,
+    reinvest: bool,
+    mode: str,
+    optimize: str,
+    basis: str,
+) -> dict[str, object]:
     invested = sum(_num(a["invested"]) for a in allocations)
     annual = sum(_num(a["annual_dividend"]) for a in allocations)
     annual_latest = sum(_num(a["annual_dividend_latest"]) for a in allocations)
     band_lower = sum(_num(a["annual_band_lower"]) for a in allocations)
     band_upper = sum(_num(a["annual_band_upper"]) for a in allocations)
+    concentration = _concentration(allocations)
 
     summary: dict[str, object] = {
         "budget": round(budget),
@@ -197,6 +345,7 @@ def simulate_portfolio(
         "holdings": len(allocations),
         "dividend_basis": basis,
         "optimization": optimize,
+        "concentration": concentration,
     }
     return {
         "available": True,
