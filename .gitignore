@@ -8,6 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.venv*/
 venv/
 
 # Secrets
@@ -34,6 +35,10 @@ local_data/
 # Local job definitions
 local_jobs/
 local_reports/
+.tmp_pytest/
+# Local legacy backend scratch; the supported API lives under src/investment_assistant/webapi.
+backend/
+*.log
 
 # Frontend build artifacts
 web/node_modules/
