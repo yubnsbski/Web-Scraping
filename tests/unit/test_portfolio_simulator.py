@@ -107,6 +107,74 @@ def test_build_universe_sorts_by_safety(tmp_path: Path) -> None:
     assert row["yield_latest"] is not None
 
 
+def test_optimize_cash_min_minimises_leftover() -> None:
+    # Budget 1,200,000 with lots of 700,000 and 600,000: weight-floor would buy
+    # one 700k lot (cash 500k), but cash_min buys two 600k lots (cash 0).
+    out = simulate_portfolio(
+        budget=1_200_000,
+        holdings=[
+            {"ticker": "A", "price": 7000, "dividend_per_share": 100},
+            {"ticker": "B", "price": 6000, "dividend_per_share": 100},
+        ],
+        optimization="cash_min",
+        financials_csv=_NO_CSV,
+    )
+    assert out["optimization"] == "cash_min"
+    assert out["summary"]["cash_left"] == 0  # type: ignore[index]
+    allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
+    assert allocs["B"]["shares"] == 200 and allocs["A"]["shares"] == 0
+
+
+def test_optimize_dividend_max_picks_best_yield() -> None:
+    # Same price; B pays more -> dividend_max should concentrate on B.
+    out = simulate_portfolio(
+        budget=1_000_000,
+        holdings=[
+            {"ticker": "A", "price": 1000, "dividend_per_share": 10},
+            {"ticker": "B", "price": 1000, "dividend_per_share": 60},
+        ],
+        optimization="dividend_max",
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+    )
+    allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
+    assert allocs["B"]["shares"] == 1000 and allocs["A"]["shares"] == 0
+    assert out["summary"]["annual_dividend"] == 1000 * 60  # type: ignore[index]
+
+
+def test_optimize_balanced_weights_dividend_by_safety(tmp_path: Path) -> None:
+    # A has a slightly better raw yield but a dividend cut; B is safe and steady.
+    # balanced (yield × safety) should prefer the safer B.
+    csv = _csv(
+        tmp_path,
+        "A,Aco,2023,1000,60,80,安定\nA,Aco,2024,1000,60,40,安定\n"  # cut -> low safety
+        "B,Bco,2023,1000,60,50,安定\nB,Bco,2024,1000,60,55,安定\n",  # steady -> safe
+    )
+    out = simulate_portfolio(
+        budget=1_000_000,
+        holdings=[
+            {"ticker": "A", "price": 1000},
+            {"ticker": "B", "price": 1000},
+        ],
+        optimization="balanced",
+        dividend_basis="latest",
+        financials_csv=str(csv),
+    )
+    allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
+    assert allocs["B"]["shares"] > allocs["A"]["shares"]
+
+
+def test_optimize_ignored_for_fixed_share_modes() -> None:
+    out = simulate_portfolio(
+        budget=0,
+        holdings=[{"ticker": "A", "price": 1000, "dividend_per_share": 40, "shares": 300}],
+        auto_weight="shares",
+        optimization="dividend_max",  # must not override fixed shares
+        financials_csv=_NO_CSV,
+    )
+    assert out["allocations"][0]["shares"] == 300  # type: ignore[index]
+
+
 def test_no_valid_holdings_returns_unavailable() -> None:
     out = simulate_portfolio(
         budget=1000, holdings=[{"ticker": "X", "price": 0}], financials_csv=_NO_CSV

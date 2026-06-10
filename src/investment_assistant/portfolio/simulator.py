@@ -28,7 +28,13 @@ DISCLAIMER = (
 )
 
 _AUTO_WEIGHT_MODES = ("equal", "safety", "amount", "shares")
+_OPTIMIZATION_MODES = ("none", "cash_min", "dividend_max", "balanced")
 _BAND_K = 2.0
+
+# Cap on the cash_min knapsack table (cells = reduced_budget × holdings) so an
+# adversarial budget can never make the exact fill blow up; above it we fall back
+# to a greedy fill.
+_KNAPSACK_CELL_CAP = 4_000_000
 
 _TREND_HAIRCUT: dict[str, float] = {
     "increasing": 0.0,
@@ -136,15 +142,26 @@ def simulate_portfolio(
     reinvest: bool = True,
     growth_rate: float = 0.0,
     auto_weight: str = "equal",
+    optimization: str = "none",
     dividend_basis: str = "conservative",
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
     lot_default: int = 100,
 ) -> dict[str, object]:
-    """Build a portfolio and project dividend income (conservative by default)."""
+    """Build a portfolio and project dividend income (conservative by default).
+
+    ``optimization`` chooses how a *budget* is turned into integer lots when the
+    weighting is not per-holding fixed (``amount`` / ``shares``):
+
+    - ``none`` – split the budget by ``auto_weight`` and floor each to lots.
+    - ``cash_min`` – minimise leftover cash (knapsack fill of the budget).
+    - ``dividend_max`` – maximise annual dividend (buy best dividend-per-yen lots).
+    - ``balanced`` – maximise dividend-per-yen weighted by each name's safety.
+    """
 
     budget = max(0.0, float(budget))
     years = max(1, min(int(years), 50))
     mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
+    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
     basis = "latest" if dividend_basis == "latest" else "conservative"
     by_ticker = _index_companies(load_comparison(financials_csv))
 
@@ -158,7 +175,8 @@ def simulate_portfolio(
         }
 
     weights = _resolve_weights(prepared, mode)
-    allocations = _allocate(prepared, weights, budget, mode, basis)
+    shares_list = _resolve_shares(prepared, weights, budget, mode, optimize, basis)
+    allocations = _allocate(prepared, weights, shares_list, basis)
 
     invested = sum(_num(a["invested"]) for a in allocations)
     annual = sum(_num(a["annual_dividend"]) for a in allocations)
@@ -178,10 +196,12 @@ def simulate_portfolio(
         "portfolio_yield_latest": round(annual_latest / invested, 4) if invested > 0 else 0.0,
         "holdings": len(allocations),
         "dividend_basis": basis,
+        "optimization": optimize,
     }
     return {
         "available": True,
         "weight_mode": mode,
+        "optimization": optimize,
         "allocations": allocations,
         "summary": summary,
         "projection": _project(
@@ -255,25 +275,136 @@ def _resolve_weights(prepared: list[_Prepared], mode: str) -> list[float]:
     return [value / total for value in raw]
 
 
-def _allocate(
+def _resolve_shares(
     prepared: list[_Prepared],
     weights: list[float],
     budget: float,
     mode: str,
+    optimize: str,
+    basis: str,
+) -> list[int]:
+    """Compute integer share counts per holding for the chosen strategy."""
+
+    if mode == "shares":
+        return [max(0, round(h.shares_fixed / h.lot)) * h.lot if h.lot else 0 for h in prepared]
+    if mode == "amount":
+        return [
+            (math.floor(h.amount_fixed / (h.price * h.lot)) if h.price * h.lot > 0 else 0) * h.lot
+            for h in prepared
+        ]
+    if optimize != "none":
+        return _optimize_shares(prepared, budget, optimize, basis)
+    # Default: split the budget by weight and floor each holding to whole lots.
+    shares: list[int] = []
+    for holding, weight in zip(prepared, weights, strict=True):
+        lot_cost = holding.price * holding.lot
+        lots = math.floor((budget * weight) / lot_cost) if lot_cost > 0 else 0
+        shares.append(lots * holding.lot)
+    return shares
+
+
+def _lot_score(holding: _Prepared, optimize: str, basis: str) -> float:
+    """Per-yen desirability of one lot under dividend_max / balanced."""
+
+    lot_cost = holding.price * holding.lot
+    if lot_cost <= 0:
+        return 0.0
+    dps = holding.dps_conservative if basis == "conservative" else holding.dps_latest
+    per_yen = (holding.lot * dps) / lot_cost
+    if optimize == "balanced":
+        return per_yen * max(holding.safety, 0.0)
+    return per_yen  # dividend_max
+
+
+def _optimize_shares(
+    prepared: list[_Prepared], budget: float, optimize: str, basis: str
+) -> list[int]:
+    lot_costs = [h.price * h.lot for h in prepared]
+    if optimize == "cash_min":
+        return _cash_min_shares(prepared, lot_costs, budget)
+    # dividend_max / balanced: greedily buy the best-scoring affordable lot.
+    shares = [0 for _ in prepared]
+    remaining = budget
+    scores = [_lot_score(h, optimize, basis) for h in prepared]
+    while True:
+        affordable = [
+            i for i, cost in enumerate(lot_costs) if 0 < cost <= remaining and scores[i] > 0
+        ]
+        if not affordable:
+            break
+        pick = max(affordable, key=lambda i: (scores[i], -lot_costs[i]))
+        shares[pick] += prepared[pick].lot
+        remaining -= lot_costs[pick]
+    return shares
+
+
+def _cash_min_shares(
+    prepared: list[_Prepared], lot_costs: list[float], budget: float
+) -> list[int]:
+    """Minimise leftover cash via an unbounded knapsack over lot costs.
+
+    Lots cost ``price × lot`` (whole yen here), so the table is reduced by the
+    gcd of the costs and budget before filling; above a cell cap we fall back to a
+    largest-fit-then-fill greedy so an adversarial budget can't blow up runtime.
+    """
+
+    costs = [int(round(c)) for c in lot_costs]
+    budget_int = int(budget)
+    positive = [c for c in costs if c > 0]
+    if not positive or budget_int < min(positive):
+        return [0 for _ in prepared]
+
+    divisor = budget_int
+    for cost in positive:
+        divisor = math.gcd(divisor, cost)
+    divisor = max(divisor, 1)
+    reduced_budget = budget_int // divisor
+    reduced_costs = [c // divisor for c in costs]
+
+    if reduced_budget * len(prepared) > _KNAPSACK_CELL_CAP:
+        return _greedy_fill_shares(prepared, costs, budget_int)
+
+    best = [0] * (reduced_budget + 1)
+    choice = [-1] * (reduced_budget + 1)
+    for cap in range(1, reduced_budget + 1):
+        for i, cost in enumerate(reduced_costs):
+            if 0 < cost <= cap and best[cap - cost] + cost > best[cap]:
+                best[cap] = best[cap - cost] + cost
+                choice[cap] = i
+    shares = [0 for _ in prepared]
+    cap = reduced_budget
+    while cap > 0 and choice[cap] != -1:
+        i = choice[cap]
+        shares[i] += prepared[i].lot
+        cap -= reduced_costs[i]
+    return shares
+
+
+def _greedy_fill_shares(
+    prepared: list[_Prepared], costs: list[int], budget: int
+) -> list[int]:
+    """Fallback cash_min: buy the most expensive lot that still fits, repeat."""
+
+    shares = [0 for _ in prepared]
+    remaining = budget
+    while True:
+        affordable = [i for i, cost in enumerate(costs) if 0 < cost <= remaining]
+        if not affordable:
+            break
+        pick = max(affordable, key=lambda i: costs[i])
+        shares[pick] += prepared[pick].lot
+        remaining -= costs[pick]
+    return shares
+
+
+def _allocate(
+    prepared: list[_Prepared],
+    weights: list[float],
+    shares_list: list[int],
     basis: str,
 ) -> list[dict[str, object]]:
     allocations: list[dict[str, object]] = []
-    for holding, weight in zip(prepared, weights, strict=True):
-        lot_cost = holding.price * holding.lot
-        if mode == "shares":
-            lots = round(holding.shares_fixed / holding.lot) if holding.lot else 0
-            shares = max(0, lots) * holding.lot
-        elif mode == "amount":
-            lots = math.floor(holding.amount_fixed / lot_cost) if lot_cost > 0 else 0
-            shares = lots * holding.lot
-        else:
-            shares = (math.floor((budget * weight) / lot_cost) if lot_cost > 0 else 0) * holding.lot
-
+    for holding, weight, shares in zip(prepared, weights, shares_list, strict=True):
         invested = shares * holding.price
         dps = holding.dps_conservative if basis == "conservative" else holding.dps_latest
         annual = shares * dps

@@ -1742,6 +1742,13 @@ const WEIGHT_MODES: { value: string; label: string }[] = [
   { value: "shares", label: "株数（手動）" },
 ];
 
+const OPTIMIZE_MODES: { value: string; label: string }[] = [
+  { value: "none", label: "なし（重み付けに従う）" },
+  { value: "cash_min", label: "余り最小（予算を使い切る）" },
+  { value: "dividend_max", label: "配当最大（利回り重視）" },
+  { value: "balanced", label: "バランス（配当×安全性）" },
+];
+
 type Holding = { ticker: string; name: string; price: number; shares: number; amount: number };
 
 function MultiLineChart({
@@ -1837,6 +1844,7 @@ function SimulateTab() {
   const [growth, setGrowth] = useState(0);
   const [reinvest, setReinvest] = useState(true);
   const [weightMode, setWeightMode] = useState("equal");
+  const [optimizeMode, setOptimizeMode] = useState("none");
   const [autoCount, setAutoCount] = useState(8);
   const [universe, setUniverse] = useState<Json[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -1911,6 +1919,7 @@ function SimulateTab() {
         growth_rate: growth / 100,
         reinvest,
         auto_weight: weightMode,
+        optimization: optimizeMode,
         dividend_basis: "conservative",
         holdings: holdings.map((h) => ({ ticker: h.ticker, price: h.price, shares: h.shares, amount: h.amount })),
       }),
@@ -1948,6 +1957,19 @@ function SimulateTab() {
         <Field label="重み付け">
           <select value={weightMode} onChange={(e) => setWeightMode(e.target.value)}>
             {WEIGHT_MODES.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="最適化（予算配分）">
+          <select
+            value={optimizeMode}
+            onChange={(e) => setOptimizeMode(e.target.value)}
+            disabled={showShares || showAmount}
+          >
+            {OPTIMIZE_MODES.map((m) => (
               <option key={m.value} value={m.value}>
                 {m.label}
               </option>
