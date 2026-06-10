@@ -154,13 +154,18 @@ const SAMPLE_CSV =
 
 const SAMPLE_HOLDINGS_CSV =
   "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit\n" +
-  "stock,8306,MUFG,100,1000,tokutei,nisa_growth,user_csv,1200,,\n" +
-  "fund,F001,低コスト投信,50,10000,nisa,nisa_tsumitate,user_csv,11000,,30\n";
+  "stock,7203,安定配当ホールディングス,100,1800,tokutei,nisa_growth,examples/investment_holdings_sample.csv,2200,,\n" +
+  "stock,9999,景気連動マテリアル,50,1200,tokutei,taxable,examples/investment_holdings_sample.csv,1000,,\n" +
+  "fund,FND001,低コスト全世界株式,120,10000,nisa,nisa_tsumitate,examples/investment_holdings_sample.csv,12500,,25\n" +
+  "fund,FND002,債券バランス型,80,9000,tokutei,taxable,examples/investment_holdings_sample.csv,9300,,10\n";
 
 const SAMPLE_FUNDS_CSV =
   "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score\n" +
-  "F001,低コスト全世界株式,global_equity,0.12,reinvest,true,user_csv,0.95\n" +
-  "F999,高コストテーマ型,theme,1.20,distribution,false,user_csv,0.40\n";
+  "FND001,低コスト全世界株式,global_equity,0.12,reinvest,true,user_csv,0.95\n" +
+  "FND002,債券バランス型,balanced,0.35,distribution,true,user_csv,0.80\n" +
+  "FND999,高コストテーマ型,theme,1.20,distribution,false,user_csv,0.40\n";
+
+const SAMPLE_FINANCIALS_PATH = "examples/financials_sample.csv";
 
 const SAMPLE_SOURCES = JSON.stringify([presetToSource(SOURCE_PRESETS[0])], null, 2);
 const DISCLOSURE_AUTO_SOURCES = [
@@ -324,6 +329,50 @@ function Status(props: { loading: boolean; error: string | null }) {
   if (props.loading) return <p className="status">実行中…</p>;
   if (props.error) return <p className="status error">エラー: {props.error}</p>;
   return null;
+}
+
+function evidenceForKpi(kpi: Json, evidence: Json[]): Json[] {
+  const keys = Array.isArray(kpi.evidence_keys)
+    ? new Set(kpi.evidence_keys.map((key) => String(key)))
+    : new Set<string>();
+  return evidence.filter((item) => keys.has(String(item.claim_key)));
+}
+
+function KpiEvidenceDetails({ kpi, evidence }: { kpi: Json; evidence: Json[] }) {
+  const rows = evidenceForKpi(kpi, evidence);
+  return (
+    <details className="kpi-details">
+      <summary>計算式・根拠</summary>
+      <dl>
+        <div>
+          <dt>計算式</dt>
+          <dd>{String(kpi.formula ?? "機械集計")}</dd>
+        </div>
+        <div>
+          <dt>最終更新</dt>
+          <dd>{String(kpi.last_updated ?? "-")}</dd>
+        </div>
+        <div>
+          <dt>根拠</dt>
+          <dd>
+            {rows.length > 0 ? (
+              rows.map((row) => (
+                <code key={String(row.claim_key)}>
+                  {String(row.claim_key)} / {String(row.metric_key)} / {String(row.source_ref)}
+                </code>
+              ))
+            ) : (
+              <span>要確認</span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>免責</dt>
+          <dd>{String(kpi.disclaimer ?? "")}</dd>
+        </div>
+      </dl>
+    </details>
+  );
 }
 
 function GuideCards(props: { items: GuideCard[] }) {
@@ -542,7 +591,13 @@ function HoldingsTab() {
   const importHoldings = () =>
     importState.run(() => api<Json>("/api/holdings/import", { csv_text: csv }));
   const analyze = () =>
-    analysisState.run(() => api<Json>("/api/portfolio/analyze", { csv_text: csv }));
+    analysisState.run(() =>
+      api<Json>("/api/portfolio/analyze", {
+        csv_text: csv,
+        financials_csv: SAMPLE_FINANCIALS_PATH,
+      }),
+    );
+  const loadSampleHoldings = () => setCsv(SAMPLE_HOLDINGS_CSV);
 
   const summary: Json = analysisState.data?.summary ?? {};
   const rows: Json[] =
@@ -567,6 +622,7 @@ function HoldingsTab() {
         <textarea rows={7} value={csv} onChange={(e) => setCsv(e.target.value)} />
       </Field>
       <div className="form">
+        <button onClick={loadSampleHoldings}>サンプル保有CSVを読み込む</button>
         <button onClick={importHoldings} disabled={importState.loading}>
           形式を確認
         </button>
@@ -662,9 +718,11 @@ function CandidateScreenTab() {
         min_diversification_score:
           minDiversification === "" ? undefined : Number(minDiversification),
         funds_csv_text: fundsCsv,
+        financials_csv: SAMPLE_FINANCIALS_PATH,
         sort_by: "score",
       }),
     );
+  const loadSampleFunds = () => setFundsCsv(SAMPLE_FUNDS_CSV);
 
   const results: Json[] = Array.isArray(state.data?.results) ? state.data.results : [];
   const blocked: Json[] = Array.isArray(state.data?.blocked_providers)
@@ -682,7 +740,7 @@ function CandidateScreenTab() {
       </div>
       <p className="hint">
         条件に合う日本株・投信を抽出します。結果は比較材料であり、買付・売却・保有継続の
-        推奨ではありません。
+        判断を代行しません。
       </p>
       <div className="form">
         <label className="field check-field">
@@ -716,9 +774,12 @@ function CandidateScreenTab() {
       <Field label="投信プロファイルCSV">
         <textarea rows={5} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
       </Field>
-      <button className="primary" onClick={screen} disabled={state.loading}>
-        条件に一致する候補を表示
-      </button>
+      <div className="form">
+        <button onClick={loadSampleFunds}>サンプル投信CSVを読み込む</button>
+        <button className="primary" onClick={screen} disabled={state.loading}>
+          条件に一致する比較対象を表示
+        </button>
+      </div>
       <Status loading={state.loading} error={state.error} />
       {state.data?.non_advisory_boundary && (
         <p className="hint">{String(state.data.non_advisory_boundary)}</p>
@@ -775,12 +836,18 @@ function InvestmentReportTab() {
         max_expense_ratio: 0.2,
         nisa_eligible_only: true,
         funds_csv_text: fundsCsv,
+        financials_csv: SAMPLE_FINANCIALS_PATH,
       });
       return api<Json>("/api/reports/investment-monthly", {
         csv_text: holdingsCsv,
+        financials_csv: SAMPLE_FINANCIALS_PATH,
         candidates: candidates.results ?? [],
       });
     });
+  const loadReportSamples = () => {
+    setHoldingsCsv(SAMPLE_HOLDINGS_CSV);
+    setFundsCsv(SAMPLE_FUNDS_CSV);
+  };
 
   const kpis: Json[] = Array.isArray(state.data?.kpis) ? state.data.kpis : [];
   const sections: Json[] = Array.isArray(state.data?.sections) ? state.data.sections : [];
@@ -804,9 +871,12 @@ function InvestmentReportTab() {
       <Field label="投信プロファイルCSV（候補抽出用）">
         <textarea rows={4} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
       </Field>
-      <button className="primary" onClick={generate} disabled={state.loading}>
-        レポート生成
-      </button>
+      <div className="form">
+        <button onClick={loadReportSamples}>サンプルCSVを読み込む</button>
+        <button className="primary" onClick={generate} disabled={state.loading}>
+          レポート生成
+        </button>
+      </div>
       <Status loading={state.loading} error={state.error} />
 
       {kpis.length > 0 && (
@@ -816,6 +886,7 @@ function InvestmentReportTab() {
               <span>{String(kpi.label)}</span>
               <b>{typeof kpi.value === "number" ? yen(kpi.value) : String(kpi.value ?? "-")}</b>
               <small>{String(kpi.formula ?? "")}</small>
+              <KpiEvidenceDetails kpi={kpi} evidence={evidence} />
             </article>
           ))}
         </section>
@@ -2435,3 +2506,14 @@ function OpsTab() {
     </section>
   );
 }
+
+// Kept out of the MVP navigation. These legacy tools remain importable for
+// local experiments while the product surface stays investment-only and non-advisory.
+export const LEGACY_TOOL_TABS = {
+  scoring: ScoringTab,
+  forecast: ForecastTab,
+  scrape: ScrapeTab,
+  analysis: AnalysisTab,
+  simulate: SimulateTab,
+  ops: OpsTab,
+} as const;
