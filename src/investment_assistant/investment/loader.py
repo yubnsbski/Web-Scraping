@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import csv
 import io
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from investment_assistant.investment.models import (
     FUND_PROFILE_COLUMNS,
+    FUND_PROFILE_OPTIONAL_COLUMNS,
+    FUND_PROFILE_TEMPLATE_COLUMNS,
     HOLDING_COLUMNS,
+    HOLDING_OPTIONAL_COLUMNS,
     HOLDING_RECOMMENDED_COLUMNS,
+    HOLDING_TEMPLATE_COLUMNS,
     FundProfile,
     InvestmentHolding,
 )
@@ -107,6 +111,90 @@ def fund_profiles_from_payload(payload: Mapping[str, object]) -> list[FundProfil
     return []
 
 
+def holding_csv_template(*, include_examples: bool = False) -> dict[str, object]:
+    """Return an audit-ready holding CSV template."""
+
+    rows = (
+        [
+            {
+                "asset_type": "stock",
+                "ticker_or_fund_code": "7203",
+                "name": "Example Stock",
+                "quantity": "100",
+                "avg_cost": "1800",
+                "account_type": "tokutei",
+                "tax_wrapper": "nisa_growth",
+                "source": "user_csv",
+                "current_price": "2200",
+                "annual_income": "",
+                "distribution_per_unit": "",
+                "data_provider": "user_csv",
+                "price_as_of": "2026-06-10",
+            },
+            {
+                "asset_type": "fund",
+                "ticker_or_fund_code": "FND001",
+                "name": "Example Fund",
+                "quantity": "120",
+                "avg_cost": "10000",
+                "account_type": "nisa",
+                "tax_wrapper": "nisa_tsumitate",
+                "source": "user_csv",
+                "current_price": "12500",
+                "annual_income": "",
+                "distribution_per_unit": "25",
+                "data_provider": "user_csv",
+                "price_as_of": "2026-06-10",
+            },
+        ]
+        if include_examples
+        else []
+    )
+    return {
+        "kind": "holdings",
+        "csv_text": _write_csv(HOLDING_TEMPLATE_COLUMNS, rows),
+        "columns": list(HOLDING_TEMPLATE_COLUMNS),
+        "required_columns": list(HOLDING_COLUMNS),
+        "optional_columns": list(HOLDING_OPTIONAL_COLUMNS),
+        "recommended_columns": list(HOLDING_RECOMMENDED_COLUMNS),
+        "example_included": include_examples,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def fund_profile_csv_template(*, include_examples: bool = False) -> dict[str, object]:
+    """Return a fund profile CSV template."""
+
+    rows = (
+        [
+            {
+                "fund_code": "FND001",
+                "name": "Example Global Equity Fund",
+                "asset_class": "global_equity",
+                "expense_ratio": "0.12",
+                "distribution_policy": "reinvest",
+                "nisa_eligible": "true",
+                "provider_id": "user_csv",
+                "diversification_score": "0.95",
+            }
+        ]
+        if include_examples
+        else []
+    )
+    return {
+        "kind": "fund_profiles",
+        "csv_text": _write_csv(FUND_PROFILE_TEMPLATE_COLUMNS, rows),
+        "columns": list(FUND_PROFILE_TEMPLATE_COLUMNS),
+        "required_columns": list(FUND_PROFILE_COLUMNS),
+        "optional_columns": list(FUND_PROFILE_OPTIONAL_COLUMNS),
+        "recommended_columns": [],
+        "example_included": include_examples,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def load_holdings_csv(path: str | Path) -> list[InvestmentHolding]:
     return load_holdings_csv_text(Path(path).read_text(encoding="utf-8"))
 
@@ -164,6 +252,15 @@ def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | Non
 def _csv_fieldnames(text: str) -> set[str]:
     reader = csv.DictReader(io.StringIO(text.strip()))
     return {str(field) for field in (reader.fieldnames or [])}
+
+
+def _write_csv(columns: tuple[str, ...], rows: Sequence[Mapping[str, object]]) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(columns), lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({column: row.get(column, "") for column in columns})
+    return output.getvalue()
 
 
 def _holding_from_mapping(mapping: Mapping[str, object], *, row: int) -> InvestmentHolding:

@@ -632,6 +632,20 @@ def _holdings_import(body: JsonDict) -> JsonDict:
     }
 
 
+def _holdings_template(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment import holding_csv_template
+
+    return holding_csv_template(include_examples=_as_bool(body.get("include_examples"), False))
+
+
+def _funds_template(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment import fund_profile_csv_template
+
+    return fund_profile_csv_template(
+        include_examples=_as_bool(body.get("include_examples"), False)
+    )
+
+
 def _portfolio_analyze(body: JsonDict) -> JsonDict:
     from investment_assistant.investment import analyze_portfolio, holdings_from_payload
 
@@ -1269,6 +1283,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,
+    ("POST", "/api/holdings/template"): _holdings_template,
+    ("POST", "/api/funds/template"): _funds_template,
     ("POST", "/api/portfolio/analyze"): _portfolio_analyze,
     ("POST", "/api/investment/detail"): _investment_detail,
     ("POST", "/api/candidates/screen"): _candidates_screen,
