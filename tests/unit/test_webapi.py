@@ -616,6 +616,49 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert history["count"] == 1
 
 
+def test_investment_csv_template_routes_return_importable_samples() -> None:
+    status, holdings_template = handle_api(
+        "POST",
+        "/api/holdings/template",
+        {"include_examples": True},
+    )
+    assert status == 200
+    assert holdings_template["kind"] == "holdings"
+    assert "data_provider" in holdings_template["recommended_columns"]
+    assert "price_as_of" in holdings_template["columns"]
+
+    status, imported = handle_api(
+        "POST",
+        "/api/holdings/import",
+        {"csv_text": holdings_template["csv_text"]},
+    )
+    assert status == 200
+    assert imported["count"] == 2
+    assert imported["input_warnings"] == []
+
+    status, funds_template = handle_api(
+        "POST",
+        "/api/funds/template",
+        {"include_examples": True},
+    )
+    assert status == 200
+    assert funds_template["kind"] == "fund_profiles"
+    assert "diversification_score" in funds_template["optional_columns"]
+
+    status, candidates = handle_api(
+        "POST",
+        "/api/candidates/screen",
+        {
+            "asset_types": ["fund"],
+            "funds_csv_text": funds_template["csv_text"],
+            "max_expense_ratio": 0.2,
+        },
+    )
+    assert status == 200
+    assert candidates["count"] == 1
+    assert candidates["auto_trading"] is False
+
+
 def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     status, payload = handle_api(
         "POST",

@@ -774,6 +774,7 @@ function HoldingsTab() {
   const [csv, setCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const importState = useAsync<Json>();
   const analysisState = useAsync<Json>();
+  const templateState = useAsync<Json>();
 
   const importHoldings = () =>
     importState.run(() => api<Json>("/api/holdings/import", { csv_text: csv }));
@@ -786,6 +787,12 @@ function HoldingsTab() {
     );
   const loadSampleHoldings = () => setCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const loadMinimalHoldings = () => setCsv(SAMPLE_HOLDINGS_CSV);
+  const loadHoldingTemplate = () =>
+    templateState.run(async () => {
+      const template = await api<Json>("/api/holdings/template", { include_examples: true });
+      setCsv(String(template.csv_text ?? ""));
+      return template;
+    });
 
   const summary: Json = analysisState.data?.summary ?? {};
   const rows: Json[] =
@@ -823,6 +830,9 @@ function HoldingsTab() {
       </Field>
       <div className="form">
         <button onClick={loadSampleHoldings}>サンプル保有CSVを読み込む</button>
+        <button onClick={loadHoldingTemplate} disabled={templateState.loading}>
+          CSVテンプレート
+        </button>
         <button onClick={loadMinimalHoldings}>最小CSVを読み込む</button>
         <button onClick={importHoldings} disabled={importState.loading}>
           形式を確認
@@ -831,6 +841,7 @@ function HoldingsTab() {
           分析
         </button>
       </div>
+      <Status loading={templateState.loading} error={templateState.error} />
       <Status loading={importState.loading} error={importState.error} />
       <Status loading={analysisState.loading} error={analysisState.error} />
 
@@ -1055,6 +1066,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   );
   const state = useAsync<Json>();
   const providerState = useAsync<Json>();
+  const fundTemplateState = useAsync<Json>();
 
   const screen = () =>
     state.run(() =>
@@ -1090,6 +1102,12 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       }),
     );
   const loadSampleFunds = () => setFundsCsv(SAMPLE_FUNDS_CSV);
+  const loadFundTemplate = () =>
+    fundTemplateState.run(async () => {
+      const template = await api<Json>("/api/funds/template", { include_examples: true });
+      setFundsCsv(String(template.csv_text ?? ""));
+      return template;
+    });
   const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
 
   const savePreset = () => {
@@ -1260,10 +1278,14 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       </Field>
       <div className="form">
         <button onClick={loadSampleFunds}>サンプル投信CSVを読み込む</button>
+        <button onClick={loadFundTemplate} disabled={fundTemplateState.loading}>
+          投信テンプレート
+        </button>
         <button className="primary" onClick={screen} disabled={state.loading}>
           条件に一致する比較対象を表示
         </button>
       </div>
+      <Status loading={fundTemplateState.loading} error={fundTemplateState.error} />
       <Status loading={state.loading} error={state.error} />
       <div className="subpanel provider-ledger-panel">
         <div className="report-audit-head">

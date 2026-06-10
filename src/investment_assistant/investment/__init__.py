@@ -4,7 +4,9 @@ from investment_assistant.investment.analysis import analyze_portfolio
 from investment_assistant.investment.candidates import screen_candidates
 from investment_assistant.investment.detail import build_investment_detail
 from investment_assistant.investment.loader import (
+    fund_profile_csv_template,
     fund_profiles_from_payload,
+    holding_csv_template,
     holdings_from_payload,
 )
 from investment_assistant.investment.provider_policy import provider_policy_ledger
@@ -16,7 +18,9 @@ __all__ = [
     "audit_investment_report",
     "build_investment_detail",
     "build_investment_monthly_report",
+    "fund_profile_csv_template",
     "fund_profiles_from_payload",
+    "holding_csv_template",
     "holdings_from_payload",
     "provider_policy_ledger",
     "screen_candidates",

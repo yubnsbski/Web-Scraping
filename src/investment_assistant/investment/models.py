@@ -25,6 +25,18 @@ HOLDING_RECOMMENDED_COLUMNS: tuple[str, ...] = (
     "price_as_of",
 )
 
+HOLDING_OPTIONAL_COLUMNS: tuple[str, ...] = (
+    "current_price",
+    "annual_income",
+    "distribution_per_unit",
+)
+
+HOLDING_TEMPLATE_COLUMNS: tuple[str, ...] = (
+    *HOLDING_COLUMNS,
+    *HOLDING_OPTIONAL_COLUMNS,
+    *HOLDING_RECOMMENDED_COLUMNS,
+)
+
 FUND_PROFILE_COLUMNS: tuple[str, ...] = (
     "fund_code",
     "name",
@@ -33,6 +45,13 @@ FUND_PROFILE_COLUMNS: tuple[str, ...] = (
     "distribution_policy",
     "nisa_eligible",
     "provider_id",
+)
+
+FUND_PROFILE_OPTIONAL_COLUMNS: tuple[str, ...] = ("diversification_score",)
+
+FUND_PROFILE_TEMPLATE_COLUMNS: tuple[str, ...] = (
+    *FUND_PROFILE_COLUMNS,
+    *FUND_PROFILE_OPTIONAL_COLUMNS,
 )
 
 DISCLAIMER = (
