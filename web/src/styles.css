@@ -939,6 +939,15 @@ textarea { min-height: 140px; }
   white-space: pre;
 }
 
+.report-diff {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.report-diff table {
+  min-width: 640px;
+}
+
 .kpi-details {
   position: relative;
   z-index: 1;

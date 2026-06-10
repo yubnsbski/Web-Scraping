@@ -1154,6 +1154,7 @@ function InvestmentReportTab() {
   const state = useAsync<Json>();
   const historyState = useAsync<Json>();
   const markdownState = useAsync<Json>();
+  const compareState = useAsync<Json>();
 
   useEffect(() => {
     void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
@@ -1199,6 +1200,15 @@ function InvestmentReportTab() {
   };
   const showSavedMarkdown = (id: string) =>
     markdownState.run(() => api<Json>("/api/reports/investment-monthly/markdown", { id }));
+  const compareLatestReports = () => {
+    if (reports.length < 2) return;
+    compareState.run(() =>
+      api<Json>("/api/reports/investment-monthly/history/compare", {
+        base_id: reports[1].id,
+        compare_id: reports[0].id,
+      }),
+    );
+  };
   const deleteSavedReport = (id: string) => {
     if (
       typeof window !== "undefined" &&
@@ -1224,6 +1234,9 @@ function InvestmentReportTab() {
     ? historyState.data.reports
     : [];
   const markdownText = String(markdownState.data?.markdown ?? "");
+  const comparedMetrics: Json[] = Array.isArray(compareState.data?.metrics)
+    ? compareState.data.metrics
+    : [];
 
   return (
     <section className="tool-section">
@@ -1270,6 +1283,38 @@ function InvestmentReportTab() {
           </button>
         </div>
         <Status loading={historyState.loading} error={historyState.error} />
+        {reports.length >= 2 && (
+          <div className="form">
+            <button onClick={compareLatestReports} disabled={compareState.loading}>
+              Compare latest reports
+            </button>
+          </div>
+        )}
+        <Status loading={compareState.loading} error={compareState.error} />
+        {comparedMetrics.length > 0 && (
+          <div className="report-diff">
+            <table>
+              <thead>
+                <tr>
+                  <th>KPI</th>
+                  <th>Base</th>
+                  <th>Compare</th>
+                  <th>Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {comparedMetrics.map((metric) => (
+                  <tr key={String(metric.metric_key)}>
+                    <td>{String(metric.label ?? metric.metric_key)}</td>
+                    <td>{formatHistoryValue(metric.base_value, metric.value_format)}</td>
+                    <td>{formatHistoryValue(metric.compare_value, metric.value_format)}</td>
+                    <td>{formatHistoryDelta(metric)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {reports.length === 0 ? (
           <p className="hint">まだ保存済みレポートはありません。</p>
         ) : (
@@ -2738,6 +2783,31 @@ function formatDateTime(value: unknown): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatHistoryValue(value: unknown, valueFormat: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const format = String(valueFormat ?? "");
+  if (format === "text") return String(value);
+  if (format === "percent") {
+    return `${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  }
+  if (format === "yen") return yen(value);
+  if (typeof value === "number") {
+    return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  return String(value);
+}
+
+function formatHistoryDelta(metric: Json): string {
+  const delta = metric.delta;
+  if (delta === null || delta === undefined) {
+    return metric.changed ? "changed" : "-";
+  }
+  const value = formatHistoryValue(delta, metric.value_format);
+  const pct = metric.delta_pct;
+  if (pct === null || pct === undefined) return value;
+  return `${value} (${Number(pct).toLocaleString(undefined, { maximumFractionDigits: 2 })}%)`;
 }
 
 function formatKpiValue(kpi: Json): string {

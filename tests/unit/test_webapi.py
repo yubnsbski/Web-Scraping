@@ -483,6 +483,43 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert "portfolio.concentration.current" in markdown["markdown"]
     assert "## Disclaimer" in markdown["markdown"]
 
+    higher_price_csv = holdings_csv.replace("user_csv,1200,,", "user_csv,1300,,")
+    status, newer_report = handle_api(
+        "POST",
+        "/api/reports/investment-monthly",
+        {
+            "csv_text": higher_price_csv,
+            "financials_csv": str(financials),
+            "candidates": candidates["results"],
+            "target_annual_dividend": 10_000,
+            "optimization": "balanced",
+            "history_dir": str(tmp_path / "report_history"),
+        },
+    )
+    assert status == 200
+    newer_summary = newer_report["history"]
+    assert newer_summary["id"] != history_summary["id"]
+
+    status, comparison = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history/compare",
+        {
+            "history_dir": str(tmp_path / "report_history"),
+            "base_id": history_summary["id"],
+            "compare_id": newer_summary["id"],
+        },
+    )
+    assert status == 200
+    assert comparison["auto_trading"] is False
+    deltas = {
+        item["metric_key"]: item
+        for item in comparison["metrics"]
+        if isinstance(item, dict)
+    }
+    assert deltas["market_value"]["delta"] == 10000.0
+    assert deltas["annual_income_estimate"]["delta"] == 0.0
+    assert comparison["evidence"]["compare_count"] >= comparison["evidence"]["base_count"]
+
     status, deleted = handle_api(
         "POST",
         "/api/reports/investment-monthly/history/delete",
@@ -497,7 +534,7 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
         {"history_dir": str(tmp_path / "report_history")},
     )
     assert status == 200
-    assert history["count"] == 0
+    assert history["count"] == 1
 
 
 def test_market_prices_reject_uncontracted_provider_in_production() -> None:

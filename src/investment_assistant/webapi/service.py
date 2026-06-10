@@ -737,6 +737,21 @@ def _investment_report_history_delete(body: JsonDict) -> JsonDict:
     return delete_investment_report(report_id, history_dir=_optional_history_dir(body))
 
 
+def _investment_report_history_compare(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_compare import compare_investment_reports
+    from investment_assistant.investment.report_history import load_investment_report
+
+    base_id = str(body.get("base_id") or "").strip()
+    compare_id = str(body.get("compare_id") or "").strip()
+    if not base_id or not compare_id:
+        raise ApiError("base_id and compare_id are required")
+    history_dir = _optional_history_dir(body)
+    return compare_investment_reports(
+        load_investment_report(base_id, history_dir=history_dir),
+        load_investment_report(compare_id, history_dir=history_dir),
+    )
+
+
 def _investment_report_markdown(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.report_history import load_investment_report
     from investment_assistant.investment.report_markdown import render_investment_report_markdown
@@ -1210,6 +1225,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/reports/investment-monthly/history"): _investment_report_history,
     ("POST", "/api/reports/investment-monthly/history/load"): _investment_report_history_load,
     ("POST", "/api/reports/investment-monthly/history/delete"): _investment_report_history_delete,
+    ("POST", "/api/reports/investment-monthly/history/compare"): _investment_report_history_compare,
     ("POST", "/api/financials/compare"): _financials_compare,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
