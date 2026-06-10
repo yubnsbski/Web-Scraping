@@ -948,6 +948,14 @@ textarea { min-height: 140px; }
   min-width: 640px;
 }
 
+.nisa-alert-panel {
+  overflow-x: auto;
+}
+
+.nisa-alert-panel table {
+  min-width: 720px;
+}
+
 .kpi-details {
   position: relative;
   z-index: 1;

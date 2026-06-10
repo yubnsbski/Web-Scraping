@@ -56,8 +56,37 @@ def test_analyze_mixed_stock_and_fund_portfolio(tmp_path: Path) -> None:
     assert summary["market_value"] == 670000.0
     assert summary["cost_basis"] == 600000.0
     assert summary["annual_income_estimate"] == 6000.0
+    nisa = summary["nisa"]
+    assert isinstance(nisa, dict)
+    assert nisa["status"] == "ok"
+    assert nisa["growth_status"] == "ok"
+    assert nisa["alerts"] == []
     assert result["auto_trading"] is False
     assert "投資助言" in str(result["disclaimer"])
+
+
+def test_analyze_portfolio_flags_nisa_cap_usage(tmp_path: Path) -> None:
+    holdings_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit\n"
+        "stock,7203,Toyota,10000,1300,tokutei,nisa_growth,user_csv,1400,,\n"
+    )
+    result = analyze_portfolio(
+        holdings_from_payload({"csv_text": holdings_csv}),
+        financials_csv=_financials(tmp_path),
+    )
+
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    nisa = summary["nisa"]
+    assert isinstance(nisa, dict)
+    assert nisa["usage_pct"] > 70
+    assert nisa["growth_status"] == "exceeded"
+    assert nisa["growth_excess"] == 1_000_000.0
+    alerts = nisa["alerts"]
+    assert isinstance(alerts, list)
+    assert alerts[0]["code"] == "nisa_growth_cap_exceeded"
+    assert alerts[0]["level"] == "error"
 
 
 def test_candidate_screen_returns_condition_matches_not_recommendations(tmp_path: Path) -> None:

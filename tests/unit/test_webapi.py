@@ -382,6 +382,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     )
     assert status == 200
     assert analysis["summary"]["market_value"] == 670000.0
+    assert analysis["summary"]["nisa"]["status"] == "ok"
+    assert analysis["summary"]["nisa"]["alerts"] == []
 
     status, candidates = handle_api(
         "POST",

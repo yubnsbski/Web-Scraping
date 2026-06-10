@@ -784,6 +784,9 @@ function HoldingsTab() {
     (analysisState.data?.holdings as Json[] | undefined) ??
     (importState.data?.holdings as Json[] | undefined) ??
     [];
+  const nisaAlerts: Json[] = Array.isArray(summary.nisa?.alerts)
+    ? summary.nisa.alerts
+    : [];
 
   return (
     <section className="tool-section">
@@ -836,6 +839,43 @@ function HoldingsTab() {
             <small>成長枠残 {yen(summary.nisa?.growth_remaining)}</small>
           </article>
         </section>
+      )}
+
+      {nisaAlerts.length > 0 && (
+        <div className="subpanel nisa-alert-panel">
+          <h3>NISA alerts</h3>
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>level</th>
+                <th>bucket</th>
+                <th>usage</th>
+                <th>remaining</th>
+                <th>message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nisaAlerts.map((alert, index) => (
+                <tr key={`${String(alert.code)}-${index}`}>
+                  <td>
+                    <span className={String(alert.level) === "error" ? "badge warn" : "badge"}>
+                      {String(alert.level)}
+                    </span>
+                  </td>
+                  <td>{String(alert.bucket)}</td>
+                  <td className="mono">
+                    {Number(alert.usage_pct ?? 0).toLocaleString(undefined, {
+                      maximumFractionDigits: 2,
+                    })}
+                    %
+                  </td>
+                  <td className="mono">{yen(alert.remaining)}</td>
+                  <td>{String(alert.message)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {rows.length > 0 && (
