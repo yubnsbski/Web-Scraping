@@ -424,11 +424,27 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
             "csv_text": holdings_csv,
             "financials_csv": str(financials),
             "candidates": candidates["results"],
+            "target_annual_dividend": 10_000,
+            "optimization": "balanced",
         },
     )
     assert status == 200
     assert report["kpis"]
     assert report["evidence"]
+    metric_keys = {
+        str(item.get("metric_key"))
+        for item in report["kpis"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert "target_required_budget" in metric_keys
+    assert "concentration_effective_names" in metric_keys
+    evidence_keys = {
+        str(item.get("claim_key"))
+        for item in report["evidence"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert "portfolio.target.required_budget" in evidence_keys
+    assert "portfolio.concentration.current" in evidence_keys
 
 
 def test_market_prices_reject_uncontracted_provider_in_production() -> None:

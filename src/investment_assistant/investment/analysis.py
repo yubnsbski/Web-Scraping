@@ -197,14 +197,31 @@ def _annual_income(
 
 def _concentration(rows: list[dict[str, object]], total_market: float) -> dict[str, object]:
     if total_market <= 0:
-        return {"hhi": 0.0, "top3_share_pct": 0.0}
-    shares = sorted(
-        ((_number(row.get("market_value")) or 0.0) / total_market for row in rows),
+        return {
+            "hhi": 0.0,
+            "top3_share_pct": 0.0,
+            "top_weight": 0.0,
+            "top_code": None,
+            "effective_names": 0.0,
+        }
+    weighted_rows = sorted(
+        (
+            (
+                (_number(row.get("market_value")) or 0.0) / total_market,
+                str(row.get("ticker_or_fund_code") or ""),
+            )
+            for row in rows
+        ),
         reverse=True,
     )
+    shares = [share for share, _ in weighted_rows]
+    hhi = sum(share * share for share in shares)
     return {
-        "hhi": round(sum(share * share for share in shares), 4),
+        "hhi": round(hhi, 4),
         "top3_share_pct": round(sum(shares[:3]) * 100.0, 2),
+        "top_weight": round(shares[0], 4) if shares else 0.0,
+        "top_code": weighted_rows[0][1] if weighted_rows else None,
+        "effective_names": round(1.0 / hhi, 2) if hhi > 0 else 0.0,
     }
 
 

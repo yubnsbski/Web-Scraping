@@ -1150,6 +1150,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
 function InvestmentReportTab() {
   const [holdingsCsv, setHoldingsCsv] = useState(SAMPLE_HOLDINGS_CSV);
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
+  const [targetDividend, setTargetDividend] = useState(60000);
   const state = useAsync<Json>();
 
   const generate = () =>
@@ -1166,11 +1167,19 @@ function InvestmentReportTab() {
         csv_text: holdingsCsv,
         financials_csv: SAMPLE_FINANCIALS_PATH,
         candidates: candidates.results ?? [],
+        target_annual_dividend: targetDividend,
+        years: 10,
+        growth_rate: 0,
+        reinvest: true,
+        auto_weight: "equal",
+        optimization: "balanced",
+        dividend_basis: "conservative",
       });
     });
   const loadReportSamples = () => {
     setHoldingsCsv(SAMPLE_HOLDINGS_CSV);
     setFundsCsv(SAMPLE_FUNDS_CSV);
+    setTargetDividend(60000);
   };
 
   const kpis: Json[] = Array.isArray(state.data?.kpis) ? state.data.kpis : [];
@@ -1195,6 +1204,14 @@ function InvestmentReportTab() {
       <Field label="投信プロファイルCSV（候補抽出用）">
         <textarea rows={4} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
       </Field>
+      <Field label="目標年間配当（円・任意）">
+        <input
+          type="number"
+          value={targetDividend}
+          onChange={(e) => setTargetDividend(Number(e.target.value))}
+          placeholder="例: 60000"
+        />
+      </Field>
       <div className="form">
         <button onClick={loadReportSamples}>サンプルCSVを読み込む</button>
         <button className="primary" onClick={generate} disabled={state.loading}>
@@ -1208,7 +1225,7 @@ function InvestmentReportTab() {
           {kpis.map((kpi) => (
             <article className="metric-card accent" key={String(kpi.metric_key)}>
               <span>{String(kpi.label)}</span>
-              <b>{typeof kpi.value === "number" ? yen(kpi.value) : String(kpi.value ?? "-")}</b>
+              <b>{formatKpiValue(kpi)}</b>
               <small>{String(kpi.formula ?? "")}</small>
               <EvidencePanel
                 metric={kpi}
@@ -2589,6 +2606,21 @@ function AnalysisTab() {
 
 function yen(value: unknown): string {
   return `${Math.round(Number(value) || 0).toLocaleString()}円`;
+}
+
+function formatKpiValue(kpi: Json): string {
+  const value = kpi.value;
+  if (value === null || value === undefined || value === "") return "-";
+  const format = String(kpi.value_format ?? "");
+  if (format === "text") return String(value);
+  if (format === "percent") {
+    return `${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  }
+  if (format === "number") {
+    return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  if (format === "yen" || typeof value === "number") return yen(value);
+  return String(value);
 }
 
 const WEIGHT_MODES: { value: string; label: string }[] = [
