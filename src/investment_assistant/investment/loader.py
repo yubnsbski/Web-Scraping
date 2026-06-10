@@ -143,6 +143,70 @@ def load_funds_csv_text(text: str) -> list[FundProfile]:
     return funds
 
 
+def validate_funds_csv_text(text: str) -> dict[str, object]:
+    """Validate fund profile CSV input without raising on row-level data errors."""
+
+    optional_columns = ("diversification_score",)
+    expected_columns = (*FUND_PROFILE_COLUMNS, *optional_columns)
+    reader = csv.DictReader(io.StringIO(text.strip()))
+    fieldnames = list(reader.fieldnames or [])
+    rows = [dict(row) for row in reader]
+    errors: list[dict[str, object]] = []
+    warnings: list[dict[str, object]] = []
+    valid_funds: list[FundProfile] = []
+
+    if not fieldnames:
+        errors.append({"row": 1, "column": None, "message": "CSV header is required."})
+    duplicate_columns = sorted({name for name in fieldnames if fieldnames.count(name) > 1})
+    for column in duplicate_columns:
+        errors.append({"row": 1, "column": column, "message": "Duplicate CSV column."})
+    missing = [column for column in FUND_PROFILE_COLUMNS if column not in set(fieldnames)]
+    for column in missing:
+        errors.append({"row": 1, "column": column, "message": "Missing required CSV column."})
+    extra = [column for column in fieldnames if column not in set(expected_columns)]
+    for column in extra:
+        warnings.append({"row": 1, "column": column, "message": "Unknown column will be ignored."})
+    if not rows:
+        errors.append(
+            {
+                "row": 1,
+                "column": None,
+                "message": "Fund profile CSV must contain at least one row.",
+            }
+        )
+
+    if not missing:
+        for row_number, row in enumerate(rows, start=2):
+            try:
+                fund = _fund_from_mapping(row, row=row_number)
+            except ValueError as exc:
+                message = str(exc)
+                errors.append(
+                    {
+                        "row": row_number,
+                        "column": _column_from_error(message),
+                        "message": message,
+                    }
+                )
+                continue
+            valid_funds.append(fund)
+            warnings.extend(_fund_warnings(fund, row=row_number))
+
+    return {
+        "valid": not errors,
+        "row_count": len(rows),
+        "valid_row_count": len(valid_funds),
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "errors": errors,
+        "warnings": warnings,
+        "required_columns": list(FUND_PROFILE_COLUMNS),
+        "optional_columns": list(optional_columns),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def _read_rows(text: str, *, required: tuple[str, ...]) -> list[dict[str, str]]:
     reader = csv.DictReader(io.StringIO(text.strip()))
     fieldnames = set(reader.fieldnames or [])
@@ -271,6 +335,38 @@ def _holding_warnings(holding: InvestmentHolding, *, row: int) -> list[dict[str,
                 "row": row,
                 "column": "current_price",
                 "message": "current_price is missing; avg_cost will be used for valuation.",
+            }
+        )
+    return warnings
+
+
+def _fund_warnings(fund: FundProfile, *, row: int) -> list[dict[str, object]]:
+    warnings: list[dict[str, object]] = []
+    if fund.expense_ratio > 1.0:
+        warnings.append(
+            {
+                "row": row,
+                "column": "expense_ratio",
+                "message": "expense_ratio is above 1.0; confirm whether the unit is percent.",
+            }
+        )
+    if fund.diversification_score is None:
+        warnings.append(
+            {
+                "row": row,
+                "column": "diversification_score",
+                "message": (
+                    "diversification_score is missing; "
+                    "diversification filter may exclude this fund."
+                ),
+            }
+        )
+    if not fund.nisa_eligible:
+        warnings.append(
+            {
+                "row": row,
+                "column": "nisa_eligible",
+                "message": "fund is not marked as NISA eligible.",
             }
         )
     return warnings

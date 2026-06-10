@@ -951,7 +951,12 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
     readCandidateScreenPresets(),
   );
   const state = useAsync<Json>();
+  const fundValidationState = useAsync<Json>();
 
+  const validateFundsCsv = () =>
+    fundValidationState.run(() =>
+      api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
+    );
   const screen = () =>
     state.run(() =>
       api<Json>("/api/candidates/screen", {
@@ -1138,10 +1143,15 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       </Field>
       <div className="form">
         <button onClick={loadSampleFunds}>サンプル投信CSVを読み込む</button>
+        <button onClick={validateFundsCsv} disabled={fundValidationState.loading}>
+          Validate fund CSV
+        </button>
         <button className="primary" onClick={screen} disabled={state.loading}>
           条件に一致する比較対象を表示
         </button>
       </div>
+      <Status loading={fundValidationState.loading} error={fundValidationState.error} />
+      {fundValidationState.data && <ValidationPanel data={fundValidationState.data} />}
       <Status loading={state.loading} error={state.error} />
       {state.data?.non_advisory_boundary && (
         <p className="hint">{String(state.data.non_advisory_boundary)}</p>
