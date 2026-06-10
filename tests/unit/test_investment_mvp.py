@@ -6,6 +6,7 @@ import pytest
 
 from investment_assistant.investment import (
     analyze_portfolio,
+    build_investment_detail,
     build_investment_monthly_report,
     fund_profiles_from_payload,
     holdings_from_payload,
@@ -102,3 +103,42 @@ def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None
     assert all(item.get("evidence_keys") for item in kpis if isinstance(item, dict))
     assert report["evidence"]
     assert "投資助言" in str(report["disclaimer"])
+
+
+def test_stock_detail_combines_holding_and_financial_evidence(tmp_path: Path) -> None:
+    holdings = holdings_from_payload({"csv_text": HOLDINGS_CSV})
+    detail = build_investment_detail(
+        code="8306",
+        asset_type="stock",
+        holdings=holdings,
+        financials_csv=_financials(tmp_path),
+    )
+
+    assert detail["available"] is True
+    assert detail["asset_type"] == "stock"
+    assert detail["auto_trading"] is False
+    assert "買い推奨" not in str(detail)
+    metric_keys = {
+        str(item.get("metric_key"))
+        for item in detail["metrics"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert {"holding.market_value", "financials.latest_equity_ratio"} <= metric_keys
+    assert detail["evidence"]
+    assert "投資助言" in str(detail["disclaimer"])
+
+
+def test_fund_detail_uses_fund_profile_without_holding_csv() -> None:
+    funds = fund_profiles_from_payload({"funds_csv_text": FUNDS_CSV})
+    detail = build_investment_detail(code="F001", asset_type="fund", funds=funds)
+
+    assert detail["available"] is True
+    assert detail["asset_type"] == "fund"
+    assert detail["fund_profile"]
+    metric_keys = {
+        str(item.get("metric_key"))
+        for item in detail["metrics"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert {"fund.expense_ratio", "fund.nisa_eligible"} <= metric_keys
+    assert detail["auto_trading"] is False

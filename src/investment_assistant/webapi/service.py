@@ -598,6 +598,23 @@ def _portfolio_analyze(body: JsonDict) -> JsonDict:
     )
 
 
+def _investment_detail(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment import (
+        build_investment_detail,
+        fund_profiles_from_payload,
+        holdings_from_payload,
+    )
+
+    holdings = holdings_from_payload(body) if _has_any(body, "holdings", "csv_text", "path") else []
+    return build_investment_detail(
+        code=str(body.get("code") or body.get("ticker_or_fund_code") or ""),
+        asset_type=str(body.get("asset_type") or ""),
+        holdings=holdings,
+        funds=fund_profiles_from_payload(body),
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+    )
+
+
 def _candidates_screen(body: JsonDict) -> JsonDict:
     from investment_assistant.investment import fund_profiles_from_payload, screen_candidates
     from investment_assistant.investment.candidates import screen_from_values
@@ -978,6 +995,10 @@ def _optional_float(value: object) -> float | None:
     return _as_float(value, 0.0)
 
 
+def _has_any(body: JsonDict, *keys: str) -> bool:
+    return any(key in body and body.get(key) not in (None, "") for key in keys)
+
+
 def _as_int_tuple(value: object) -> tuple[int, ...]:
     if not isinstance(value, list):
         return ()
@@ -1044,6 +1065,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,
     ("POST", "/api/portfolio/analyze"): _portfolio_analyze,
+    ("POST", "/api/investment/detail"): _investment_detail,
     ("POST", "/api/candidates/screen"): _candidates_screen,
     ("POST", "/api/reports/investment-monthly"): _investment_monthly_report,
     ("POST", "/api/financials/compare"): _financials_compare,

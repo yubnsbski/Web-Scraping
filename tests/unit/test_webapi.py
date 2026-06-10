@@ -381,6 +381,24 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert candidates["count"] >= 2
     assert candidates["auto_trading"] is False
 
+    status, detail = handle_api(
+        "POST",
+        "/api/investment/detail",
+        {
+            "code": "8306",
+            "asset_type": "stock",
+            "csv_text": holdings_csv,
+            "funds_csv_text": funds_csv,
+            "financials_csv": str(financials),
+        },
+    )
+    assert status == 200
+    assert detail["available"] is True
+    assert detail["asset_type"] == "stock"
+    assert detail["metrics"]
+    assert detail["evidence"]
+    assert detail["auto_trading"] is False
+
     status, report = handle_api(
         "POST",
         "/api/reports/investment-monthly",
