@@ -31,7 +31,23 @@ type TargetSourceOption = {
   queryContext: string;
 };
 
+type CandidateScreenPreset = {
+  id: string;
+  name: string;
+  includeStocks: boolean;
+  includeFunds: boolean;
+  excludeCut: boolean;
+  minEquity: string;
+  maxExpense: string;
+  nisaOnly: boolean;
+  minDiversification: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
+const CANDIDATE_SCREEN_PRESETS_STORAGE_KEY =
+  "investment_assistant.candidate_screen_presets.v1";
 
 const TARGET_SOURCE_OPTIONS: TargetSourceOption[] = [
   {
@@ -329,6 +345,67 @@ function Status(props: { loading: boolean; error: string | null }) {
   if (props.loading) return <p className="status">実行中…</p>;
   if (props.error) return <p className="status error">エラー: {props.error}</p>;
   return null;
+}
+
+function makeCandidatePresetId(): string {
+  const cryptoValue = globalThis.crypto;
+  if (typeof cryptoValue?.randomUUID === "function") return cryptoValue.randomUUID();
+  return `candidate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function asPresetString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function sanitizeCandidatePreset(value: unknown): CandidateScreenPreset | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Json;
+  const id = asPresetString(record.id).trim();
+  const name = asPresetString(record.name).trim();
+  if (!id || !name) return null;
+  const now = new Date().toISOString();
+  return {
+    id,
+    name,
+    includeStocks: Boolean(record.includeStocks),
+    includeFunds: Boolean(record.includeFunds),
+    excludeCut: Boolean(record.excludeCut),
+    minEquity: asPresetString(record.minEquity),
+    maxExpense: asPresetString(record.maxExpense),
+    nisaOnly: Boolean(record.nisaOnly),
+    minDiversification: asPresetString(record.minDiversification),
+    createdAt: asPresetString(record.createdAt) || now,
+    updatedAt: asPresetString(record.updatedAt) || now,
+  };
+}
+
+function readCandidateScreenPresets(): CandidateScreenPreset[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(CANDIDATE_SCREEN_PRESETS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(sanitizeCandidatePreset)
+      .filter((item): item is CandidateScreenPreset => item !== null)
+      .slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
+function writeCandidateScreenPresets(presets: CandidateScreenPreset[]): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.localStorage.setItem(
+      CANDIDATE_SCREEN_PRESETS_STORAGE_KEY,
+      JSON.stringify(presets.slice(0, 12)),
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function evidenceForKpi(kpi: Json, evidence: Json[]): Json[] {
@@ -702,6 +779,12 @@ function CandidateScreenTab() {
   const [nisaOnly, setNisaOnly] = useState(true);
   const [minDiversification, setMinDiversification] = useState("0.8");
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
+  const [presetName, setPresetName] = useState("標準スクリーニング");
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [presetStatus, setPresetStatus] = useState<string | null>(null);
+  const [presets, setPresets] = useState<CandidateScreenPreset[]>(() =>
+    readCandidateScreenPresets(),
+  );
   const state = useAsync<Json>();
 
   const screen = () =>
@@ -723,6 +806,81 @@ function CandidateScreenTab() {
       }),
     );
   const loadSampleFunds = () => setFundsCsv(SAMPLE_FUNDS_CSV);
+  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
+
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name) {
+      setPresetStatus("プリセット名を入力してください。");
+      return;
+    }
+    const now = new Date().toISOString();
+    const id = selectedPreset?.id ?? makeCandidatePresetId();
+    const nextPreset: CandidateScreenPreset = {
+      id,
+      name,
+      includeStocks,
+      includeFunds,
+      excludeCut,
+      minEquity,
+      maxExpense,
+      nisaOnly,
+      minDiversification,
+      createdAt: selectedPreset?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const nextPresets = [
+      nextPreset,
+      ...presets.filter((preset) => preset.id !== id),
+    ].slice(0, 12);
+    setPresets(nextPresets);
+    setSelectedPresetId(id);
+    setPresetName(name);
+    const saved = writeCandidateScreenPresets(nextPresets);
+    setPresetStatus(
+      saved
+        ? `${name} を保存しました。`
+        : "ブラウザ保存に失敗しました。条件は画面上だけ更新されています。",
+    );
+  };
+
+  const applyPreset = (preset: CandidateScreenPreset) => {
+    setIncludeStocks(preset.includeStocks);
+    setIncludeFunds(preset.includeFunds);
+    setExcludeCut(preset.excludeCut);
+    setMinEquity(preset.minEquity);
+    setMaxExpense(preset.maxExpense);
+    setNisaOnly(preset.nisaOnly);
+    setMinDiversification(preset.minDiversification);
+    setSelectedPresetId(preset.id);
+    setPresetName(preset.name);
+    setPresetStatus(`${preset.name} を適用しました。CSV本文は変更していません。`);
+  };
+
+  const applySelectedPreset = () => {
+    if (!selectedPreset) {
+      setPresetStatus("読み込むプリセットを選択してください。");
+      return;
+    }
+    applyPreset(selectedPreset);
+  };
+
+  const deleteSelectedPreset = () => {
+    if (!selectedPreset) {
+      setPresetStatus("削除するプリセットを選択してください。");
+      return;
+    }
+    const nextPresets = presets.filter((preset) => preset.id !== selectedPreset.id);
+    setPresets(nextPresets);
+    setSelectedPresetId("");
+    setPresetName("");
+    const saved = writeCandidateScreenPresets(nextPresets);
+    setPresetStatus(
+      saved
+        ? `${selectedPreset.name} を削除しました。`
+        : "ブラウザ保存の更新に失敗しました。画面上では削除済みです。",
+    );
+  };
 
   const results: Json[] = Array.isArray(state.data?.results) ? state.data.results : [];
   const blocked: Json[] = Array.isArray(state.data?.blocked_providers)
@@ -742,6 +900,45 @@ function CandidateScreenTab() {
         条件に合う日本株・投信を抽出します。結果は比較材料であり、買付・売却・保有継続の
         判断を代行しません。
       </p>
+      <div className="subpanel">
+        <h3>抽出条件プリセット</h3>
+        <p className="hint">
+          保存するのは条件だけです。投信プロファイルCSVや抽出結果はブラウザ保存に含めません。
+        </p>
+        <div className="form">
+          <Field label="プリセット名">
+            <input value={presetName} onChange={(e) => setPresetName(e.target.value)} />
+          </Field>
+          <Field label="保存済みプリセット">
+            <select
+              value={selectedPresetId}
+              onChange={(e) => {
+                const id = e.target.value;
+                const preset = presets.find((item) => item.id === id);
+                setSelectedPresetId(id);
+                if (preset) setPresetName(preset.name);
+              }}
+            >
+              <option value="">未選択</option>
+              {presets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <div className="form">
+          <button onClick={savePreset}>現在の条件を保存</button>
+          <button onClick={applySelectedPreset} disabled={!selectedPreset}>
+            選択条件を読み込む
+          </button>
+          <button onClick={deleteSelectedPreset} disabled={!selectedPreset}>
+            選択条件を削除
+          </button>
+        </div>
+        {presetStatus && <p className="hint">{presetStatus}</p>}
+      </div>
       <div className="form">
         <label className="field check-field">
           <input type="checkbox" checked={includeStocks} onChange={(e) => setIncludeStocks(e.target.checked)} />
