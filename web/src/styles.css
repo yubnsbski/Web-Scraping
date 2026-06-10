@@ -989,7 +989,8 @@ textarea { min-height: 140px; }
 .income-alert-panel,
 .report-audit-panel,
 .provider-ledger-panel,
-.csv-guidance-panel {
+.csv-guidance-panel,
+.csv-validation-panel {
   overflow-x: auto;
 }
 
@@ -998,7 +999,8 @@ textarea { min-height: 140px; }
 .income-alert-panel table,
 .report-audit-panel table,
 .provider-ledger-panel table,
-.csv-guidance-panel table {
+.csv-guidance-panel table,
+.csv-validation-panel table {
   min-width: 720px;
 }
 

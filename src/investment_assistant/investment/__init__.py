@@ -8,6 +8,8 @@ from investment_assistant.investment.loader import (
     fund_profiles_from_payload,
     holding_csv_template,
     holdings_from_payload,
+    validate_fund_profiles_payload,
+    validate_holdings_payload,
 )
 from investment_assistant.investment.provider_policy import provider_policy_ledger
 from investment_assistant.investment.report_audit import audit_investment_report
@@ -24,4 +26,6 @@ __all__ = [
     "holdings_from_payload",
     "provider_policy_ledger",
     "screen_candidates",
+    "validate_fund_profiles_payload",
+    "validate_holdings_payload",
 ]

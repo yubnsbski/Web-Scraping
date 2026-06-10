@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from investment_assistant.investment.models import (
     FundProfile,
     InvestmentHolding,
 )
+
+_ROW_ERROR_RE = re.compile(r"^Row (?P<row>\d+): (?P<detail>.+)$")
 
 
 def holdings_from_payload(payload: Mapping[str, object]) -> list[InvestmentHolding]:
@@ -40,6 +43,51 @@ def holdings_from_payload(payload: Mapping[str, object]) -> list[InvestmentHoldi
         return load_holdings_csv(Path(path))
 
     raise ValueError("holdings, csv_text, or path is required")
+
+
+def validate_holdings_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    """Validate holdings input without raising loader exceptions."""
+
+    base = _validation_base(
+        kind="holdings",
+        columns=HOLDING_TEMPLATE_COLUMNS,
+        required_columns=HOLDING_COLUMNS,
+        optional_columns=HOLDING_OPTIONAL_COLUMNS,
+        recommended_columns=HOLDING_RECOMMENDED_COLUMNS,
+    )
+    if not _has_payload_source(payload, ("holdings", "csv_text", "path")):
+        base["errors"] = [
+            _validation_error(
+                code="input_missing",
+                message="holdings, csv_text, or path is required",
+            )
+        ]
+        return base
+
+    try:
+        holdings = holdings_from_payload(payload)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        base["errors"] = [_loader_error_to_validation(exc)]
+        return base
+
+    if not holdings:
+        base["errors"] = [
+            _validation_error(
+                code="empty_payload",
+                message="Holding payload must contain at least one row.",
+            )
+        ]
+        return base
+
+    warnings = holding_input_warnings(payload, holdings)
+    return {
+        **base,
+        "valid": True,
+        "count": len(holdings),
+        "holdings": dicts(holdings),
+        "warnings": warnings,
+        "input_warnings": warnings,
+    }
 
 
 def holding_input_warnings(
@@ -109,6 +157,48 @@ def fund_profiles_from_payload(payload: Mapping[str, object]) -> list[FundProfil
         return load_funds_csv(Path(path))
 
     return []
+
+
+def validate_fund_profiles_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    """Validate fund profile input without raising loader exceptions."""
+
+    base = _validation_base(
+        kind="fund_profiles",
+        columns=FUND_PROFILE_TEMPLATE_COLUMNS,
+        required_columns=FUND_PROFILE_COLUMNS,
+        optional_columns=FUND_PROFILE_OPTIONAL_COLUMNS,
+        recommended_columns=(),
+    )
+    if not _has_payload_source(payload, ("funds", "funds_csv_text", "funds_path")):
+        base["errors"] = [
+            _validation_error(
+                code="input_missing",
+                message="funds, funds_csv_text, or funds_path is required",
+            )
+        ]
+        return base
+
+    try:
+        funds = fund_profiles_from_payload(payload)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        base["errors"] = [_loader_error_to_validation(exc)]
+        return base
+
+    if not funds:
+        base["errors"] = [
+            _validation_error(
+                code="empty_payload",
+                message="Fund profile payload must contain at least one row.",
+            )
+        ]
+        return base
+
+    return {
+        **base,
+        "valid": True,
+        "count": len(funds),
+        "funds": dicts(funds),
+    }
 
 
 def holding_csv_template(*, include_examples: bool = False) -> dict[str, object]:
@@ -261,6 +351,96 @@ def _write_csv(columns: tuple[str, ...], rows: Sequence[Mapping[str, object]]) -
     for row in rows:
         writer.writerow({column: row.get(column, "") for column in columns})
     return output.getvalue()
+
+
+def _validation_base(
+    *,
+    kind: str,
+    columns: tuple[str, ...],
+    required_columns: tuple[str, ...],
+    optional_columns: tuple[str, ...],
+    recommended_columns: tuple[str, ...],
+) -> dict[str, object]:
+    return {
+        "kind": kind,
+        "valid": False,
+        "count": 0,
+        "errors": [],
+        "warnings": [],
+        "columns": list(columns),
+        "required_columns": list(required_columns),
+        "optional_columns": list(optional_columns),
+        "recommended_columns": list(recommended_columns),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _has_payload_source(payload: Mapping[str, object], keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str):
+            if value.strip():
+                return True
+        elif isinstance(value, list):
+            return True
+    return False
+
+
+def _loader_error_to_validation(exc: Exception) -> dict[str, object]:
+    message = str(exc)
+    if message.startswith("Missing required CSV columns: "):
+        columns = [
+            column.strip()
+            for column in message.removeprefix("Missing required CSV columns: ").split(",")
+            if column.strip()
+        ]
+        return _validation_error(
+            code="required_column_missing",
+            message=message,
+            columns=columns,
+        )
+    if message in {
+        "holdings, csv_text, or path is required",
+        "funds, funds_csv_text, or funds_path is required",
+    }:
+        return _validation_error(code="input_missing", message=message)
+    if "must contain at least one row" in message:
+        return _validation_error(code="empty_csv", message=message)
+
+    row_match = _ROW_ERROR_RE.match(message)
+    if row_match:
+        detail = row_match.group("detail").rstrip(".")
+        column = detail.split(" ", maxsplit=1)[0] if detail else ""
+        return _validation_error(
+            code="row_invalid",
+            message=message,
+            row=int(row_match.group("row")),
+            column=column,
+        )
+    return _validation_error(code="invalid_input", message=message)
+
+
+def _validation_error(
+    *,
+    code: str,
+    message: str,
+    row: int | None = None,
+    column: str | None = None,
+    columns: Sequence[str] | None = None,
+) -> dict[str, object]:
+    error: dict[str, object] = {
+        "level": "error",
+        "code": code,
+        "message": message,
+    }
+    if row is not None:
+        error["row"] = row
+    if column:
+        error["column"] = column
+    if columns is not None:
+        error["columns"] = list(columns)
+    return error
 
 
 def _holding_from_mapping(mapping: Mapping[str, object], *, row: int) -> InvestmentHolding:
