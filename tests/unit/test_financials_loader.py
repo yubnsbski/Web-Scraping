@@ -10,6 +10,7 @@ from investment_assistant.financials import (
     compare_financials,
     load_financials,
 )
+from investment_assistant.financials.models import equity_ratio_to_percent
 
 SAMPLE = Path("examples/financials_sample.csv")
 
@@ -67,6 +68,28 @@ def test_comparison_includes_operating_cf_and_equity_trends() -> None:
 def test_companies_sorted_by_ticker() -> None:
     companies = _companies()
     assert list(companies.keys()) == ["7203", "9999"]
+
+
+def test_equity_ratio_to_percent_normalises_fraction() -> None:
+    # 0–1 EDINET fractions become percentages; already-percent values pass through.
+    assert equity_ratio_to_percent(0.766) == 76.6
+    assert equity_ratio_to_percent(1.0) == 100.0
+    assert equity_ratio_to_percent(62.3) == 62.3
+    # Idempotent: re-applying does not double-scale a percentage.
+    assert equity_ratio_to_percent(equity_ratio_to_percent(0.5)) == 50.0
+    assert equity_ratio_to_percent(None) is None
+    assert equity_ratio_to_percent(0.0) == 0.0
+
+
+def test_load_normalises_fractional_equity_ratio(tmp_path: Path) -> None:
+    path = tmp_path / "fractional.csv"
+    path.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "7974,任天堂,2024,500000,0.766,189,記載なし\n",
+        encoding="utf-8",
+    )
+    points = load_financials(path)
+    assert points[0].equity_ratio == 76.6
 
 
 def test_missing_column_raises() -> None:

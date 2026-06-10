@@ -25,6 +25,34 @@ def _csv_zip(cf: str = "1234567", payout: str = "40.1", dps: str = "41.0") -> by
     return buffer.getvalue()
 
 
+def _csv_zip_with_summary(current_dps: str, summary: dict[str, str]) -> bytes:
+    """A filing whose 主要な経営指標等 table carries split-adjusted dividends.
+
+    ``summary`` maps a relative-year context (e.g. ``CurrentYearDuration``,
+    ``Prior1YearDuration``) to the per-share dividend reported in that column.
+    """
+
+    columns = [
+        "要素ID", "項目名", "コンテキストID", "相対年度", "連結・個別",
+        "期間・時点", "ユニットID", "単位", "値",
+    ]
+    rows = [
+        "x:Cf\t営業活動によるキャッシュ・フロー\tCY\t当期\t連結\t期間\tJPY\t百万円\t1234567",
+        "x:Po\t配当性向\tCY\t当期\t連結\t期間\tPure\t％\t40.1",
+        f"x:Dps\t１株当たり配当\tCurrentYearDuration\t当期\t連結\t期間\tJPY\t円\t{current_dps}",
+    ]
+    for context, value in summary.items():
+        rows.append(
+            "jpcrp_cor:DividendPaidPerShareSummaryOfBusinessResults\t"
+            f"１株当たり配当額\t{context}\t当期\t連結\t期間\tJPY\t円\t{value}"
+        )
+    text = "\r\n".join(["\t".join(columns), *rows]) + "\r\n"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("XBRL_TO_CSV/jpcrp.csv", text.encode("utf-16"))
+    return buffer.getvalue()
+
+
 class _FakeEdinetClient:
     """Returns canned document lists per date and a canned archive per doc id."""
 
@@ -265,6 +293,56 @@ def test_ingest_builds_financials_csv_and_detects_dividend_cut(tmp_path: Path) -
     mufg = companies[0]
     assert mufg["dividend_cut_years"] == [2024]
     assert mufg["dividend_trend"] == "declining"
+
+
+def test_ingest_corrects_split_unadjusted_dividend_from_summary(tmp_path: Path) -> None:
+    # 任天堂-style: the old FY2023 filing reports a pre-split ¥1700 dividend while
+    # the latest filing's 5-year summary restates FY2023 split-adjusted to ¥170.
+    # The correction must remove the spurious "cut" 1700 -> 189.
+    client = _FakeEdinetClient(
+        {
+            "2026-06-08": [
+                _mufg_doc("S100Y24", "2024-06-21 09:00"),  # period_end 2024-03-31
+                {
+                    "docID": "S100Y23",
+                    "secCode": "83060",
+                    "filerName": "三菱UFJ",
+                    "docTypeCode": "120",
+                    "docDescription": "有価証券報告書",
+                    "periodEnd": "2023-03-31",
+                    "submitDateTime": "2023-06-21 09:00",
+                    "csvFlag": "1",
+                },
+            ],
+        },
+        archives={
+            "S100Y24": _csv_zip_with_summary(
+                "189",
+                {"CurrentYearDuration": "189", "Prior1YearDuration": "170"},
+            ),
+            "S100Y23": _csv_zip(dps="1700"),  # pre-split, unadjusted
+        },
+    )
+    target = EdinetTarget(
+        name="8306", ticker="8306", company="任天堂", doc_types=("120",), max_periods=2
+    )
+
+    result = ingest_targets(
+        client=client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=tmp_path / "edinet",
+    )
+
+    comparison = result["comparison"]
+    assert isinstance(comparison, dict)
+    companies = comparison["companies"]
+    assert isinstance(companies, list)
+    nintendo = companies[0]
+    # FY2023 corrected to the split-adjusted 170; no spurious cut, trend rises.
+    assert nintendo["dividend_series"] == [170.0, 189.0]
+    assert nintendo["dividend_cut_years"] == []
+    assert nintendo["dividend_trend"] == "increasing"
 
 
 def test_financials_csv_is_durable_across_runs_after_pruning(tmp_path: Path) -> None:

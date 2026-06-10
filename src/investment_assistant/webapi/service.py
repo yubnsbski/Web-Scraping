@@ -523,6 +523,7 @@ def _portfolio_simulate(body: JsonDict) -> JsonDict:
         reinvest=_as_bool(body.get("reinvest"), True),
         growth_rate=_as_float(body.get("growth_rate"), 0.0),
         auto_weight=str(body.get("auto_weight") or "equal"),
+        optimization=str(body.get("optimization") or "none"),
         dividend_basis=str(body.get("dividend_basis") or "conservative"),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
     )

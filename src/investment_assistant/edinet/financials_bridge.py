@@ -19,13 +19,22 @@ import csv
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from investment_assistant.edinet.csv_extract import FinancialValue, select_metrics
+from investment_assistant.edinet.csv_extract import (
+    DIVIDEND_ANNUAL_ELEMENT,
+    FinancialValue,
+    select_dividend_per_share,
+    select_metrics,
+    summary_series_offsets,
+)
 from investment_assistant.edinet.models import EdinetDocument
-from investment_assistant.financials.models import FINANCIAL_COLUMNS, FinancialPoint
+from investment_assistant.financials.models import (
+    FINANCIAL_COLUMNS,
+    FinancialPoint,
+    equity_ratio_to_percent,
+)
 
 _LABEL_OPERATING_CF = "営業活動によるキャッシュ・フロー"
 _LABEL_EQUITY_RATIO = "自己資本比率"
-_LABEL_DIVIDEND = "１株当たり配当"
 _LABEL_PAYOUT = "配当性向"
 
 
@@ -47,7 +56,8 @@ def build_financial_point(
     if fiscal_year is None:
         return None
 
-    grouped = select_metrics(values)
+    materialized = list(values)
+    grouped = select_metrics(materialized)
 
     def first_value(label: str) -> float | None:
         items = grouped.get(label)
@@ -55,7 +65,8 @@ def build_financial_point(
             return None
         return _to_float(items[0].value)
 
-    dividend = first_value(_LABEL_DIVIDEND)
+    dividend_value = select_dividend_per_share(materialized)
+    dividend = _to_float(dividend_value.value) if dividend_value is not None else None
     if dividend is None:
         return None
 
@@ -66,10 +77,29 @@ def build_financial_point(
         name=name,
         fiscal_year=fiscal_year,
         operating_cf=first_value(_LABEL_OPERATING_CF) or 0.0,
-        equity_ratio=first_value(_LABEL_EQUITY_RATIO) or 0.0,
+        equity_ratio=equity_ratio_to_percent(first_value(_LABEL_EQUITY_RATIO)) or 0.0,
         dividend_per_share=dividend,
         payout_policy=f"配当性向 {payout}%" if payout is not None else "",
     )
+
+
+def summary_dividend_by_year(
+    document: EdinetDocument, values: Iterable[FinancialValue]
+) -> dict[int, float]:
+    """Map fiscal year -> annual dividend from the filing's 5-year summary table.
+
+    The "主要な経営指標等" table restates the last five years on one consistent,
+    split-adjusted basis, so taking it from the *newest* filing yields a series
+    without the discontinuities that arise from stitching together contemporaneous
+    per-filing values across a stock split (e.g. 任天堂's ¥2,220 → ¥189 jump).
+    Returns ``{}`` when the filing predates this taxonomy element.
+    """
+
+    base_year = _fiscal_year(document.period_end)
+    if base_year is None:
+        return {}
+    offsets = summary_series_offsets(values, DIVIDEND_ANNUAL_ELEMENT)
+    return {base_year - offset: value for offset, value in offsets.items()}
 
 
 def dedupe_points(points: Iterable[FinancialPoint]) -> list[FinancialPoint]:
@@ -116,7 +146,10 @@ def point_from_mapping(row: Mapping[str, object]) -> FinancialPoint | None:
         name=str(row.get("name") or "").strip(),
         fiscal_year=fiscal_year,
         operating_cf=_to_float(str(row.get("operating_cf") or "0")) or 0.0,
-        equity_ratio=_to_float(str(row.get("equity_ratio") or "0")) or 0.0,
+        equity_ratio=equity_ratio_to_percent(
+            _to_float(str(row.get("equity_ratio") or "0"))
+        )
+        or 0.0,
         dividend_per_share=_to_float(str(row.get("dividend_per_share") or "0")) or 0.0,
         payout_policy=str(row.get("payout_policy") or ""),
     )
