@@ -14,6 +14,7 @@ from investment_assistant.investment import (
 )
 from investment_assistant.investment.candidates import screen_from_values
 from investment_assistant.investment.provider_policy import ensure_provider_allowed
+from investment_assistant.portfolio.simulator import plan_for_target_dividend
 
 HOLDINGS_CSV = (
     "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
@@ -90,9 +91,23 @@ def test_provider_policy_blocks_uncontracted_production_provider() -> None:
 
 def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None:
     holdings = holdings_from_payload({"csv_text": HOLDINGS_CSV})
+    target_result = plan_for_target_dividend(
+        target_annual_dividend=10_000,
+        holdings=[
+            {
+                "ticker": "8306",
+                "name": "MUFG",
+                "price": 1200,
+                "dividend_per_share": 45,
+            }
+        ],
+        dividend_basis="latest",
+        financials_csv=_financials(tmp_path),
+    )
     report = build_investment_monthly_report(
         holdings,
         candidates=[{"code": "8306", "asset_type": "stock"}],
+        target_result=target_result,
         financials_csv=_financials(tmp_path),
     )
 
@@ -101,7 +116,33 @@ def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None
     kpis = report["kpis"]
     assert isinstance(kpis, list)
     assert all(item.get("evidence_keys") for item in kpis if isinstance(item, dict))
+    metric_keys = {str(item.get("metric_key")) for item in kpis if isinstance(item, dict)}
+    assert {
+        "concentration_top_weight",
+        "concentration_hhi",
+        "concentration_effective_names",
+        "target_annual_dividend",
+        "target_achieved_annual_dividend",
+        "target_required_budget",
+        "target_reachable",
+        "target_concentration_top_weight",
+        "target_concentration_hhi",
+        "target_effective_names",
+    } <= metric_keys
     assert report["evidence"]
+    evidence_keys = {
+        str(item.get("claim_key"))
+        for item in report["evidence"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert {
+        "portfolio.concentration.current",
+        "portfolio.target.input",
+        "portfolio.target.achieved",
+        "portfolio.target.required_budget",
+        "portfolio.target.reachable",
+        "portfolio.target.concentration",
+    } <= evidence_keys
     assert "投資助言" in str(report["disclaimer"])
 
 

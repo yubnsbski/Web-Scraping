@@ -668,6 +668,7 @@ def _investment_monthly_report(body: JsonDict) -> JsonDict:
         build_investment_monthly_report,
         holdings_from_payload,
     )
+    from investment_assistant.portfolio.simulator import plan_for_target_dividend
 
     raw_candidates = body.get("candidates")
     candidates: list[dict[str, object]] = []
@@ -677,11 +678,63 @@ def _investment_monthly_report(body: JsonDict) -> JsonDict:
             for item in raw_candidates
             if isinstance(item, dict)
         ]
+    holdings = holdings_from_payload(body)
+    financials_csv = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
+    target_result: JsonDict | None = None
+    target_annual_dividend = _as_float(body.get("target_annual_dividend"), 0.0)
+    if target_annual_dividend > 0:
+        target_result = plan_for_target_dividend(
+            target_annual_dividend=target_annual_dividend,
+            holdings=_target_planner_holdings(holdings),
+            years=_as_int(body.get("years"), 10),
+            reinvest=_as_bool(body.get("reinvest"), True),
+            growth_rate=_as_float(body.get("growth_rate"), 0.0),
+            auto_weight=str(body.get("auto_weight") or "equal"),
+            optimization=str(body.get("optimization") or "balanced"),
+            dividend_basis=str(body.get("dividend_basis") or "conservative"),
+            financials_csv=financials_csv,
+        )
     return build_investment_monthly_report(
-        holdings_from_payload(body),
+        holdings,
         candidates=candidates,
-        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        target_result=target_result,
+        financials_csv=financials_csv,
     )
+
+
+def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for holding in holdings:
+        quantity = _as_float(getattr(holding, "quantity", 0.0), 0.0)
+        price = _as_float(
+            getattr(holding, "current_price", None),
+            _as_float(getattr(holding, "avg_cost", 0.0), 0.0),
+        )
+        if quantity <= 0 or price <= 0:
+            continue
+        asset_type = str(getattr(holding, "asset_type", "") or "").lower()
+        row: dict[str, object] = {
+            "ticker": str(getattr(holding, "ticker_or_fund_code", "") or ""),
+            "name": str(getattr(holding, "name", "") or ""),
+            "price": price,
+            "shares": quantity,
+            "lot": 100 if asset_type == "stock" else 1,
+        }
+        dividend_per_unit = _dividend_per_unit_for_target(holding, quantity)
+        if dividend_per_unit is not None:
+            row["dividend_per_share"] = dividend_per_unit
+        rows.append(row)
+    return rows
+
+
+def _dividend_per_unit_for_target(holding: Any, quantity: float) -> float | None:
+    annual_income = _optional_float(getattr(holding, "annual_income", None))
+    if annual_income is not None and quantity > 0:
+        return max(annual_income / quantity, 0.0)
+    distribution_per_unit = _optional_float(getattr(holding, "distribution_per_unit", None))
+    if distribution_per_unit is not None:
+        return max(distribution_per_unit, 0.0)
+    return None
 
 
 # --- helpers ---------------------------------------------------------------
