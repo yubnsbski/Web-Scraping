@@ -316,13 +316,16 @@ function useAsync<T>() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<T | null>(null);
-  async function run(fn: () => Promise<T>) {
+  async function run(fn: () => Promise<T>): Promise<T | null> {
     setLoading(true);
     setError(null);
     try {
-      setData(await fn());
+      const result = await fn();
+      setData(result);
+      return result;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -838,12 +841,19 @@ function HoldingsTab() {
   const validateHoldings = () =>
     validationState.run(() => api<Json>("/api/holdings/validate", { csv_text: csv }));
   const analyze = () =>
-    analysisState.run(() =>
-      api<Json>("/api/portfolio/analyze", {
+    analysisState.run(async () => {
+      const validation = await validationState.run(() =>
+        api<Json>("/api/holdings/validate", { csv_text: csv }),
+      );
+      if (!validation) throw new Error("Holding CSV validation could not complete.");
+      if (validation.valid !== true) {
+        throw new Error("Fix holding CSV validation errors before analysis.");
+      }
+      return api<Json>("/api/portfolio/analyze", {
         csv_text: csv,
         financials_csv: SAMPLE_FINANCIALS_PATH,
-      }),
-    );
+      });
+    });
   const loadSampleHoldings = () => setCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const loadMinimalHoldings = () => setCsv(SAMPLE_HOLDINGS_CSV);
   const loadHoldingTemplate = () =>
@@ -1134,8 +1144,17 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   const fundValidationState = useAsync<Json>();
 
   const screen = () =>
-    state.run(() =>
-      api<Json>("/api/candidates/screen", {
+    state.run(async () => {
+      if (includeFunds) {
+        const validation = await fundValidationState.run(() =>
+          api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
+        );
+        if (!validation) throw new Error("Fund CSV validation could not complete.");
+        if (validation.valid !== true) {
+          throw new Error("Fix fund CSV validation errors before screening.");
+        }
+      }
+      return api<Json>("/api/candidates/screen", {
         asset_types: [
           ...(includeStocks ? ["stock"] : []),
           ...(includeFunds ? ["fund"] : []),
@@ -1149,8 +1168,8 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
         funds_csv_text: fundsCsv,
         financials_csv: SAMPLE_FINANCIALS_PATH,
         sort_by: "score",
-      }),
-    );
+      });
+    });
   const loadProviderPolicyLedger = () =>
     providerState.run(() =>
       api<Json>("/api/providers/policy", {
