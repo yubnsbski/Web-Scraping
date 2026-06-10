@@ -1394,6 +1394,13 @@ function InvestmentReportTab() {
   const kpis: Json[] = Array.isArray(state.data?.kpis) ? state.data.kpis : [];
   const sections: Json[] = Array.isArray(state.data?.sections) ? state.data.sections : [];
   const evidence: Json[] = Array.isArray(state.data?.evidence) ? state.data.evidence : [];
+  const publishAudit: Json =
+    state.data?.publish_audit && typeof state.data.publish_audit === "object"
+      ? state.data.publish_audit
+      : {};
+  const auditIssues: Json[] = Array.isArray(publishAudit.issues)
+    ? publishAudit.issues
+    : [];
   const reports: Json[] = Array.isArray(historyState.data?.reports)
     ? historyState.data.reports
     : [];
@@ -1435,6 +1442,56 @@ function InvestmentReportTab() {
         </button>
       </div>
       <Status loading={state.loading} error={state.error} />
+
+      {state.data?.publish_audit && (
+        <div className="subpanel report-audit-panel">
+          <div className="report-audit-head">
+            <div>
+              <h3>Publish audit</h3>
+              <p className="hint">重要KPI、根拠、計算式、免責、自動売買無効化を確認します。</p>
+            </div>
+            <span className={`badge ${String(publishAudit.status) === "ok" ? "safe" : "warn"}`}>
+              {String(publishAudit.status ?? "unknown")}
+            </span>
+          </div>
+          <dl className="mini-stats">
+            <div>
+              <dt>issues</dt>
+              <dd>{Number(publishAudit.issue_count ?? auditIssues.length).toLocaleString()}</dd>
+            </div>
+            <div>
+              <dt>auto trading</dt>
+              <dd>{String(publishAudit.auto_trading ?? false)}</dd>
+            </div>
+            <div>
+              <dt>real API</dt>
+              <dd>{String(publishAudit.call_real_api ?? false)}</dd>
+            </div>
+          </dl>
+          {auditIssues.length > 0 && (
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>level</th>
+                  <th>code</th>
+                  <th>path</th>
+                  <th>message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditIssues.map((issue, index) => (
+                  <tr key={`${String(issue.code)}-${String(issue.path)}-${index}`}>
+                    <td><span className="badge warn">{String(issue.level)}</span></td>
+                    <td>{String(issue.code)}</td>
+                    <td className="mono">{String(issue.path)}</td>
+                    <td>{String(issue.message)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       <div className="subpanel report-history">
         <div className="report-history-head">

@@ -11,12 +11,18 @@ JsonDict = dict[str, Any]
 def render_investment_report_markdown(report: Mapping[str, object]) -> str:
     """Render a generated investment report as review-friendly Markdown."""
 
+    publish_audit = _mapping(report.get("publish_audit"))
     lines = [
         f"# {_text(report.get('title'), 'Investment monthly report')}",
         "",
         f"- generated_at: {_text(report.get('generated_at'), '-')}",
         f"- auto_trading: {_bool_text(report.get('auto_trading'))}",
         f"- call_real_api: {_bool_text(report.get('call_real_api'))}",
+        "",
+        "## Publish Audit",
+        "",
+        f"- status: {_text(publish_audit.get('status') if publish_audit else None, 'unknown')}",
+        f"- issue_count: {_text(publish_audit.get('issue_count') if publish_audit else None, '-')}",
         "",
         "## KPIs",
         "",
@@ -89,6 +95,10 @@ def _items(value: object) -> list[Mapping[str, object]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, Mapping)]
+
+
+def _mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
 
 
 def _join(value: object) -> str:

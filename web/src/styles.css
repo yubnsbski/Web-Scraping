@@ -565,6 +565,10 @@ details summary {
     grid-template-columns: 1fr;
   }
 
+  .mini-stats {
+    grid-template-columns: 1fr;
+  }
+
   .tabs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -948,9 +952,42 @@ textarea { min-height: 140px; }
   min-width: 640px;
 }
 
+.report-audit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mini-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.mini-stats div {
+  padding: 10px 12px;
+  border: 1px solid rgba(142, 161, 189, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.54);
+}
+
+.mini-stats dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mini-stats dd {
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+
 .nisa-alert-panel,
 .data-alert-panel,
 .income-alert-panel,
+.report-audit-panel,
 .csv-guidance-panel {
   overflow-x: auto;
 }
@@ -958,6 +995,7 @@ textarea { min-height: 140px; }
 .nisa-alert-panel table,
 .data-alert-panel table,
 .income-alert-panel table,
+.report-audit-panel table,
 .csv-guidance-panel table {
   min-width: 720px;
 }

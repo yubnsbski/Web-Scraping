@@ -9,6 +9,7 @@ from pathlib import Path
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
 from investment_assistant.investment.analysis import analyze_portfolio
 from investment_assistant.investment.models import DISCLAIMER, InvestmentHolding
+from investment_assistant.investment.report_audit import audit_investment_report
 
 
 def build_investment_monthly_report(
@@ -287,7 +288,7 @@ def build_investment_monthly_report(
             ),
         }
     )
-    return {
+    report: dict[str, object] = {
         "title": "投資月次レポート",
         "generated_at": generated_at,
         "kpis": kpis,
@@ -300,6 +301,8 @@ def build_investment_monthly_report(
         "auto_trading": False,
         "call_real_api": False,
     }
+    report["publish_audit"] = audit_investment_report(report)
+    return report
 
 
 def _kpi(

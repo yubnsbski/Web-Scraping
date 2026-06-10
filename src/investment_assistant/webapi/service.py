@@ -784,6 +784,23 @@ def _investment_report_markdown(body: JsonDict) -> JsonDict:
     }
 
 
+def _investment_report_audit(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_audit import audit_investment_report
+    from investment_assistant.investment.report_history import load_investment_report
+
+    report = body.get("report")
+    if not isinstance(report, dict):
+        report_id = str(body.get("id") or body.get("report_id") or "").strip()
+        if not report_id:
+            raise ApiError("report or report history id is required")
+        entry = load_investment_report(report_id, history_dir=_optional_history_dir(body))
+        loaded_report = entry.get("report")
+        if not isinstance(loaded_report, dict):
+            raise ApiError("saved report is invalid")
+        report = loaded_report
+    return audit_investment_report(report)
+
+
 def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for holding in holdings:
@@ -1231,6 +1248,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/investment/detail"): _investment_detail,
     ("POST", "/api/candidates/screen"): _candidates_screen,
     ("POST", "/api/reports/investment-monthly"): _investment_monthly_report,
+    ("POST", "/api/reports/investment-monthly/audit"): _investment_report_audit,
     ("POST", "/api/reports/investment-monthly/markdown"): _investment_report_markdown,
     ("GET", "/api/reports/investment-monthly/history"): _investment_report_history,
     ("POST", "/api/reports/investment-monthly/history"): _investment_report_history,

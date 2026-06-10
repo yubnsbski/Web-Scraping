@@ -7,10 +7,12 @@ from investment_assistant.investment.loader import (
     fund_profiles_from_payload,
     holdings_from_payload,
 )
+from investment_assistant.investment.report_audit import audit_investment_report
 from investment_assistant.investment.reporting import build_investment_monthly_report
 
 __all__ = [
     "analyze_portfolio",
+    "audit_investment_report",
     "build_investment_detail",
     "build_investment_monthly_report",
     "fund_profiles_from_payload",
