@@ -1190,6 +1190,18 @@ function InvestmentReportTab() {
       const entry = await api<Json>("/api/reports/investment-monthly/history/load", { id });
       return (entry.report as Json) ?? {};
     });
+  const deleteSavedReport = (id: string) => {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("保存済みレポートを削除しますか？")
+    ) {
+      return;
+    }
+    historyState.run(async () => {
+      await api<Json>("/api/reports/investment-monthly/history/delete", { id });
+      return api<Json>("/api/reports/investment-monthly/history");
+    });
+  };
   const loadReportSamples = () => {
     setHoldingsCsv(SAMPLE_HOLDINGS_CSV);
     setFundsCsv(SAMPLE_FUNDS_CSV);
@@ -1280,9 +1292,17 @@ function InvestmentReportTab() {
                     <dd>{Number(item.evidence_count ?? 0).toLocaleString()}件</dd>
                   </div>
                 </dl>
-                <button onClick={() => loadSavedReport(String(item.id))} disabled={state.loading}>
-                  再表示
-                </button>
+                <div className="history-actions">
+                  <button onClick={() => loadSavedReport(String(item.id))} disabled={state.loading}>
+                    再表示
+                  </button>
+                  <button
+                    onClick={() => deleteSavedReport(String(item.id))}
+                    disabled={historyState.loading}
+                  >
+                    削除
+                  </button>
+                </div>
               </article>
             ))}
           </div>

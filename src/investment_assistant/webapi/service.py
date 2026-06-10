@@ -728,6 +728,15 @@ def _investment_report_history_load(body: JsonDict) -> JsonDict:
     return load_investment_report(report_id, history_dir=_optional_history_dir(body))
 
 
+def _investment_report_history_delete(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_history import delete_investment_report
+
+    report_id = str(body.get("id") or body.get("report_id") or "").strip()
+    if not report_id:
+        raise ApiError("report history id is required")
+    return delete_investment_report(report_id, history_dir=_optional_history_dir(body))
+
+
 def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for holding in holdings:
@@ -1178,6 +1187,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/reports/investment-monthly/history"): _investment_report_history,
     ("POST", "/api/reports/investment-monthly/history"): _investment_report_history,
     ("POST", "/api/reports/investment-monthly/history/load"): _investment_report_history_load,
+    ("POST", "/api/reports/investment-monthly/history/delete"): _investment_report_history_delete,
     ("POST", "/api/financials/compare"): _financials_compare,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),

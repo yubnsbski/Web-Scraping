@@ -471,6 +471,22 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert saved["report"]["evidence"]
     assert "csv_text" not in saved["report"]
 
+    status, deleted = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history/delete",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert deleted["deleted"] is True
+
+    status, history = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/history",
+        {"history_dir": str(tmp_path / "report_history")},
+    )
+    assert status == 200
+    assert history["count"] == 0
+
 
 def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     status, payload = handle_api(

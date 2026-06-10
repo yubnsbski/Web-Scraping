@@ -85,6 +85,27 @@ def load_investment_report(
     return entry
 
 
+def delete_investment_report(
+    report_id: str,
+    *,
+    history_dir: str | Path | None = None,
+) -> JsonDict:
+    """Delete one saved report entry by id."""
+
+    safe_id = _safe_report_id(report_id)
+    folder = _history_dir(history_dir)
+    path = _entry_path(folder, safe_id)
+    if not path.exists():
+        raise FileNotFoundError(f"report history entry not found: {safe_id}")
+    path.unlink()
+    return {
+        "id": safe_id,
+        "deleted": True,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def _history_dir(history_dir: str | Path | None) -> Path:
     if history_dir is not None:
         return Path(history_dir)

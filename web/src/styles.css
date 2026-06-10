@@ -819,6 +819,7 @@ textarea { min-height: 140px; }
   .history-item { grid-template-columns: 1fr; }
   .report-history-head { display: grid; }
   .history-item dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-actions { display: grid; justify-content: stretch; }
   /* Full-width action buttons inside forms (not the scrollable tabs) */
   .form button,
   .compact-form button,
@@ -922,6 +923,13 @@ textarea { min-height: 140px; }
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .kpi-details {
