@@ -8,6 +8,7 @@ from investment_assistant.edinet.financials_bridge import (
     dedupe_points,
     point_from_mapping,
     point_to_row,
+    summary_dividend_by_year,
     write_financials_csv,
 )
 from investment_assistant.edinet.models import EdinetDocument
@@ -71,6 +72,33 @@ def test_build_financial_point_requires_dividend() -> None:
 def test_build_financial_point_requires_period_end() -> None:
     values = [_value("１株当たり配当", "41.0")]
     assert build_financial_point(_document(period_end=None), values, ticker="8306") is None
+
+
+def _summary_value(context_id: str, value: str) -> FinancialValue:
+    return FinancialValue(
+        item_name="１株当たり配当額",
+        value=value,
+        context_id=context_id,
+        unit="円",
+        consolidated="連結",
+        period="期間",
+        element_id="jpcrp_cor:DividendPaidPerShareSummaryOfBusinessResults",
+    )
+
+
+def test_summary_dividend_by_year_maps_offsets_to_fiscal_years() -> None:
+    values = [
+        _summary_value("CurrentYearDuration", "189"),
+        _summary_value("Prior1YearDuration", "170"),
+        _summary_value("Prior2YearDuration", "150"),
+    ]
+    series = summary_dividend_by_year(_document("2024-03-31"), values)
+    assert series == {2024: 189.0, 2023: 170.0, 2022: 150.0}
+
+
+def test_summary_dividend_by_year_empty_without_summary_element() -> None:
+    values = [_value("１株当たり配当", "60")]  # ordinary row, no summary element
+    assert summary_dividend_by_year(_document(), values) == {}
 
 
 def _point(ticker: str, fy: int, dps: float) -> FinancialPoint:

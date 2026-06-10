@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from investment_assistant.edinet.financials_bridge import (
     dedupe_points,
     point_from_mapping,
     point_to_row,
+    summary_dividend_by_year,
     write_financials_csv,
 )
 from investment_assistant.edinet.models import (
@@ -127,16 +129,30 @@ def ingest_targets(
             results.append(_status(target, "no_document"))
             continue
 
+        target_points: list[FinancialPoint] = []
+        newest_dividends: dict[int, float] = {}
+        newest_period = ""
         for document in selected:
-            record, point = _ingest_document(client, target, document, base_dir)
+            record, point, dividends = _ingest_document(client, target, document, base_dir)
             status = record["status"]
             if status == "ingested":
                 ingested += 1
             elif status == "cached":
                 cached += 1
             if point is not None:
-                points.append(point)
+                target_points.append(point)
+            period = document.period_end or ""
+            if dividends and period > newest_period:
+                newest_dividends = dividends
+                newest_period = period
             results.append(record)
+
+        # The newest filing's 5-year summary table is split-adjusted; use it to
+        # correct the per-share dividend on every point for this ticker so a stock
+        # split cannot leave a spurious cut/jump in the series.
+        if newest_dividends:
+            target_points = [_apply_dividend_correction(p, newest_dividends) for p in target_points]
+        points.extend(target_points)
 
     deduped = dedupe_points(points)
     # Merge with the durable history so pruning bulky filing files never loses
@@ -158,6 +174,17 @@ def ingest_targets(
         summary["financials_csv"] = write_financials_csv(merged, csv_path)
         summary["comparison"] = compare_financials(merged)
     return summary
+
+
+def _apply_dividend_correction(
+    point: FinancialPoint, dividends: dict[int, float]
+) -> FinancialPoint:
+    """Override a point's dividend with the split-adjusted summary-table value."""
+
+    corrected = dividends.get(point.fiscal_year)
+    if corrected is None or corrected == point.dividend_per_share:
+        return point
+    return replace(point, dividend_per_share=corrected)
 
 
 def _load_existing_points(csv_path: Path) -> list[FinancialPoint]:
@@ -199,9 +226,9 @@ def _ingest_document(
     target: EdinetTarget,
     document: EdinetDocument,
     base_dir: Path,
-) -> tuple[dict[str, object], FinancialPoint | None]:
+) -> tuple[dict[str, object], FinancialPoint | None, dict[int, float]]:
     if not document.has_csv:
-        return _status(target, "no_csv", doc_id=document.doc_id), None
+        return _status(target, "no_csv", doc_id=document.doc_id), None, {}
 
     out_path = base_dir / target.ticker / f"{document.doc_id}.txt"
     sidecar = out_path.with_name(f"{document.doc_id}.points.json")
@@ -209,13 +236,14 @@ def _ingest_document(
         record = _status(target, "cached", doc_id=document.doc_id)
         record["saved_path"] = str(out_path)
         record["period_end"] = document.period_end
-        return record, _read_sidecar_point(sidecar)
+        point, dividends = _read_sidecar(sidecar)
+        return record, point, dividends
 
     try:
         archive = client.download_document(document.doc_id, acquisition_type=ACQUISITION_CSV)
     except (OSError, EdinetApiError) as exc:
         _logger.warning("edinet download failed doc_id=%s error=%s", document.doc_id, exc)
-        return _status(target, "download_failed", doc_id=document.doc_id), None
+        return _status(target, "download_failed", doc_id=document.doc_id), None, {}
 
     values = parse_csv_archive(archive)
     text = _edinet_front_matter(document, target.ticker) + to_rag_text(
@@ -225,9 +253,11 @@ def _ingest_document(
     out_path.write_text(text, encoding="utf-8")
 
     point = build_financial_point(document, values, ticker=target.ticker, company=target.company)
+    dividends = summary_dividend_by_year(document, values)
     if point is not None:
         sidecar.write_text(
-            json.dumps(point_to_row(point), ensure_ascii=False), encoding="utf-8"
+            json.dumps(_sidecar_payload(point, dividends), ensure_ascii=False),
+            encoding="utf-8",
         )
 
     record = {
@@ -241,19 +271,55 @@ def _ingest_document(
         "values_extracted": len(values),
         "metrics": sorted(select_metrics(values).keys()),
     }
-    return record, point
+    return record, point, dividends
 
 
-def _read_sidecar_point(sidecar: Path) -> FinancialPoint | None:
+def _sidecar_payload(point: FinancialPoint, dividends: dict[int, float]) -> dict[str, object]:
+    payload: dict[str, object] = {"point": point_to_row(point)}
+    if dividends:
+        payload["dividend_by_year"] = {str(year): value for year, value in dividends.items()}
+    return payload
+
+
+def _read_sidecar(sidecar: Path) -> tuple[FinancialPoint | None, dict[int, float]]:
+    """Read a point and its split-adjusted dividend map (legacy bare-row aware)."""
+
     if not sidecar.is_file():
-        return None
+        return None, {}
     try:
-        row = json.loads(sidecar.read_text(encoding="utf-8"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None, {}
+    if not isinstance(data, dict):
+        return None, {}
+    # New format: {"point": {...}, "dividend_by_year": {...}}.
+    if "point" in data and isinstance(data["point"], dict):
+        point = point_from_mapping(data["point"])
+        dividends: dict[int, float] = {}
+        raw = data.get("dividend_by_year")
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                year = _to_int(key)
+                number = _to_number(value)
+                if year is not None and number is not None:
+                    dividends[year] = number
+        return point, dividends
+    # Legacy format: a bare CSV-row mapping.
+    return point_from_mapping(data), {}
+
+
+def _to_int(value: object) -> int | None:
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
         return None
-    if not isinstance(row, dict):
+
+
+def _to_number(value: object) -> float | None:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
         return None
-    return point_from_mapping(row)
 
 
 def _collect_documents(

@@ -20,9 +20,11 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from investment_assistant.edinet.csv_extract import (
+    DIVIDEND_ANNUAL_ELEMENT,
     FinancialValue,
     select_dividend_per_share,
     select_metrics,
+    summary_series_offsets,
 )
 from investment_assistant.edinet.models import EdinetDocument
 from investment_assistant.financials.models import (
@@ -79,6 +81,25 @@ def build_financial_point(
         dividend_per_share=dividend,
         payout_policy=f"配当性向 {payout}%" if payout is not None else "",
     )
+
+
+def summary_dividend_by_year(
+    document: EdinetDocument, values: Iterable[FinancialValue]
+) -> dict[int, float]:
+    """Map fiscal year -> annual dividend from the filing's 5-year summary table.
+
+    The "主要な経営指標等" table restates the last five years on one consistent,
+    split-adjusted basis, so taking it from the *newest* filing yields a series
+    without the discontinuities that arise from stitching together contemporaneous
+    per-filing values across a stock split (e.g. 任天堂's ¥2,220 → ¥189 jump).
+    Returns ``{}`` when the filing predates this taxonomy element.
+    """
+
+    base_year = _fiscal_year(document.period_end)
+    if base_year is None:
+        return {}
+    offsets = summary_series_offsets(values, DIVIDEND_ANNUAL_ELEMENT)
+    return {base_year - offset: value for offset, value in offsets.items()}
 
 
 def dedupe_points(points: Iterable[FinancialPoint]) -> list[FinancialPoint]:
