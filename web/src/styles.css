@@ -854,6 +854,19 @@ textarea { min-height: 140px; }
 .subpanel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .subpanel > h3 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 800; color: var(--text); }
 
+.validation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.validation-issues {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .kpi-details {
   position: relative;
   z-index: 1;

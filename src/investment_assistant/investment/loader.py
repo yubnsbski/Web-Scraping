@@ -71,6 +71,66 @@ def load_holdings_csv_text(text: str) -> list[InvestmentHolding]:
     return holdings
 
 
+def validate_holdings_csv_text(text: str) -> dict[str, object]:
+    """Validate holding CSV input without raising on row-level data errors."""
+
+    optional_columns = ("current_price", "annual_income", "distribution_per_unit")
+    expected_columns = (*HOLDING_COLUMNS, *optional_columns)
+    reader = csv.DictReader(io.StringIO(text.strip()))
+    fieldnames = list(reader.fieldnames or [])
+    rows = [dict(row) for row in reader]
+    errors: list[dict[str, object]] = []
+    warnings: list[dict[str, object]] = []
+    valid_holdings: list[InvestmentHolding] = []
+
+    if not fieldnames:
+        errors.append({"row": 1, "column": None, "message": "CSV header is required."})
+    duplicate_columns = sorted({name for name in fieldnames if fieldnames.count(name) > 1})
+    for column in duplicate_columns:
+        errors.append({"row": 1, "column": column, "message": "Duplicate CSV column."})
+    missing = [column for column in HOLDING_COLUMNS if column not in set(fieldnames)]
+    for column in missing:
+        errors.append({"row": 1, "column": column, "message": "Missing required CSV column."})
+    extra = [column for column in fieldnames if column not in set(expected_columns)]
+    for column in extra:
+        warnings.append({"row": 1, "column": column, "message": "Unknown column will be ignored."})
+    if not rows:
+        errors.append(
+            {"row": 1, "column": None, "message": "Holding CSV must contain at least one row."}
+        )
+
+    if not missing:
+        for row_number, row in enumerate(rows, start=2):
+            try:
+                holding = _holding_from_mapping(row, row=row_number)
+            except ValueError as exc:
+                message = str(exc)
+                errors.append(
+                    {
+                        "row": row_number,
+                        "column": _column_from_error(message),
+                        "message": message,
+                    }
+                )
+                continue
+            valid_holdings.append(holding)
+            warnings.extend(_holding_warnings(holding, row=row_number))
+
+    return {
+        "valid": not errors,
+        "row_count": len(rows),
+        "valid_row_count": len(valid_holdings),
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "errors": errors,
+        "warnings": warnings,
+        "required_columns": list(HOLDING_COLUMNS),
+        "optional_columns": list(optional_columns),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def load_funds_csv(path: str | Path) -> list[FundProfile]:
     return load_funds_csv_text(Path(path).read_text(encoding="utf-8"))
 
@@ -189,3 +249,39 @@ def _bool(value: object) -> bool:
 
 def dicts(items: Iterable[InvestmentHolding | FundProfile]) -> list[dict[str, object]]:
     return [item.to_dict() for item in items]
+
+
+def _holding_warnings(holding: InvestmentHolding, *, row: int) -> list[dict[str, object]]:
+    warnings: list[dict[str, object]] = []
+    if holding.asset_type not in {"stock", "fund"}:
+        warnings.append(
+            {
+                "row": row,
+                "column": "asset_type",
+                "message": "asset_type is not one of stock or fund.",
+            }
+        )
+    if holding.quantity == 0:
+        warnings.append({"row": row, "column": "quantity", "message": "quantity is zero."})
+    if holding.avg_cost == 0:
+        warnings.append({"row": row, "column": "avg_cost", "message": "avg_cost is zero."})
+    if holding.current_price is None:
+        warnings.append(
+            {
+                "row": row,
+                "column": "current_price",
+                "message": "current_price is missing; avg_cost will be used for valuation.",
+            }
+        )
+    return warnings
+
+
+def _column_from_error(message: str) -> str | None:
+    marker = ": "
+    if marker not in message:
+        return None
+    tail = message.split(marker, 1)[1]
+    for suffix in (" is required.", " must be numeric.", " must be >="):
+        if suffix in tail:
+            return tail.split(suffix, 1)[0]
+    return None

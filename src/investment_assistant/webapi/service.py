@@ -593,6 +593,18 @@ def _financials_compare(body: JsonDict) -> JsonDict:
     return compare_financials(load_financials(path))
 
 
+def _holdings_validate(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.loader import validate_holdings_csv_text
+
+    csv_text = body.get("csv_text")
+    if isinstance(csv_text, str) and csv_text.strip():
+        return validate_holdings_csv_text(csv_text)
+    path = body.get("path")
+    if isinstance(path, str) and path.strip():
+        return validate_holdings_csv_text(Path(path).read_text(encoding="utf-8"))
+    raise ApiError("csv_text or path is required")
+
+
 def _holdings_import(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.loader import holdings_from_payload
     from investment_assistant.investment.models import DISCLAIMER, HOLDING_COLUMNS
@@ -1136,6 +1148,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/universe"): _portfolio_universe,
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
+    ("POST", "/api/holdings/validate"): _holdings_validate,
     ("POST", "/api/holdings/import"): _holdings_import,
     ("POST", "/api/portfolio/analyze"): _portfolio_analyze,
     ("POST", "/api/investment/detail"): _investment_detail,

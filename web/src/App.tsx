@@ -362,6 +362,59 @@ function Status(props: { loading: boolean; error: string | null }) {
   return null;
 }
 
+function ValidationPanel({ data }: { data: Json }) {
+  const errors: Json[] = Array.isArray(data.errors) ? data.errors : [];
+  const warnings: Json[] = Array.isArray(data.warnings) ? data.warnings : [];
+  return (
+    <div className="subpanel validation-panel">
+      <h3>CSV validation</h3>
+      <div className="validation-summary">
+        <span className={data.valid ? "badge safe" : "badge warn"}>
+          {data.valid ? "valid" : "needs fixes"}
+        </span>
+        <span className="badge">{Number(data.row_count ?? 0).toLocaleString()} rows</span>
+        <span className="badge">
+          {Number(data.valid_row_count ?? 0).toLocaleString()} valid rows
+        </span>
+        <span className="badge warn">
+          {Number(data.error_count ?? 0).toLocaleString()} errors
+        </span>
+        <span className="badge">
+          {Number(data.warning_count ?? 0).toLocaleString()} warnings
+        </span>
+      </div>
+      {errors.length > 0 && <ValidationIssueTable title="Errors" rows={errors} />}
+      {warnings.length > 0 && <ValidationIssueTable title="Warnings" rows={warnings} />}
+    </div>
+  );
+}
+
+function ValidationIssueTable({ title, rows }: { title: string; rows: Json[] }) {
+  return (
+    <div className="validation-issues">
+      <b>{title}</b>
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>row</th>
+            <th>column</th>
+            <th>message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${title}-${index}-${String(row.row)}-${String(row.column)}`}>
+              <td className="mono">{String(row.row ?? "-")}</td>
+              <td className="mono">{String(row.column ?? "-")}</td>
+              <td>{String(row.message ?? "")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function makeCandidatePresetId(): string {
   const cryptoValue = globalThis.crypto;
   if (typeof cryptoValue?.randomUUID === "function") return cryptoValue.randomUUID();
@@ -765,9 +818,12 @@ function SearchTab() {
 
 function HoldingsTab() {
   const [csv, setCsv] = useState(SAMPLE_HOLDINGS_CSV);
+  const validationState = useAsync<Json>();
   const importState = useAsync<Json>();
   const analysisState = useAsync<Json>();
 
+  const validateCsv = () =>
+    validationState.run(() => api<Json>("/api/holdings/validate", { csv_text: csv }));
   const importHoldings = () =>
     importState.run(() => api<Json>("/api/holdings/import", { csv_text: csv }));
   const analyze = () =>
@@ -803,6 +859,9 @@ function HoldingsTab() {
       </Field>
       <div className="form">
         <button onClick={loadSampleHoldings}>サンプル保有CSVを読み込む</button>
+        <button onClick={validateCsv} disabled={validationState.loading}>
+          Validate CSV
+        </button>
         <button onClick={importHoldings} disabled={importState.loading}>
           形式を確認
         </button>
@@ -810,8 +869,11 @@ function HoldingsTab() {
           分析
         </button>
       </div>
+      <Status loading={validationState.loading} error={validationState.error} />
       <Status loading={importState.loading} error={importState.error} />
       <Status loading={analysisState.loading} error={analysisState.error} />
+
+      {validationState.data && <ValidationPanel data={validationState.data} />}
 
       {analysisState.data && (
         <section className="metric-grid">
