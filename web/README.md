@@ -1,11 +1,21 @@
 # Investment Assistant ダッシュボード（React + Vite）
 
-このAIの調査支援機能（RAG検索 / AIチャット / スコアリング / 予測 / 安全な取得 / 手動取込 / 予算・キャッシュ）を
-ブラウザから操作するローカルUIです。**投資助言・自動売買・証券口座連携は行いません。** UIから実Gemini
-APIを呼ぶことはありません（回答はローカル擬似クライアント）。
+日本株と投信に特化した、単一ユーザー向けの非助言PWAです。保有分析、条件フィルタ型の候補抽出、NISA枠、配当/分配金見込み、根拠付き投資レポートをブラウザから操作します。
 
-- フロントエンド: React + Vite + TypeScript（このディレクトリ）
-- バックエンド: Python 標準ライブラリの JSON API（`investment_assistant.webapi`、依存追加なし）
+本ツールは**投資助言・売買推奨・自動売買・証券口座注文連携を行いません**。候補抽出は、条件に一致した比較対象を提示するだけです。最終的な投資判断はユーザー本人が行います。
+
+- フロントエンド: React + Vite + TypeScript（この `web/` ディレクトリ）
+- バックエンド: Python 標準ライブラリの JSON API（`investment_assistant.webapi`）
+- Gemini API: UIから直接呼ばず、必要な場合も必ず `llm/service.py` 経由
+
+## 画面
+
+- `Dashboard`: 投資状況の概要
+- `Holdings`: 保有CSVの取込、評価額、損益、NISA枠、配当/分配金見込み
+- `Candidates`: 日本株と投信の条件フィルタ型候補抽出
+- `Detail`: 銘柄・投信の根拠付き確認
+- `Report`: 根拠と計算式付きの投資月次レポート
+- `Evidence`: RAGに登録済みの出典検索
 
 ## 起動手順
 
@@ -20,28 +30,67 @@ investment-assistant serve --port 8000
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173 （/api は :8000 にプロキシ）
+npm run dev
 ```
+
+開発時は `http://localhost:5173` を開きます。Viteの `/api` は `127.0.0.1:8000` にプロキシされます。
 
 本番配信（フロントをビルドしてPythonサーバから配信）:
 
 ```bash
-npm run build      # web/dist を生成
-investment-assistant serve --port 8000   # http://localhost:8000 で UI とAPIを同一ポート配信
+npm run build
+investment-assistant serve --port 8000
 ```
 
-## Data Intake の使い方
+この場合は `http://localhost:8000` でUIとAPIを同一ポート配信します。
 
-1. 自動取得したいIRページを入力し、先に `dry-run` を実行します。
-2. 許可される場合のみ `取得 + 登録` を実行します。保存後、`local_docs` をRAG DBへ自動登録します。
-3. 取得に失敗するページは、ブラウザで本文をコピーし、`手動テキスト取込` に貼り付けて `保存してRAG登録` を実行します。
-4. 登録後、AI Chatで想定質問をクリックするか、自分の質問を入力します。
+## 入力CSV
 
-## API（抜粋）
+保有CSVの必須列:
 
-`GET /api/health`, `GET /api/budget`, `POST /api/rag/search`, `POST /api/orchestrate`,
-`POST /api/scoring/rank`, `POST /api/forecast/evaluate|predict`, `POST /api/fetch-job/dry-run|run`,
-`POST /api/manual-doc/save`, `POST /api/cache/maintenance`。
+```csv
+asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source
+```
 
-取得（fetch-job）は必ず先に dry-run で robots.txt を確認してください。`node_modules/` と `dist/` は
-コミットしません。
+任意列:
+
+```csv
+current_price,annual_income,distribution_per_unit
+```
+
+投信プロファイルCSVの必須列:
+
+```csv
+fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id
+```
+
+任意列:
+
+```csv
+diversification_score
+```
+
+サンプルCSV:
+
+- `../examples/investment_holdings_sample.csv`
+- `../examples/investment_funds_sample.csv`
+- `../examples/financials_sample.csv`
+
+## API（投資MVP）
+
+- `POST /api/holdings/import`
+- `POST /api/portfolio/analyze`
+- `POST /api/candidates/screen`
+- `POST /api/reports/investment-monthly`
+- `POST /api/rag/search`
+- `POST /api/orchestrate`
+- `POST /api/fetch-job/dry-run`
+- `POST /api/fetch-job/run`
+- `POST /api/manual-doc/save`
+- `POST /api/cache/maintenance`
+
+市場価格取得はprovider policyの対象です。本番モードでは、契約済みとして明示されていないproviderを拒否します。
+
+## コミットしないもの
+
+`web/node_modules/`、`web/dist/`、`.cache/`、`data/`、`local_docs/`、`.venv/`、APIキーや個人情報を含むファイルはコミットしません。

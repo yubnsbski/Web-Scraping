@@ -849,6 +849,46 @@ textarea { min-height: 140px; }
 .subpanel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .subpanel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .subpanel > h3 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 800; color: var(--text); }
+
+.kpi-details {
+  position: relative;
+  z-index: 1;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(142, 161, 189, 0.18);
+  color: var(--muted);
+  font-size: 12px;
+}
+.kpi-details summary {
+  min-height: 28px;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+}
+.kpi-details dl {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.kpi-details div {
+  display: grid;
+  gap: 3px;
+}
+.kpi-details dt {
+  color: var(--faint);
+  font-weight: 700;
+}
+.kpi-details dd {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  line-height: 1.55;
+}
+.kpi-details code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  white-space: normal;
+}
 .check-field { flex-direction: row !important; align-items: center; gap: 8px; flex: 0 0 auto; }
 .check-field input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; }
 

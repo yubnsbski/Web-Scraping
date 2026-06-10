@@ -1,0 +1,4 @@
+fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score
+FND001,低コスト全世界株式,global_equity,0.12,reinvest,true,user_csv,0.95
+FND002,債券バランス型,balanced,0.35,distribution,true,user_csv,0.80
+FND999,高コストテーマ型,theme,1.20,distribution,false,user_csv,0.40
