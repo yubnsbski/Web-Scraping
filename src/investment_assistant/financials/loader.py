@@ -8,6 +8,7 @@ from pathlib import Path
 from investment_assistant.financials.models import (
     FINANCIAL_COLUMNS,
     FinancialPoint,
+    equity_ratio_to_percent,
 )
 
 DISCLAIMER = (
@@ -59,9 +60,10 @@ def load_financials(path: str | Path) -> list[FinancialPoint]:
                     operating_cf=_parse_float(
                         raw["operating_cf"], row=index, column="operating_cf"
                     ),
-                    equity_ratio=_parse_float(
-                        raw["equity_ratio"], row=index, column="equity_ratio"
-                    ),
+                    equity_ratio=equity_ratio_to_percent(
+                        _parse_float(raw["equity_ratio"], row=index, column="equity_ratio")
+                    )
+                    or 0.0,
                     dividend_per_share=_parse_float(
                         raw["dividend_per_share"], row=index, column="dividend_per_share"
                     ),

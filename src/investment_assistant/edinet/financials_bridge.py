@@ -21,7 +21,11 @@ from pathlib import Path
 
 from investment_assistant.edinet.csv_extract import FinancialValue, select_metrics
 from investment_assistant.edinet.models import EdinetDocument
-from investment_assistant.financials.models import FINANCIAL_COLUMNS, FinancialPoint
+from investment_assistant.financials.models import (
+    FINANCIAL_COLUMNS,
+    FinancialPoint,
+    equity_ratio_to_percent,
+)
 
 _LABEL_OPERATING_CF = "営業活動によるキャッシュ・フロー"
 _LABEL_EQUITY_RATIO = "自己資本比率"
@@ -66,7 +70,7 @@ def build_financial_point(
         name=name,
         fiscal_year=fiscal_year,
         operating_cf=first_value(_LABEL_OPERATING_CF) or 0.0,
-        equity_ratio=first_value(_LABEL_EQUITY_RATIO) or 0.0,
+        equity_ratio=equity_ratio_to_percent(first_value(_LABEL_EQUITY_RATIO)) or 0.0,
         dividend_per_share=dividend,
         payout_policy=f"配当性向 {payout}%" if payout is not None else "",
     )
@@ -116,7 +120,10 @@ def point_from_mapping(row: Mapping[str, object]) -> FinancialPoint | None:
         name=str(row.get("name") or "").strip(),
         fiscal_year=fiscal_year,
         operating_cf=_to_float(str(row.get("operating_cf") or "0")) or 0.0,
-        equity_ratio=_to_float(str(row.get("equity_ratio") or "0")) or 0.0,
+        equity_ratio=equity_ratio_to_percent(
+            _to_float(str(row.get("equity_ratio") or "0"))
+        )
+        or 0.0,
         dividend_per_share=_to_float(str(row.get("dividend_per_share") or "0")) or 0.0,
         payout_policy=str(row.get("payout_policy") or ""),
     )
