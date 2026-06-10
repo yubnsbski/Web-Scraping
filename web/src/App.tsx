@@ -45,6 +45,12 @@ type CandidateScreenPreset = {
   updatedAt: string;
 };
 
+type DetailSeed = {
+  code: string;
+  assetType: string;
+  nonce: number;
+};
+
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const CANDIDATE_SCREEN_PRESETS_STORAGE_KEY =
   "investment_assistant.candidate_screen_presets.v1";
@@ -88,7 +94,7 @@ const HERO_CARDS = [
   { label: "Holdings", value: "Analyze", desc: "保有・NISA・損益を集計" },
   { label: "Candidates", value: "Screen", desc: "条件一致だけを提示" },
   { label: "Report", value: "Evidence", desc: "計算式と根拠を保存" },
-  { label: "Detail", value: "RAG", desc: "銘柄・投信を根拠付き確認" },
+  { label: "Detail", value: "Review", desc: "銘柄・投信を根拠付き確認" },
 ] as const;
 
 const SUGGESTED_QUESTIONS = [
@@ -237,6 +243,15 @@ type TabId = (typeof TABS)[number]["id"];
 
 export function App() {
   const [tab, setTab] = useState<TabId>("dashboard");
+  const [detailSeed, setDetailSeed] = useState<DetailSeed>({
+    code: "7203",
+    assetType: "stock",
+    nonce: 0,
+  });
+  const openDetail = (code: string, assetType: string) => {
+    setDetailSeed({ code, assetType, nonce: Date.now() });
+    setTab("detail");
+  };
   return (
     <div className="app">
       <header className="terminal-hero">
@@ -278,8 +293,8 @@ export function App() {
       <main className="panel">
         {tab === "dashboard" && <DashboardTab />}
         {tab === "holdings" && <HoldingsTab />}
-        {tab === "candidates" && <CandidateScreenTab />}
-        {tab === "detail" && <AnswerTab />}
+        {tab === "candidates" && <CandidateScreenTab onOpenDetail={openDetail} />}
+        {tab === "detail" && <InvestmentDetailTab seed={detailSeed} />}
         {tab === "report" && <InvestmentReportTab />}
         {tab === "evidence" && <SearchTab />}
       </main>
@@ -450,6 +465,28 @@ function KpiEvidenceDetails({ kpi, evidence }: { kpi: Json; evidence: Json[] }) 
       </dl>
     </details>
   );
+}
+
+function formatDetailMetric(metric: Json): string {
+  const value = metric.value;
+  const key = String(metric.metric_key ?? "");
+  if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : "なし";
+  if (typeof value === "boolean") return value ? "はい" : "いいえ";
+  if (typeof value === "number") {
+    if (key.includes("ratio") || key.includes("pct") || key.includes("expense")) {
+      return `${value}%`;
+    }
+    if (
+      key.includes("market_value") ||
+      key.includes("pnl") ||
+      key.includes("income") ||
+      key.includes("cost")
+    ) {
+      return yen(value);
+    }
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+  return String(value ?? "-");
 }
 
 function GuideCards(props: { items: GuideCard[] }) {
@@ -770,7 +807,7 @@ function HoldingsTab() {
   );
 }
 
-function CandidateScreenTab() {
+function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, assetType: string) => void }) {
   const [includeStocks, setIncludeStocks] = useState(true);
   const [includeFunds, setIncludeFunds] = useState(true);
   const [excludeCut, setExcludeCut] = useState(true);
@@ -995,6 +1032,7 @@ function CandidateScreenTab() {
               <th>名称</th>
               <th>条件一致</th>
               <th>指標</th>
+              <th>詳細</th>
             </tr>
           </thead>
           <tbody>
@@ -1010,6 +1048,15 @@ function CandidateScreenTab() {
                 </td>
                 <td>
                   <pre>{JSON.stringify(item.metrics ?? {}, null, 2)}</pre>
+                </td>
+                <td>
+                  <button
+                    onClick={() =>
+                      onOpenDetail(String(item.code), String(item.asset_type))
+                    }
+                  >
+                    詳細
+                  </button>
                 </td>
               </tr>
             ))}
@@ -1104,6 +1151,148 @@ function InvestmentReportTab() {
           <pre>{JSON.stringify(evidence, null, 2)}</pre>
         </details>
       )}
+      {state.data?.disclaimer && <p className="hint">{String(state.data.disclaimer)}</p>}
+    </section>
+  );
+}
+
+function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
+  const [code, setCode] = useState(seed.code);
+  const [assetType, setAssetType] = useState(seed.assetType);
+  const [holdingsCsv, setHoldingsCsv] = useState(SAMPLE_HOLDINGS_CSV);
+  const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
+  const state = useAsync<Json>();
+
+  useEffect(() => {
+    setCode(seed.code);
+    setAssetType(seed.assetType || "auto");
+  }, [seed.assetType, seed.code, seed.nonce]);
+
+  const loadSamples = () => {
+    setHoldingsCsv(SAMPLE_HOLDINGS_CSV);
+    setFundsCsv(SAMPLE_FUNDS_CSV);
+  };
+  const loadDetail = () =>
+    state.run(() =>
+      api<Json>("/api/investment/detail", {
+        code,
+        asset_type: assetType === "auto" ? undefined : assetType,
+        csv_text: holdingsCsv,
+        funds_csv_text: fundsCsv,
+        financials_csv: SAMPLE_FINANCIALS_PATH,
+      }),
+    );
+
+  const metrics: Json[] = Array.isArray(state.data?.metrics) ? state.data.metrics : [];
+  const sections: Json[] = Array.isArray(state.data?.sections) ? state.data.sections : [];
+  const evidence: Json[] = Array.isArray(state.data?.evidence) ? state.data.evidence : [];
+
+  return (
+    <section className="tool-section">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Detail</p>
+          <h2>銘柄 / 投信 詳細</h2>
+        </div>
+        <span className="badge">比較材料のみ</span>
+      </div>
+      <p className="hint">
+        保有CSV、投信プロファイルCSV、EDINET由来財務CSVを使い、1コードの保有状況と根拠を確認します。
+        売買判断は代行しません。
+      </p>
+      <div className="form">
+        <Field label="コード">
+          <input value={code} onChange={(e) => setCode(e.target.value.trim())} />
+        </Field>
+        <Field label="種別">
+          <select value={assetType} onChange={(e) => setAssetType(e.target.value)}>
+            <option value="auto">自動判定</option>
+            <option value="stock">日本株</option>
+            <option value="fund">投信</option>
+          </select>
+        </Field>
+      </div>
+      <Field label="保有CSV">
+        <textarea rows={5} value={holdingsCsv} onChange={(e) => setHoldingsCsv(e.target.value)} />
+      </Field>
+      <Field label="投信プロファイルCSV">
+        <textarea rows={4} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
+      </Field>
+      <div className="form">
+        <button onClick={loadSamples}>サンプルCSVを読み込む</button>
+        <button className="primary" onClick={loadDetail} disabled={state.loading || !code.trim()}>
+          詳細を表示
+        </button>
+      </div>
+      <Status loading={state.loading} error={state.error} />
+
+      {state.data && (
+        <div className="subpanel">
+          <h3>
+            {String(state.data.code)} {String(state.data.name ?? "")}
+          </h3>
+          {state.data.available === false && (
+            <p className="status error">指定コードの保有・財務・投信プロファイルが見つかりません。</p>
+          )}
+          {state.data.non_advisory_boundary && (
+            <p className="hint">{String(state.data.non_advisory_boundary)}</p>
+          )}
+        </div>
+      )}
+
+      {metrics.length > 0 && (
+        <section className="metric-grid">
+          {metrics.map((metric) => (
+            <article className="metric-card" key={String(metric.metric_key)}>
+              <span>{String(metric.label)}</span>
+              <b>{formatDetailMetric(metric)}</b>
+              <small>{String(metric.formula ?? "")}</small>
+              <KpiEvidenceDetails kpi={metric} evidence={evidence} />
+            </article>
+          ))}
+        </section>
+      )}
+
+      {sections.length > 0 && (
+        <div className="subpanel">
+          <h3>確認ポイント</h3>
+          <div className="guide-grid">
+            {sections.map((section) => (
+              <article className="guide-card" key={String(section.key)}>
+                <h3>{String(section.title)}</h3>
+                <p>{String(section.body)}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {evidence.length > 0 && (
+        <div className="subpanel">
+          <h3>根拠一覧</h3>
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>claim</th>
+                <th>source</th>
+                <th>metric</th>
+                <th>formula</th>
+              </tr>
+            </thead>
+            <tbody>
+              {evidence.map((item) => (
+                <tr key={String(item.claim_key)}>
+                  <td className="mono">{String(item.claim_key)}</td>
+                  <td>{String(item.source_type)} / {String(item.source_ref)}</td>
+                  <td>{String(item.metric_key)}</td>
+                  <td className="hint">{String(item.formula ?? item.note ?? "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {state.data?.disclaimer && <p className="hint">{String(state.data.disclaimer)}</p>}
     </section>
   );
@@ -2707,6 +2896,7 @@ function OpsTab() {
 // Kept out of the MVP navigation. These legacy tools remain importable for
 // local experiments while the product surface stays investment-only and non-advisory.
 export const LEGACY_TOOL_TABS = {
+  answer: AnswerTab,
   scoring: ScoringTab,
   forecast: ForecastTab,
   scrape: ScrapeTab,
