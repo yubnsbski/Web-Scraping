@@ -475,9 +475,13 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert status == 200
     assert report["kpis"]
     assert report["evidence"]
+    assert report["publish_audit"]["status"] == "ok"
+    assert report["publish_audit"]["issue_count"] == 0
     history_summary = report["history"]
     assert history_summary["id"]
     assert history_summary["market_value"] == 670000.0
+    assert history_summary["publish_audit_status"] == "ok"
+    assert history_summary["publish_audit_issue_count"] == 0
     metric_keys = {
         str(item.get("metric_key"))
         for item in report["kpis"]  # type: ignore[index]
@@ -492,6 +496,15 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     }
     assert "portfolio.target.required_budget" in evidence_keys
     assert "portfolio.concentration.current" in evidence_keys
+
+    status, audit = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/audit",
+        {"report": report},
+    )
+    assert status == 200
+    assert audit["status"] == "ok"
+    assert audit["issue_count"] == 0
 
     status, history = handle_api(
         "POST",
@@ -514,6 +527,14 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert saved["report"]["evidence"]
     assert "csv_text" not in saved["report"]
 
+    status, saved_audit = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/audit",
+        {"history_dir": str(tmp_path / "report_history"), "id": history_summary["id"]},
+    )
+    assert status == 200
+    assert saved_audit["status"] == "ok"
+
     status, markdown = handle_api(
         "POST",
         "/api/reports/investment-monthly/markdown",
@@ -521,6 +542,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     )
     assert status == 200
     assert markdown["auto_trading"] is False
+    assert "## Publish Audit" in markdown["markdown"]
+    assert "status: ok" in markdown["markdown"]
     assert "## KPIs" in markdown["markdown"]
     assert "market_value" in markdown["markdown"]
     assert "portfolio.concentration.current" in markdown["markdown"]

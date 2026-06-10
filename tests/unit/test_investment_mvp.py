@@ -6,6 +6,7 @@ import pytest
 
 from investment_assistant.investment import (
     analyze_portfolio,
+    audit_investment_report,
     build_investment_detail,
     build_investment_monthly_report,
     fund_profiles_from_payload,
@@ -252,6 +253,11 @@ def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None
 
     assert report["auto_trading"] is False
     assert report["candidate_count"] == 1
+    publish_audit = report["publish_audit"]
+    assert isinstance(publish_audit, dict)
+    assert publish_audit["status"] == "ok"
+    assert publish_audit["issue_count"] == 0
+    assert publish_audit["issues"] == []
     kpis = report["kpis"]
     assert isinstance(kpis, list)
     assert all(item.get("evidence_keys") for item in kpis if isinstance(item, dict))
@@ -284,6 +290,38 @@ def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None
         "portfolio.target.concentration",
     } <= evidence_keys
     assert "投資助言" in str(report["disclaimer"])
+
+
+def test_audit_investment_report_flags_missing_evidence_reference(tmp_path: Path) -> None:
+    report = build_investment_monthly_report(
+        holdings_from_payload({"csv_text": HOLDINGS_CSV}),
+        financials_csv=_financials(tmp_path),
+    )
+    kpis = report["kpis"]
+    assert isinstance(kpis, list)
+    first_kpi = kpis[0]
+    assert isinstance(first_kpi, dict)
+    broken = {
+        **report,
+        "kpis": [
+            {
+                **first_kpi,
+                "evidence_keys": ["missing.claim"],
+            }
+        ],
+    }
+
+    audit = audit_investment_report(broken)
+
+    assert audit["status"] == "error"
+    issue_codes = {
+        str(item.get("code"))
+        for item in audit["issues"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert "kpi_evidence_key_not_found" in issue_codes
+    assert audit["auto_trading"] is False
+    assert audit["call_real_api"] is False
 
 
 def test_stock_detail_combines_holding_and_financial_evidence(tmp_path: Path) -> None:

@@ -151,6 +151,8 @@ def _summary(
         "target_reachable": _kpi_value(kpis, "target_reachable"),
         "candidate_count": report.get("candidate_count"),
         "evidence_count": _sequence_len(report.get("evidence")),
+        "publish_audit_status": _publish_audit_value(report, "status", "unknown"),
+        "publish_audit_issue_count": _publish_audit_value(report, "issue_count", None),
         "auto_trading": False,
         "call_real_api": False,
     }
@@ -189,6 +191,17 @@ def _kpi_value(kpis: Mapping[str, Mapping[str, object]], key: str) -> object:
 
 def _sequence_len(value: object) -> int:
     return len(value) if isinstance(value, list) else 0
+
+
+def _publish_audit_value(
+    report: Mapping[str, object],
+    key: str,
+    fallback: object,
+) -> object:
+    audit = report.get("publish_audit")
+    if not isinstance(audit, Mapping):
+        return fallback
+    return audit.get(key, fallback)
 
 
 def _read_entries(folder: Path) -> list[JsonDict]:
