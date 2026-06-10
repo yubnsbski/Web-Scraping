@@ -384,6 +384,25 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert analysis["summary"]["market_value"] == 670000.0
     assert analysis["summary"]["nisa"]["status"] == "ok"
     assert analysis["summary"]["nisa"]["alerts"] == []
+    assert analysis["summary"]["data_quality"]["missing_timestamp_count"] == 2
+
+    status, production_analysis = handle_api(
+        "POST",
+        "/api/portfolio/analyze",
+        {
+            "csv_text": (
+                "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,"
+                "tax_wrapper,source,current_price,annual_income,distribution_per_unit,"
+                "data_provider,price_as_of\n"
+                "stock,8306,MUFG,100,1000,tokutei,taxable,stooq_public_csv,1200,,,"
+                "stooq_public_csv,2020-01-01\n"
+            ),
+            "financials_csv": str(financials),
+            "runtime_mode": "production",
+        },
+    )
+    assert status == 200
+    assert production_analysis["summary"]["data_quality"]["provider_blocked_count"] == 1
 
     status, candidates = handle_api(
         "POST",

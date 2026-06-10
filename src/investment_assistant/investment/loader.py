@@ -111,6 +111,8 @@ def _holding_from_mapping(mapping: Mapping[str, object], *, row: int) -> Investm
         distribution_per_unit=_optional_float(
             mapping.get("distribution_per_unit"), row=row, column="distribution_per_unit"
         ),
+        data_provider=_optional_text(mapping.get("data_provider")),
+        price_as_of=_optional_text(mapping.get("price_as_of")),
     )
 
 
@@ -151,6 +153,11 @@ def _required_text(mapping: Mapping[str, object], column: str, *, row: int) -> s
     if not value:
         raise ValueError(f"Row {row}: {column} is required.")
     return value
+
+
+def _optional_text(value: object) -> str | None:
+    text = _text(value, default="")
+    return text or None
 
 
 def _required_float(

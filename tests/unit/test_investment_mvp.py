@@ -61,6 +61,10 @@ def test_analyze_mixed_stock_and_fund_portfolio(tmp_path: Path) -> None:
     assert nisa["status"] == "ok"
     assert nisa["growth_status"] == "ok"
     assert nisa["alerts"] == []
+    data_quality = summary["data_quality"]
+    assert isinstance(data_quality, dict)
+    assert data_quality["status"] == "info"
+    assert data_quality["missing_timestamp_count"] == 2
     assert result["auto_trading"] is False
     assert "投資助言" in str(result["disclaimer"])
 
@@ -87,6 +91,47 @@ def test_analyze_portfolio_flags_nisa_cap_usage(tmp_path: Path) -> None:
     assert isinstance(alerts, list)
     assert alerts[0]["code"] == "nisa_growth_cap_exceeded"
     assert alerts[0]["level"] == "error"
+
+
+def test_analyze_portfolio_flags_data_quality_warnings(tmp_path: Path) -> None:
+    holdings_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of\n"
+        "stock,8306,MUFG,100,1000,tokutei,taxable,stooq_public_csv,1200,,,"
+        "stooq_public_csv,2020-01-01\n"
+        "fund,F001,No Current Price Fund,10,10000,nisa,nisa_tsumitate,user_csv,,,30,"
+        "user_csv,\n"
+    )
+    result = analyze_portfolio(
+        holdings_from_payload({"csv_text": holdings_csv}),
+        financials_csv=_financials(tmp_path),
+        runtime_mode="production",
+    )
+
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    data_quality = summary["data_quality"]
+    assert isinstance(data_quality, dict)
+    assert data_quality["status"] == "error"
+    assert data_quality["provider_blocked_count"] == 1
+    assert data_quality["stale_price_count"] == 1
+    assert data_quality["missing_price_count"] == 1
+    alerts = data_quality["alerts"]
+    assert isinstance(alerts, list)
+    alert_codes = {str(alert.get("code")) for alert in alerts if isinstance(alert, dict)}
+    assert {
+        "provider_not_production_allowed",
+        "price_stale",
+        "price_missing_fallback_avg_cost",
+    } <= alert_codes
+    evidence_keys = {
+        str(item.get("claim_key"))
+        for item in result["evidence"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert "portfolio.data_quality" in evidence_keys
+    assert "buy" not in str(result).lower()
+    assert "sell" not in str(result).lower()
 
 
 def test_candidate_screen_returns_condition_matches_not_recommendations(tmp_path: Path) -> None:
@@ -166,6 +211,7 @@ def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None
     }
     assert {
         "portfolio.concentration.current",
+        "portfolio.data_quality",
         "portfolio.target.input",
         "portfolio.target.achieved",
         "portfolio.target.required_budget",

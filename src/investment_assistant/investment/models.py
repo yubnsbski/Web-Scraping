@@ -50,6 +50,8 @@ class InvestmentHolding:
     current_price: float | None = None
     annual_income: float | None = None
     distribution_per_unit: float | None = None
+    data_provider: str | None = None
+    price_as_of: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
