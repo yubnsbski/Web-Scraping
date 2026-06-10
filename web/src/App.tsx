@@ -770,14 +770,73 @@ function SearchTab() {
 
 // --- Investment-only MVP --------------------------------------------------
 
+function CsvValidationPanel(props: { title: string; data?: Json | null }) {
+  const data = props.data;
+  if (!data) return null;
+  const errors: Json[] = Array.isArray(data.errors) ? data.errors : [];
+  const warnings: Json[] = Array.isArray(data.warnings) ? data.warnings : [];
+  const rows = [...errors, ...warnings];
+  const valid = data.valid === true;
+  return (
+    <div className="subpanel csv-validation-panel">
+      <div className="report-audit-head">
+        <div>
+          <h3>{props.title}</h3>
+          <p className="hint">
+            Parsed rows: <span className="mono">{String(data.count ?? 0)}</span>
+          </p>
+        </div>
+        <span className={`badge ${valid ? "safe" : "warn"}`}>
+          {valid ? "valid" : "needs fix"}
+        </span>
+      </div>
+      {rows.length > 0 ? (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>level</th>
+              <th>row</th>
+              <th>column</th>
+              <th>reason</th>
+              <th>message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((item, index) => (
+              <tr key={`${String(item.code)}-${String(item.row ?? item.column ?? index)}`}>
+                <td>
+                  <span className={String(item.level) === "error" ? "badge warn" : "badge"}>
+                    {String(item.level ?? "-")}
+                  </span>
+                </td>
+                <td className="mono">{String(item.row ?? "-")}</td>
+                <td className="mono">
+                  {Array.isArray(item.columns) ? item.columns.join(", ") : String(item.column ?? "-")}
+                </td>
+                <td>{String(item.code ?? "-")}</td>
+                <td>{String(item.message ?? "")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="hint">No blocking CSV issues were found.</p>
+      )}
+    </div>
+  );
+}
+
 function HoldingsTab() {
   const [csv, setCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const importState = useAsync<Json>();
   const analysisState = useAsync<Json>();
   const templateState = useAsync<Json>();
+  const validationState = useAsync<Json>();
 
   const importHoldings = () =>
     importState.run(() => api<Json>("/api/holdings/import", { csv_text: csv }));
+  const validateHoldings = () =>
+    validationState.run(() => api<Json>("/api/holdings/validate", { csv_text: csv }));
   const analyze = () =>
     analysisState.run(() =>
       api<Json>("/api/portfolio/analyze", {
@@ -834,6 +893,9 @@ function HoldingsTab() {
           CSVテンプレート
         </button>
         <button onClick={loadMinimalHoldings}>最小CSVを読み込む</button>
+        <button onClick={validateHoldings} disabled={validationState.loading}>
+          Validate CSV
+        </button>
         <button onClick={importHoldings} disabled={importState.loading}>
           形式を確認
         </button>
@@ -842,8 +904,10 @@ function HoldingsTab() {
         </button>
       </div>
       <Status loading={templateState.loading} error={templateState.error} />
+      <Status loading={validationState.loading} error={validationState.error} />
       <Status loading={importState.loading} error={importState.error} />
       <Status loading={analysisState.loading} error={analysisState.error} />
+      <CsvValidationPanel title="Holding CSV validation" data={validationState.data} />
 
       {inputWarnings.length > 0 && (
         <div className="subpanel csv-guidance-panel">
@@ -1067,6 +1131,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   const state = useAsync<Json>();
   const providerState = useAsync<Json>();
   const fundTemplateState = useAsync<Json>();
+  const fundValidationState = useAsync<Json>();
 
   const screen = () =>
     state.run(() =>
@@ -1108,6 +1173,10 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       setFundsCsv(String(template.csv_text ?? ""));
       return template;
     });
+  const validateFunds = () =>
+    fundValidationState.run(() =>
+      api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
+    );
   const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
 
   const savePreset = () => {
@@ -1281,12 +1350,17 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
         <button onClick={loadFundTemplate} disabled={fundTemplateState.loading}>
           投信テンプレート
         </button>
+        <button onClick={validateFunds} disabled={fundValidationState.loading}>
+          Validate funds CSV
+        </button>
         <button className="primary" onClick={screen} disabled={state.loading}>
           条件に一致する比較対象を表示
         </button>
       </div>
       <Status loading={fundTemplateState.loading} error={fundTemplateState.error} />
+      <Status loading={fundValidationState.loading} error={fundValidationState.error} />
       <Status loading={state.loading} error={state.error} />
+      <CsvValidationPanel title="Fund CSV validation" data={fundValidationState.data} />
       <div className="subpanel provider-ledger-panel">
         <div className="report-audit-head">
           <div>

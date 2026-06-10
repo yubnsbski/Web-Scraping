@@ -659,6 +659,86 @@ def test_investment_csv_template_routes_return_importable_samples() -> None:
     assert candidates["auto_trading"] is False
 
 
+def test_investment_csv_validation_routes_accept_template_samples() -> None:
+    status, holdings_template = handle_api(
+        "POST",
+        "/api/holdings/template",
+        {"include_examples": True},
+    )
+    assert status == 200
+
+    status, holdings_validation = handle_api(
+        "POST",
+        "/api/holdings/validate",
+        {"csv_text": holdings_template["csv_text"]},
+    )
+    assert status == 200
+    assert holdings_validation["valid"] is True
+    assert holdings_validation["count"] == 2
+    assert holdings_validation["errors"] == []
+    assert holdings_validation["warnings"] == []
+    assert holdings_validation["auto_trading"] is False
+    assert holdings_validation["call_real_api"] is False
+
+    status, funds_template = handle_api(
+        "POST",
+        "/api/funds/template",
+        {"include_examples": True},
+    )
+    assert status == 200
+
+    status, funds_validation = handle_api(
+        "POST",
+        "/api/funds/validate",
+        {"funds_csv_text": funds_template["csv_text"]},
+    )
+    assert status == 200
+    assert funds_validation["valid"] is True
+    assert funds_validation["count"] == 1
+    assert funds_validation["errors"] == []
+    assert funds_validation["auto_trading"] is False
+    assert funds_validation["call_real_api"] is False
+
+
+def test_holdings_csv_validation_reports_missing_columns() -> None:
+    status, payload = handle_api(
+        "POST",
+        "/api/holdings/validate",
+        {"csv_text": "asset_type,ticker_or_fund_code,name\nstock,7203,Toyota\n"},
+    )
+
+    assert status == 200
+    assert payload["valid"] is False
+    assert payload["count"] == 0
+    assert payload["errors"][0]["code"] == "required_column_missing"
+    assert "quantity" in payload["errors"][0]["columns"]
+
+
+def test_holdings_csv_validation_reports_row_errors() -> None:
+    bad_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,"
+        "tax_wrapper,source\n"
+        "stock,7203,Toyota,not-a-number,1800,tokutei,nisa_growth,user_csv\n"
+    )
+    status, payload = handle_api("POST", "/api/holdings/validate", {"csv_text": bad_csv})
+
+    assert status == 200
+    assert payload["valid"] is False
+    assert payload["errors"][0]["code"] == "row_invalid"
+    assert payload["errors"][0]["row"] == 2
+    assert payload["errors"][0]["column"] == "quantity"
+
+
+def test_fund_csv_validation_requires_input_source() -> None:
+    status, payload = handle_api("POST", "/api/funds/validate", {})
+
+    assert status == 200
+    assert payload["valid"] is False
+    assert payload["errors"][0]["code"] == "input_missing"
+    assert payload["auto_trading"] is False
+    assert payload["call_real_api"] is False
+
+
 def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     status, payload = handle_api(
         "POST",
