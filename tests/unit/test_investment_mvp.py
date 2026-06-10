@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,12 @@ from investment_assistant.investment.candidates import screen_from_values
 from investment_assistant.investment.provider_policy import (
     ensure_provider_allowed,
     provider_policy_ledger,
+)
+from investment_assistant.investment.report_history import (
+    list_investment_reports,
+    load_investment_report,
+    save_investment_report,
+    verify_investment_report_history,
 )
 from investment_assistant.portfolio.simulator import plan_for_target_dividend
 
@@ -313,6 +320,61 @@ def test_investment_monthly_report_has_evidence_for_kpis(tmp_path: Path) -> None
         "portfolio.target.concentration",
     } <= evidence_keys
     assert "投資助言" in str(report["disclaimer"])
+
+
+def test_report_history_integrity_detects_saved_tampering(tmp_path: Path) -> None:
+    report = build_investment_monthly_report(
+        holdings_from_payload({"csv_text": HOLDINGS_CSV}),
+        financials_csv=_financials(tmp_path),
+    )
+    history_dir = tmp_path / "report_history"
+    summary = save_investment_report(report, history_dir=history_dir)
+    report_id = str(summary["id"])
+
+    assert summary["integrity_status"] == "ok"
+    assert isinstance(summary["report_hash"], str)
+    assert len(str(summary["report_hash"])) == 64
+    loaded = load_investment_report(report_id, history_dir=history_dir)
+    assert loaded["integrity_status"] == "ok"
+    verified = verify_investment_report_history(report_id, history_dir=history_dir)
+    assert verified["integrity_status"] == "ok"
+
+    path = history_dir / f"{report_id}.json"
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    entry["report"]["candidate_count"] = 999
+    path.write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    tampered = load_investment_report(report_id, history_dir=history_dir)
+    assert tampered["integrity_status"] == "tampered"
+    assert tampered["summary"]["integrity_status"] == "tampered"
+    assert tampered["report_hash"] != tampered["calculated_report_hash"]
+    listed = list_investment_reports(history_dir=history_dir)
+    assert listed["reports"][0]["integrity_status"] == "tampered"
+
+
+def test_report_history_integrity_marks_legacy_entries_unknown(tmp_path: Path) -> None:
+    report = build_investment_monthly_report(
+        holdings_from_payload({"csv_text": HOLDINGS_CSV}),
+        financials_csv=_financials(tmp_path),
+    )
+    history_dir = tmp_path / "report_history"
+    history_dir.mkdir()
+    legacy = {
+        "id": "legacy",
+        "saved_at": "2026-06-10T00:00:00+00:00",
+        "summary": {"id": "legacy", "saved_at": "2026-06-10T00:00:00+00:00"},
+        "report": report,
+    }
+    (history_dir / "legacy.json").write_text(
+        json.dumps(legacy, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    loaded = load_investment_report("legacy", history_dir=history_dir)
+    assert loaded["integrity_status"] == "unknown"
+    assert loaded["summary"]["integrity_status"] == "unknown"
+    listed = list_investment_reports(history_dir=history_dir)
+    assert listed["reports"][0]["integrity_status"] == "unknown"
 
 
 def test_audit_investment_report_flags_missing_evidence_reference(tmp_path: Path) -> None:

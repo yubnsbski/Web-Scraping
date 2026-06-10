@@ -763,6 +763,15 @@ def _investment_report_history_delete(body: JsonDict) -> JsonDict:
     return delete_investment_report(report_id, history_dir=_optional_history_dir(body))
 
 
+def _investment_report_history_verify(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.report_history import verify_investment_report_history
+
+    report_id = str(body.get("id") or body.get("report_id") or "").strip()
+    if not report_id:
+        raise ApiError("report history id is required")
+    return verify_investment_report_history(report_id, history_dir=_optional_history_dir(body))
+
+
 def _investment_report_history_compare(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.report_compare import compare_investment_reports
     from investment_assistant.investment.report_history import load_investment_report
@@ -1270,6 +1279,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/reports/investment-monthly/history"): _investment_report_history,
     ("POST", "/api/reports/investment-monthly/history/load"): _investment_report_history_load,
     ("POST", "/api/reports/investment-monthly/history/delete"): _investment_report_history_delete,
+    ("POST", "/api/reports/investment-monthly/history/verify"): _investment_report_history_verify,
     ("POST", "/api/reports/investment-monthly/history/compare"): _investment_report_history_compare,
     ("POST", "/api/financials/compare"): _financials_compare,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
