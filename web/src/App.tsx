@@ -423,44 +423,110 @@ function writeCandidateScreenPresets(presets: CandidateScreenPreset[]): boolean 
   }
 }
 
-function evidenceForKpi(kpi: Json, evidence: Json[]): Json[] {
-  const keys = Array.isArray(kpi.evidence_keys)
-    ? new Set(kpi.evidence_keys.map((key) => String(key)))
+function evidenceForKeys(evidence: Json[], keys: unknown): Json[] {
+  const keySet = Array.isArray(keys)
+    ? new Set(keys.map((key) => String(key)))
     : new Set<string>();
-  return evidence.filter((item) => keys.has(String(item.claim_key)));
+  return evidence.filter((item) => keySet.has(String(item.claim_key)));
 }
 
-function KpiEvidenceDetails({ kpi, evidence }: { kpi: Json; evidence: Json[] }) {
-  const rows = evidenceForKpi(kpi, evidence);
+function evidenceRows(value: unknown): Json[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is Json =>
+      item !== null && typeof item === "object" && !Array.isArray(item),
+  );
+}
+
+function formatEvidenceRow(row: Json): string {
+  const parts = [
+    row.claim_key,
+    row.source_type,
+    row.metric_key,
+    row.source_ref,
+    row.formula ?? row.note,
+  ]
+    .filter((part) => part !== undefined && part !== null && String(part).trim() !== "")
+    .map((part) => String(part));
+  return parts.join(" / ");
+}
+
+function evidenceStatus(rows: Json[]): string {
+  if (rows.length === 0) return "要確認";
+  if (rows.some((row) => !row.last_updated)) return "最終更新未記録";
+  const now = Date.now();
+  const stale = rows.some((row) => {
+    const parsed = Date.parse(String(row.last_updated));
+    return Number.isFinite(parsed) && now - parsed > 1000 * 60 * 60 * 24 * 45;
+  });
+  return stale ? "古いデータを含む" : "根拠確認済み";
+}
+
+function EvidencePanel({
+  title = "計算式・根拠",
+  metric,
+  evidence,
+  rows,
+  disclaimer,
+  defaultOpen = false,
+}: {
+  title?: string;
+  metric?: Json;
+  evidence?: Json[];
+  rows?: Json[];
+  disclaimer?: string;
+  defaultOpen?: boolean;
+}) {
+  const resolvedRows = rows ?? evidenceForKeys(evidence ?? [], metric?.evidence_keys);
+  const formula = String(metric?.formula ?? "機械集計");
+  const lastUpdated = String(
+    metric?.last_updated ?? resolvedRows.find((row) => row.last_updated)?.last_updated ?? "-",
+  );
+  const note = String(metric?.note ?? "");
+  const disclaimerText = String(disclaimer ?? metric?.disclaimer ?? "");
   return (
-    <details className="kpi-details">
-      <summary>計算式・根拠</summary>
+    <details className="evidence-panel kpi-details" open={defaultOpen}>
+      <summary>
+        {title}
+        <span>{evidenceStatus(resolvedRows)}</span>
+      </summary>
       <dl>
         <div>
           <dt>計算式</dt>
-          <dd>{String(kpi.formula ?? "機械集計")}</dd>
+          <dd>{formula}</dd>
         </div>
         <div>
           <dt>最終更新</dt>
-          <dd>{String(kpi.last_updated ?? "-")}</dd>
+          <dd>{lastUpdated}</dd>
         </div>
         <div>
           <dt>根拠</dt>
           <dd>
-            {rows.length > 0 ? (
-              rows.map((row) => (
-                <code key={String(row.claim_key)}>
-                  {String(row.claim_key)} / {String(row.metric_key)} / {String(row.source_ref)}
+            {resolvedRows.length > 0 ? (
+              resolvedRows.map((row, index) => (
+                <code
+                  key={`${String(row.claim_key)}-${String(row.source_ref ?? "")}-${index}`}
+                >
+                  {formatEvidenceRow(row)}
                 </code>
               ))
             ) : (
-              <span>要確認</span>
+              <span>根拠行がありません。入力データまたはprovider設定を確認してください。</span>
             )}
           </dd>
         </div>
+        {note && (
+          <div>
+            <dt>注記</dt>
+            <dd>{note}</dd>
+          </div>
+        )}
         <div>
           <dt>免責</dt>
-          <dd>{String(kpi.disclaimer ?? "")}</dd>
+          <dd>
+            {disclaimerText ||
+              "この表示は比較材料であり、売買推奨や投資助言ではありません。"}
+          </dd>
         </div>
       </dl>
     </details>
@@ -1048,6 +1114,20 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
                 </td>
                 <td>
                   <pre>{JSON.stringify(item.metrics ?? {}, null, 2)}</pre>
+                  {(() => {
+                    const rows = evidenceRows(item.evidence);
+                    return rows.length > 0 ? (
+                      <EvidencePanel
+                        title="候補根拠"
+                        rows={rows}
+                        metric={{
+                          formula: "候補抽出条件と指標が一致した根拠",
+                          last_updated: state.data?.generated_at,
+                        }}
+                        disclaimer={String(state.data?.disclaimer ?? "")}
+                      />
+                    ) : null;
+                  })()}
                 </td>
                 <td>
                   <button
@@ -1130,7 +1210,11 @@ function InvestmentReportTab() {
               <span>{String(kpi.label)}</span>
               <b>{typeof kpi.value === "number" ? yen(kpi.value) : String(kpi.value ?? "-")}</b>
               <small>{String(kpi.formula ?? "")}</small>
-              <KpiEvidenceDetails kpi={kpi} evidence={evidence} />
+              <EvidencePanel
+                metric={kpi}
+                evidence={evidence}
+                disclaimer={String(state.data?.disclaimer ?? "")}
+              />
             </article>
           ))}
         </section>
@@ -1146,10 +1230,18 @@ function InvestmentReportTab() {
         </div>
       )}
       {evidence.length > 0 && (
-        <details className="subpanel">
-          <summary>根拠一覧（{evidence.length}件）</summary>
-          <pre>{JSON.stringify(evidence, null, 2)}</pre>
-        </details>
+        <div className="subpanel">
+          <EvidencePanel
+            title={`根拠一覧（${evidence.length}件）`}
+            rows={evidence}
+            metric={{
+              formula: "レポート内のKPIとclaim-evidence対応表",
+              last_updated: state.data?.generated_at,
+            }}
+            disclaimer={String(state.data?.disclaimer ?? "")}
+            defaultOpen
+          />
+        </div>
       )}
       {state.data?.disclaimer && <p className="hint">{String(state.data.disclaimer)}</p>}
     </section>
@@ -1247,7 +1339,11 @@ function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
               <span>{String(metric.label)}</span>
               <b>{formatDetailMetric(metric)}</b>
               <small>{String(metric.formula ?? "")}</small>
-              <KpiEvidenceDetails kpi={metric} evidence={evidence} />
+              <EvidencePanel
+                metric={metric}
+                evidence={evidence}
+                disclaimer={String(state.data?.disclaimer ?? "")}
+              />
             </article>
           ))}
         </section>
@@ -1270,26 +1366,16 @@ function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
       {evidence.length > 0 && (
         <div className="subpanel">
           <h3>根拠一覧</h3>
-          <table className="grid">
-            <thead>
-              <tr>
-                <th>claim</th>
-                <th>source</th>
-                <th>metric</th>
-                <th>formula</th>
-              </tr>
-            </thead>
-            <tbody>
-              {evidence.map((item) => (
-                <tr key={String(item.claim_key)}>
-                  <td className="mono">{String(item.claim_key)}</td>
-                  <td>{String(item.source_type)} / {String(item.source_ref)}</td>
-                  <td>{String(item.metric_key)}</td>
-                  <td className="hint">{String(item.formula ?? item.note ?? "")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <EvidencePanel
+            title={`根拠一覧（${evidence.length}件）`}
+            rows={evidence}
+            metric={{
+              formula: "詳細画面のclaim-evidence対応表",
+              last_updated: state.data?.generated_at,
+            }}
+            disclaimer={String(state.data?.disclaimer ?? "")}
+            defaultOpen
+          />
         </div>
       )}
 

@@ -860,10 +860,20 @@ textarea { min-height: 140px; }
   font-size: 12px;
 }
 .kpi-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   min-height: 28px;
   cursor: pointer;
   color: var(--accent);
   font-weight: 700;
+}
+.evidence-panel summary span {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 800;
 }
 .kpi-details dl {
   display: grid;
