@@ -15,6 +15,7 @@ _NISA_GROWTH_CAP = 12_000_000.0
 _NISA_NEAR_LIMIT_PCT = 90.0
 _PRICE_STALE_AFTER_DAYS = 7
 _FINANCIALS_STALE_AFTER_DAYS = 120
+_HIGH_INCOME_YIELD_PCT = 12.0
 
 
 def analyze_portfolio(
@@ -45,6 +46,7 @@ def analyze_portfolio(
     tax_wrapper_mix: dict[str, float] = {}
     nisa_cost = 0.0
     nisa_growth_cost = 0.0
+    income_alerts: list[dict[str, object]] = []
 
     for holding in holdings:
         price = holding.current_price if holding.current_price is not None else holding.avg_cost
@@ -78,8 +80,17 @@ def analyze_portfolio(
             policy=policy,
         )
         row["data_alerts"] = row_data_alerts
+        row_income_alerts = _income_alerts(
+            holding=holding,
+            row=row,
+            market_value=market_value,
+            income_source=income_source,
+        )
+        row["data_alerts"] = row_data_alerts
+        row["income_alerts"] = row_income_alerts
         rows.append(row)
         data_alerts.extend(row_data_alerts)
+        income_alerts.extend(row_income_alerts)
         total_market += market_value
         total_cost += cost_basis
         total_income += annual_income
@@ -161,6 +172,7 @@ def analyze_portfolio(
         "tax_wrapper_mix": _share_map(tax_wrapper_mix, total_market),
         "nisa": nisa,
         "data_quality": _data_quality_summary(data_alerts),
+        "income_quality": _income_quality_summary(income_alerts),
     }
     evidence.append(
         {
@@ -184,6 +196,20 @@ def analyze_portfolio(
             ),
             "last_updated": generated_at,
             "note": "Data quality alerts are source-review prompts, not trading recommendations.",
+        }
+    )
+    evidence.append(
+        {
+            "claim_key": "portfolio.income_quality",
+            "source_type": "user_holding",
+            "source_ref": "holdings income fields and EDINET dividend facts",
+            "metric_key": "income_quality",
+            "formula": (
+                "flag missing income sources, negative user income inputs, "
+                f"or income_yield_pct >= {_HIGH_INCOME_YIELD_PCT}%"
+            ),
+            "last_updated": generated_at,
+            "note": "Income quality alerts are data review prompts, not trading recommendations.",
         }
     )
     return {
@@ -318,6 +344,77 @@ def _holding_data_alerts(
     return alerts
 
 
+def _income_alerts(
+    *,
+    holding: InvestmentHolding,
+    row: Mapping[str, object],
+    market_value: float,
+    income_source: str,
+) -> list[dict[str, object]]:
+    alerts: list[dict[str, object]] = []
+    base: dict[str, object] = {
+        "security_code": holding.ticker_or_fund_code,
+        "name": holding.name,
+        "asset_type": holding.asset_type,
+    }
+    if holding.annual_income is not None and holding.annual_income < 0:
+        alerts.append(
+            {
+                **base,
+                "level": "error",
+                "code": "income_negative_input",
+                "field": "annual_income",
+                "value": round(holding.annual_income, 2),
+                "message": "Annual income input is negative and was floored at 0 for calculations.",
+            }
+        )
+    if holding.distribution_per_unit is not None and holding.distribution_per_unit < 0:
+        alerts.append(
+            {
+                **base,
+                "level": "error",
+                "code": "distribution_negative_input",
+                "field": "distribution_per_unit",
+                "value": round(holding.distribution_per_unit, 4),
+                "message": (
+                    "Distribution per unit input is negative and was floored at 0 for calculations."
+                ),
+            }
+        )
+    if income_source == "not_available":
+        alerts.append(
+            {
+                **base,
+                "level": "info",
+                "code": "income_missing",
+                "field": "annual_income_estimate",
+                "value": 0.0,
+                "message": (
+                    "No dividend or distribution source was available; income estimate is 0."
+                ),
+            }
+        )
+    income_yield_pct = _number(row.get("income_yield_pct")) or 0.0
+    if market_value > 0 and income_yield_pct >= _HIGH_INCOME_YIELD_PCT:
+        alerts.append(
+            {
+                **base,
+                "level": "warn",
+                "code": "income_yield_high",
+                "field": "income_yield_pct",
+                "value": round(income_yield_pct, 2),
+                "threshold_pct": _HIGH_INCOME_YIELD_PCT,
+                "annual_income_estimate": row.get("annual_income_estimate"),
+                "market_value": round(market_value, 2),
+                "message": (
+                    "Income yield exceeds the review threshold; "
+                    "verify source data before relying on it."
+                ),
+            }
+        )
+    return alerts
+
+
 def _financials_metadata(path: str | Path, generated_at: datetime) -> dict[str, object]:
     csv_path = Path(path)
     if not csv_path.exists():
@@ -395,6 +492,29 @@ def _data_quality_summary(alerts: Sequence[dict[str, object]]) -> dict[str, obje
         "stale_financials_count": codes.count("financials_csv_stale"),
         "price_stale_after_days": _PRICE_STALE_AFTER_DAYS,
         "financials_stale_after_days": _FINANCIALS_STALE_AFTER_DAYS,
+        "alerts": alert_list,
+    }
+
+
+def _income_quality_summary(alerts: Sequence[dict[str, object]]) -> dict[str, object]:
+    alert_list = list(alerts)
+    codes = [str(alert.get("code") or "") for alert in alert_list]
+    levels = {str(alert.get("level") or "") for alert in alert_list}
+    status = "ok"
+    if "error" in levels:
+        status = "error"
+    elif "warn" in levels:
+        status = "warn"
+    elif alert_list:
+        status = "info"
+    return {
+        "status": status,
+        "alert_count": len(alert_list),
+        "missing_income_count": codes.count("income_missing"),
+        "high_yield_count": codes.count("income_yield_high"),
+        "negative_input_count": codes.count("income_negative_input")
+        + codes.count("distribution_negative_input"),
+        "high_yield_threshold_pct": _HIGH_INCOME_YIELD_PCT,
         "alerts": alert_list,
     }
 

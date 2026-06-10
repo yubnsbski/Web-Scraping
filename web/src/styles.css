@@ -949,16 +949,19 @@ textarea { min-height: 140px; }
 }
 
 .nisa-alert-panel,
-.data-alert-panel {
+.data-alert-panel,
+.income-alert-panel {
   overflow-x: auto;
 }
 
 .nisa-alert-panel table,
-.data-alert-panel table {
+.data-alert-panel table,
+.income-alert-panel table {
   min-width: 720px;
 }
 
-.data-alert-panel small {
+.data-alert-panel small,
+.income-alert-panel small {
   display: block;
   margin-top: 2px;
   color: var(--muted);

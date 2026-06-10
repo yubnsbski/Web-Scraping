@@ -65,6 +65,11 @@ def test_analyze_mixed_stock_and_fund_portfolio(tmp_path: Path) -> None:
     assert isinstance(data_quality, dict)
     assert data_quality["status"] == "info"
     assert data_quality["missing_timestamp_count"] == 2
+    income_quality = summary["income_quality"]
+    assert isinstance(income_quality, dict)
+    assert income_quality["status"] == "ok"
+    assert income_quality["alert_count"] == 0
+    assert income_quality["alerts"] == []
     assert result["auto_trading"] is False
     assert "投資助言" in str(result["disclaimer"])
 
@@ -132,6 +137,66 @@ def test_analyze_portfolio_flags_data_quality_warnings(tmp_path: Path) -> None:
     assert "portfolio.data_quality" in evidence_keys
     assert "buy" not in str(result).lower()
     assert "sell" not in str(result).lower()
+
+
+def test_analyze_portfolio_flags_income_quality_warnings(tmp_path: Path) -> None:
+    holdings_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit\n"
+        "stock,1111,No Income Source,10,1000,tokutei,taxable,user_csv,1000,,\n"
+        "fund,F999,High Distribution Fund,10,1000,nisa,nisa_tsumitate,user_csv,1000,,150\n"
+        "stock,2222,Negative Income Input,10,1000,tokutei,taxable,user_csv,1000,-100,\n"
+    )
+    result = analyze_portfolio(
+        holdings_from_payload({"csv_text": holdings_csv}),
+        financials_csv=_financials(tmp_path),
+    )
+
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    income_quality = summary["income_quality"]
+    assert isinstance(income_quality, dict)
+    assert income_quality["status"] == "error"
+    assert income_quality["alert_count"] == 3
+    assert income_quality["missing_income_count"] == 1
+    assert income_quality["high_yield_count"] == 1
+    assert income_quality["negative_input_count"] == 1
+    alerts = income_quality["alerts"]
+    assert isinstance(alerts, list)
+    alert_codes = {str(alert.get("code")) for alert in alerts if isinstance(alert, dict)}
+    assert {"income_missing", "income_yield_high", "income_negative_input"} <= alert_codes
+    assert "buy" not in str(result).lower()
+    assert "sell" not in str(result).lower()
+    evidence_keys = {
+        str(item.get("claim_key"))
+        for item in result["evidence"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert "portfolio.income_quality" in evidence_keys
+
+
+def test_investment_monthly_report_surfaces_income_quality_warnings(tmp_path: Path) -> None:
+    holdings_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit\n"
+        "stock,1111,No Income Source,10,1000,tokutei,taxable,user_csv,1000,,\n"
+    )
+    report = build_investment_monthly_report(
+        holdings_from_payload({"csv_text": holdings_csv}),
+        candidates=[],
+        financials_csv=_financials(tmp_path),
+    )
+
+    sections = report["sections"]
+    assert isinstance(sections, list)
+    section_keys = {str(section.get("key")) for section in sections if isinstance(section, dict)}
+    assert "income_quality" in section_keys
+    evidence_keys = {
+        str(item.get("claim_key"))
+        for item in report["evidence"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert "portfolio.income_quality" in evidence_keys
 
 
 def test_candidate_screen_returns_condition_matches_not_recommendations(tmp_path: Path) -> None:
