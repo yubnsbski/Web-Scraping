@@ -11,6 +11,7 @@ from investment_assistant.investment.models import DISCLAIMER, InvestmentHolding
 
 _NISA_LIFETIME_CAP = 18_000_000.0
 _NISA_GROWTH_CAP = 12_000_000.0
+_NISA_NEAR_LIMIT_PCT = 90.0
 
 
 def analyze_portfolio(
@@ -119,6 +120,7 @@ def analyze_portfolio(
     largest = max(rows, key=lambda item: _number(item.get("market_value")) or 0.0)
     largest_value = _number(largest.get("market_value")) or 0.0
     portfolio_pnl = total_market - total_cost
+    nisa = _nisa_summary(nisa_cost=nisa_cost, nisa_growth_cost=nisa_growth_cost)
     summary = {
         "holdings_count": len(rows),
         "market_value": round(total_market, 2),
@@ -135,12 +137,7 @@ def analyze_portfolio(
         "concentration": _concentration(rows, total_market),
         "asset_mix": _share_map(asset_mix, total_market),
         "tax_wrapper_mix": _share_map(tax_wrapper_mix, total_market),
-        "nisa": {
-            "used_cost_basis": round(nisa_cost, 2),
-            "remaining_lifetime": round(max(_NISA_LIFETIME_CAP - nisa_cost, 0.0), 2),
-            "growth_used_cost_basis": round(nisa_growth_cost, 2),
-            "growth_remaining": round(max(_NISA_GROWTH_CAP - nisa_growth_cost, 0.0), 2),
-        },
+        "nisa": nisa,
     }
     evidence.append(
         {
@@ -233,6 +230,91 @@ def _share_map(values: dict[str, float], total: float) -> dict[str, dict[str, fl
         }
         for key, value in sorted(values.items())
     }
+
+
+def _nisa_summary(*, nisa_cost: float, nisa_growth_cost: float) -> dict[str, object]:
+    lifetime_remaining = max(_NISA_LIFETIME_CAP - nisa_cost, 0.0)
+    growth_remaining = max(_NISA_GROWTH_CAP - nisa_growth_cost, 0.0)
+    lifetime_usage_pct = nisa_cost / _NISA_LIFETIME_CAP * 100.0
+    growth_usage_pct = nisa_growth_cost / _NISA_GROWTH_CAP * 100.0
+    alerts = [
+        *_nisa_alerts(
+            bucket="lifetime",
+            used=nisa_cost,
+            cap=_NISA_LIFETIME_CAP,
+            remaining=lifetime_remaining,
+            usage_pct=lifetime_usage_pct,
+        ),
+        *_nisa_alerts(
+            bucket="growth",
+            used=nisa_growth_cost,
+            cap=_NISA_GROWTH_CAP,
+            remaining=growth_remaining,
+            usage_pct=growth_usage_pct,
+        ),
+    ]
+    return {
+        "used_cost_basis": round(nisa_cost, 2),
+        "remaining_lifetime": round(lifetime_remaining, 2),
+        "growth_used_cost_basis": round(nisa_growth_cost, 2),
+        "growth_remaining": round(growth_remaining, 2),
+        "lifetime_cap": _NISA_LIFETIME_CAP,
+        "growth_cap": _NISA_GROWTH_CAP,
+        "usage_pct": round(lifetime_usage_pct, 2),
+        "growth_usage_pct": round(growth_usage_pct, 2),
+        "excess_lifetime": round(max(nisa_cost - _NISA_LIFETIME_CAP, 0.0), 2),
+        "growth_excess": round(max(nisa_growth_cost - _NISA_GROWTH_CAP, 0.0), 2),
+        "status": _nisa_status(lifetime_usage_pct),
+        "growth_status": _nisa_status(growth_usage_pct),
+        "alerts": alerts,
+    }
+
+
+def _nisa_alerts(
+    *,
+    bucket: str,
+    used: float,
+    cap: float,
+    remaining: float,
+    usage_pct: float,
+) -> list[dict[str, object]]:
+    if used > cap:
+        return [
+            {
+                "level": "error",
+                "code": f"nisa_{bucket}_cap_exceeded",
+                "bucket": bucket,
+                "used_cost_basis": round(used, 2),
+                "cap": cap,
+                "remaining": 0.0,
+                "excess": round(used - cap, 2),
+                "usage_pct": round(usage_pct, 2),
+                "message": f"NISA {bucket} cost basis exceeds the configured cap.",
+            }
+        ]
+    if usage_pct >= _NISA_NEAR_LIMIT_PCT:
+        return [
+            {
+                "level": "warn",
+                "code": f"nisa_{bucket}_near_limit",
+                "bucket": bucket,
+                "used_cost_basis": round(used, 2),
+                "cap": cap,
+                "remaining": round(remaining, 2),
+                "excess": 0.0,
+                "usage_pct": round(usage_pct, 2),
+                "message": f"NISA {bucket} remaining capacity is below 10%.",
+            }
+        ]
+    return []
+
+
+def _nisa_status(usage_pct: float) -> str:
+    if usage_pct > 100.0:
+        return "exceeded"
+    if usage_pct >= _NISA_NEAR_LIMIT_PCT:
+        return "near_limit"
+    return "ok"
 
 
 def _tax_wrapper(value: str) -> str:
