@@ -4,11 +4,32 @@ import io
 import zipfile
 
 from investment_assistant.edinet.csv_extract import (
+    FinancialValue,
     parse_csv_archive,
+    select_dividend_per_share,
     select_metrics,
     to_rag_text,
 )
 from investment_assistant.edinet.models import EdinetDocument
+
+
+def _dividend_value(
+    item_name: str,
+    value: str,
+    *,
+    element_id: str = "",
+    context_id: str = "CurrentYearDuration",
+    consolidated: str = "連結",
+) -> FinancialValue:
+    return FinancialValue(
+        item_name=item_name,
+        value=value,
+        context_id=context_id,
+        unit="円",
+        consolidated=consolidated,
+        period="期間",
+        element_id=element_id,
+    )
 
 _HEADER = "要素ID\t項目名\tコンテキストID\t相対年度\t連結・個別\t期間・時点\tユニットID\t単位\t値"
 _ROWS = [
@@ -79,6 +100,56 @@ def test_to_rag_text_contains_metrics_and_source() -> None:
     assert "自己資本比率: 9.8" in text
     assert "配当性向: 40.1" in text
     assert "EDINET docID=S100AAA1" in text
+
+
+def test_select_dividend_prefers_annual_summary_element() -> None:
+    # Interim/period-end rows appear first but the annual summary element wins.
+    values = [
+        _dividend_value("１株当たり中間配当額", "30"),
+        _dividend_value("１株当たり期末配当額", "30"),
+        _dividend_value(
+            "１株当たり配当額",
+            "60",
+            element_id="jpcrp_cor:DividendPaidPerShareSummaryOfBusinessResults",
+        ),
+    ]
+    best = select_dividend_per_share(values)
+    assert best is not None
+    assert best.value == "60"
+
+
+def test_select_dividend_skips_interim_only_when_no_annual() -> None:
+    # SMC-style: only an interim per-share row is present -> report no annual.
+    values = [_dividend_value("１株当たり中間配当額", "75")]
+    assert select_dividend_per_share(values) is None
+
+
+def test_select_dividend_excludes_forecast_context() -> None:
+    values = [
+        _dividend_value(
+            "１株当たり配当額",
+            "200",
+            context_id="NextYearDuration_ForecastMember",
+        ),
+        _dividend_value("１株当たり配当額", "189", context_id="CurrentYearDuration"),
+    ]
+    best = select_dividend_per_share(values)
+    assert best is not None
+    assert best.value == "189"
+
+
+def test_select_dividend_prefers_consolidated() -> None:
+    values = [
+        _dividend_value("１株当たり配当額", "50", consolidated="個別"),
+        _dividend_value("１株当たり配当額", "52", consolidated="連結"),
+    ]
+    best = select_dividend_per_share(values)
+    assert best is not None
+    assert best.value == "52"
+
+
+def test_select_dividend_none_when_absent() -> None:
+    assert select_dividend_per_share([_dividend_value("自己資本比率", "60")]) is None
 
 
 def test_to_rag_text_handles_no_matches() -> None:

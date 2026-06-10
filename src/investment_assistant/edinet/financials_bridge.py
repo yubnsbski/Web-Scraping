@@ -19,7 +19,11 @@ import csv
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from investment_assistant.edinet.csv_extract import FinancialValue, select_metrics
+from investment_assistant.edinet.csv_extract import (
+    FinancialValue,
+    select_dividend_per_share,
+    select_metrics,
+)
 from investment_assistant.edinet.models import EdinetDocument
 from investment_assistant.financials.models import (
     FINANCIAL_COLUMNS,
@@ -29,7 +33,6 @@ from investment_assistant.financials.models import (
 
 _LABEL_OPERATING_CF = "営業活動によるキャッシュ・フロー"
 _LABEL_EQUITY_RATIO = "自己資本比率"
-_LABEL_DIVIDEND = "１株当たり配当"
 _LABEL_PAYOUT = "配当性向"
 
 
@@ -51,7 +54,8 @@ def build_financial_point(
     if fiscal_year is None:
         return None
 
-    grouped = select_metrics(values)
+    materialized = list(values)
+    grouped = select_metrics(materialized)
 
     def first_value(label: str) -> float | None:
         items = grouped.get(label)
@@ -59,7 +63,8 @@ def build_financial_point(
             return None
         return _to_float(items[0].value)
 
-    dividend = first_value(_LABEL_DIVIDEND)
+    dividend_value = select_dividend_per_share(materialized)
+    dividend = _to_float(dividend_value.value) if dividend_value is not None else None
     if dividend is None:
         return None
 

@@ -44,6 +44,21 @@ _HEADER_CONSOLIDATED = "連結・個別"
 _HEADER_PERIOD = "期間・時点"
 _HEADER_ELEMENT = "要素ID"
 
+# Canonical EDINET taxonomy element for the *annual* dividend per share in the
+# "主要な経営指標等" summary table. Preferring this element avoids latching onto
+# interim / quarter-end / forecast per-share rows that share the "１株当たり配当"
+# item-name substring.
+_DIVIDEND_ANNUAL_ELEMENT = "DividendPaidPerShareSummaryOfBusinessResults"
+# Item-name tokens that mark a NON-annual or NON-actual per-share dividend row.
+_DIVIDEND_NOISE_TOKENS: tuple[str, ...] = (
+    "中間",  # 1株当たり中間配当額
+    "期末",  # 1株当たり期末配当額
+    "四半期",  # 第N四半期
+    "予想",  # forecast (次期予想)
+)
+# Context-id tokens that mark a forecast / prior-period context.
+_FORECAST_CONTEXT_TOKENS: tuple[str, ...] = ("Forecast", "Prior")
+
 
 @dataclass(frozen=True)
 class FinancialValue:
@@ -89,6 +104,62 @@ def select_metrics(
     for matches in grouped.values():
         matches.sort(key=lambda item: (0 if "連結" in item.consolidated else 1))
     return {label: matches for label, matches in grouped.items() if matches}
+
+
+def select_dividend_per_share(
+    values: Iterable[FinancialValue],
+) -> FinancialValue | None:
+    """Pick the *annual, actual* per-share dividend from a filing's values.
+
+    EDINET filings carry several rows whose item name contains the substring
+    "１株当たり配当": the annual figure, interim / period-end splits, quarterly
+    breakdowns, and next-period forecasts. Taking the first substring match (the
+    old behaviour) could latch onto an interim-only or forecast value, producing
+    a wrong annual dividend (e.g. SMC's interim-only figure).
+
+    Selection order, most authoritative first:
+
+    1. The canonical ``DividendPaidPerShareSummaryOfBusinessResults`` element on a
+       non-forecast context — this is the annual summary-table value.
+    2. Any ``１株当たり配当`` item-name match that is not an interim / period-end /
+       quarterly / forecast row, on a non-forecast context.
+
+    Within each tier, consolidated (``連結``) rows win. Returns ``None`` when no
+    usable annual dividend is present.
+    """
+
+    candidates = [
+        value
+        for value in values
+        if _DIVIDEND_ANNUAL_ELEMENT in value.element_id
+        or "１株当たり配当" in value.item_name
+        or "1株当たり配当" in value.item_name
+    ]
+    if not candidates:
+        return None
+
+    def rank(value: FinancialValue) -> tuple[int, int, int]:
+        is_summary = _DIVIDEND_ANNUAL_ELEMENT in value.element_id
+        is_noise = any(token in value.item_name for token in _DIVIDEND_NOISE_TOKENS)
+        is_forecast = any(token in value.context_id for token in _FORECAST_CONTEXT_TOKENS)
+        is_consolidated = "連結" in value.consolidated
+        # Lower tuples sort first: prefer summary element, then non-noise,
+        # non-forecast, consolidated rows.
+        return (
+            0 if is_summary else 1,
+            0 if not (is_noise or is_forecast) else 1,
+            0 if is_consolidated else 1,
+        )
+
+    best = min(candidates, key=rank)
+    # Reject a best candidate that is still interim/forecast-only: better to
+    # report no annual dividend than a misleading partial one.
+    if _DIVIDEND_ANNUAL_ELEMENT not in best.element_id and (
+        any(token in best.item_name for token in _DIVIDEND_NOISE_TOKENS)
+        or any(token in best.context_id for token in _FORECAST_CONTEXT_TOKENS)
+    ):
+        return None
+    return best
 
 
 def to_rag_text(
