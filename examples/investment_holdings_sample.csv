@@ -1,5 +1,5 @@
-asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit
-stock,7203,安定配当ホールディングス,100,1800,tokutei,nisa_growth,examples/investment_holdings_sample.csv,2200,,
-stock,9999,景気連動マテリアル,50,1200,tokutei,taxable,examples/investment_holdings_sample.csv,1000,,
-fund,FND001,低コスト全世界株式,120,10000,nisa,nisa_tsumitate,examples/investment_holdings_sample.csv,12500,,25
-fund,FND002,債券バランス型,80,9000,tokutei,taxable,examples/investment_holdings_sample.csv,9300,,10
+asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of
+stock,7203,Stable Dividend Holdings,100,1800,tokutei,nisa_growth,examples/investment_holdings_sample.csv,2200,,,user_csv,2026-06-10
+stock,9999,Scenario Trial,50,1200,tokutei,taxable,examples/investment_holdings_sample.csv,1000,,,user_csv,2026-06-10
+fund,FND001,Low Cost Global Equity,120,10000,nisa,nisa_tsumitate,examples/investment_holdings_sample.csv,12500,,25,user_csv,2026-06-10
+fund,FND002,Balanced Bond Fund,80,9000,tokutei,taxable,examples/investment_holdings_sample.csv,9300,,10,user_csv,2026-06-10

@@ -18,6 +18,7 @@ def test_investment_sample_csvs_drive_full_api_smoke() -> None:
     )
     assert status == 200
     assert imported["count"] == 4
+    assert imported["input_warnings"] == []
     assert imported["auto_trading"] is False
 
     status, analysis = handle_api(
