@@ -611,3 +611,27 @@ def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     )
     assert status == 400
     assert "not allowed in production" in payload["error"]
+
+
+def test_provider_policy_ledger_route_reports_runtime_decisions() -> None:
+    status, payload = handle_api(
+        "POST",
+        "/api/providers/policy",
+        {
+            "runtime_mode": "production",
+            "provider_ids": ["user_csv", "stooq_public_csv", "jquants"],
+        },
+    )
+
+    assert status == 200
+    rows = {
+        str(item["provider_id"]): item
+        for item in payload["providers"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert payload["runtime_mode"] == "production"
+    assert rows["user_csv"]["runtime_decision"] == "allowed"
+    assert rows["stooq_public_csv"]["runtime_decision"] == "blocked_until_contracted"
+    assert rows["jquants"]["recommended_use"] == "contract_required"
+    assert payload["auto_trading"] is False
+    assert payload["call_real_api"] is False

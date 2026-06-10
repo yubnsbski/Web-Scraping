@@ -583,6 +583,21 @@ def _market_prices(body: JsonDict) -> JsonDict:
     return result
 
 
+def _provider_policy_ledger(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.provider_policy import provider_policy_ledger
+
+    raw_provider_ids = body.get("provider_ids")
+    provider_ids = (
+        [str(provider_id) for provider_id in raw_provider_ids]
+        if isinstance(raw_provider_ids, list)
+        else None
+    )
+    return provider_policy_ledger(
+        runtime_mode=str(body.get("runtime_mode") or "development"),
+        provider_ids=provider_ids,
+    )
+
+
 def _portfolio_performance(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/portfolio_performance_sample.csv")
     return summarize_performance(load_performance(path))
@@ -1242,6 +1257,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/target"): _portfolio_target,
     ("POST", "/api/portfolio/universe"): _portfolio_universe,
     ("POST", "/api/market/prices"): _market_prices,
+    ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,
     ("POST", "/api/portfolio/analyze"): _portfolio_analyze,

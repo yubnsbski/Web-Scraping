@@ -1049,10 +1049,12 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   const [presetName, setPresetName] = useState("標準スクリーニング");
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [presetStatus, setPresetStatus] = useState<string | null>(null);
+  const [providerRuntimeMode, setProviderRuntimeMode] = useState("production");
   const [presets, setPresets] = useState<CandidateScreenPreset[]>(() =>
     readCandidateScreenPresets(),
   );
   const state = useAsync<Json>();
+  const providerState = useAsync<Json>();
 
   const screen = () =>
     state.run(() =>
@@ -1070,6 +1072,21 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
         funds_csv_text: fundsCsv,
         financials_csv: SAMPLE_FINANCIALS_PATH,
         sort_by: "score",
+      }),
+    );
+  const loadProviderPolicyLedger = () =>
+    providerState.run(() =>
+      api<Json>("/api/providers/policy", {
+        runtime_mode: providerRuntimeMode,
+        provider_ids: [
+          "edinet",
+          "user_csv",
+          "manual",
+          "stooq_public_csv",
+          "yfinance",
+          "jquants",
+          "alpha_vantage",
+        ],
       }),
     );
   const loadSampleFunds = () => setFundsCsv(SAMPLE_FUNDS_CSV);
@@ -1152,6 +1169,9 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   const results: Json[] = Array.isArray(state.data?.results) ? state.data.results : [];
   const blocked: Json[] = Array.isArray(state.data?.blocked_providers)
     ? state.data.blocked_providers
+    : [];
+  const providerRows: Json[] = Array.isArray(providerState.data?.providers)
+    ? providerState.data.providers
     : [];
 
   return (
@@ -1245,6 +1265,60 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
         </button>
       </div>
       <Status loading={state.loading} error={state.error} />
+      <div className="subpanel provider-ledger-panel">
+        <div className="report-audit-head">
+          <div>
+            <h3>Provider policy ledger</h3>
+            <p className="hint">本番利用前にproviderごとの契約・再配布・用途の扱いを確認します。</p>
+          </div>
+          <span className="badge">{String(providerState.data?.runtime_mode ?? providerRuntimeMode)}</span>
+        </div>
+        <div className="form">
+          <Field label="runtime mode">
+            <select
+              value={providerRuntimeMode}
+              onChange={(e) => setProviderRuntimeMode(e.target.value)}
+            >
+              <option value="production">production</option>
+              <option value="development">development</option>
+            </select>
+          </Field>
+          <button onClick={loadProviderPolicyLedger} disabled={providerState.loading}>
+            Provider台帳を確認
+          </button>
+        </div>
+        <Status loading={providerState.loading} error={providerState.error} />
+        {providerRows.length > 0 && (
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>provider</th>
+                <th>decision</th>
+                <th>category</th>
+                <th>commercial</th>
+                <th>redistribution</th>
+                <th>recommended use</th>
+              </tr>
+            </thead>
+            <tbody>
+              {providerRows.map((provider) => (
+                <tr key={String(provider.provider_id)}>
+                  <td className="mono">{String(provider.provider_id)}</td>
+                  <td>
+                    <span className={`badge ${provider.production_allowed ? "safe" : "warn"}`}>
+                      {String(provider.runtime_decision)}
+                    </span>
+                  </td>
+                  <td>{String(provider.category)}</td>
+                  <td>{String(provider.commercial_use)}</td>
+                  <td>{String(provider.redistribution)}</td>
+                  <td>{String(provider.recommended_use)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
       {state.data?.non_advisory_boundary && (
         <p className="hint">{String(state.data.non_advisory_boundary)}</p>
       )}
