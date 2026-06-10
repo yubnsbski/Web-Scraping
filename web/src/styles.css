@@ -233,6 +233,10 @@ button:hover:not(:disabled) {
   color: var(--warn);
 }
 
+.status.warn-text {
+  color: var(--warn);
+}
+
 .form {
   display: flex;
   flex-wrap: wrap;

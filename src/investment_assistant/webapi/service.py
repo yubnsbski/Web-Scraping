@@ -529,6 +529,24 @@ def _portfolio_simulate(body: JsonDict) -> JsonDict:
     )
 
 
+def _portfolio_target(body: JsonDict) -> JsonDict:
+    from investment_assistant.portfolio.simulator import plan_for_target_dividend
+
+    raw = body.get("holdings")
+    holdings = [h for h in raw if isinstance(h, dict)] if isinstance(raw, list) else []
+    return plan_for_target_dividend(
+        target_annual_dividend=_as_float(body.get("target_annual_dividend"), 0.0),
+        holdings=holdings,
+        years=_as_int(body.get("years"), 10),
+        reinvest=_as_bool(body.get("reinvest"), True),
+        growth_rate=_as_float(body.get("growth_rate"), 0.0),
+        auto_weight=str(body.get("auto_weight") or "equal"),
+        optimization=str(body.get("optimization") or "none"),
+        dividend_basis=str(body.get("dividend_basis") or "conservative"),
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+    )
+
+
 def _portfolio_universe(body: JsonDict) -> JsonDict:
     from investment_assistant.portfolio.simulator import build_universe
 
@@ -1061,6 +1079,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/forecast/predict"): _forecast_predict,
     ("POST", "/api/portfolio/dividends"): _portfolio_dividends,
     ("POST", "/api/portfolio/simulate"): _portfolio_simulate,
+    ("POST", "/api/portfolio/target"): _portfolio_target,
     ("POST", "/api/portfolio/universe"): _portfolio_universe,
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
