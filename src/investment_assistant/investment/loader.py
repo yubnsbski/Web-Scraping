@@ -10,6 +10,7 @@ from pathlib import Path
 from investment_assistant.investment.models import (
     FUND_PROFILE_COLUMNS,
     HOLDING_COLUMNS,
+    HOLDING_RECOMMENDED_COLUMNS,
     FundProfile,
     InvestmentHolding,
 )
@@ -35,6 +36,53 @@ def holdings_from_payload(payload: Mapping[str, object]) -> list[InvestmentHoldi
         return load_holdings_csv(Path(path))
 
     raise ValueError("holdings, csv_text, or path is required")
+
+
+def holding_input_warnings(
+    payload: Mapping[str, object],
+    holdings: Iterable[InvestmentHolding],
+) -> list[dict[str, object]]:
+    """Return non-blocking guidance for more auditable holding inputs."""
+
+    holding_list = list(holdings)
+    warnings: list[dict[str, object]] = []
+    fieldnames = _payload_holding_fieldnames(payload)
+    if fieldnames is not None:
+        for column in HOLDING_RECOMMENDED_COLUMNS:
+            if column not in fieldnames:
+                warnings.append(
+                    {
+                        "level": "info",
+                        "code": "recommended_column_missing",
+                        "column": column,
+                        "message": f"Optional column '{column}' is recommended for auditability.",
+                    }
+                )
+
+    for row, holding in enumerate(holding_list, start=2):
+        if holding.current_price is not None and not holding.price_as_of:
+            warnings.append(
+                {
+                    "level": "info",
+                    "code": "price_as_of_recommended",
+                    "row": row,
+                    "security_code": holding.ticker_or_fund_code,
+                    "column": "price_as_of",
+                    "message": "price_as_of is recommended when current_price is provided.",
+                }
+            )
+        if holding.current_price is not None and not holding.data_provider:
+            warnings.append(
+                {
+                    "level": "info",
+                    "code": "data_provider_recommended",
+                    "row": row,
+                    "security_code": holding.ticker_or_fund_code,
+                    "column": "data_provider",
+                    "message": "data_provider is recommended when current_price is provided.",
+                }
+            )
+    return warnings
 
 
 def fund_profiles_from_payload(payload: Mapping[str, object]) -> list[FundProfile]:
@@ -90,6 +138,32 @@ def _read_rows(text: str, *, required: tuple[str, ...]) -> list[dict[str, str]]:
     if missing:
         raise ValueError(f"Missing required CSV columns: {', '.join(missing)}")
     return [dict(row) for row in reader]
+
+
+def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | None:
+    csv_text = payload.get("csv_text")
+    if isinstance(csv_text, str) and csv_text.strip():
+        return _csv_fieldnames(csv_text)
+
+    path = payload.get("path")
+    if isinstance(path, str) and path.strip():
+        csv_path = Path(path)
+        if csv_path.is_file():
+            return _csv_fieldnames(csv_path.read_text(encoding="utf-8"))
+
+    raw_holdings = payload.get("holdings")
+    if isinstance(raw_holdings, list) and raw_holdings:
+        keys: set[str] = set()
+        for item in raw_holdings:
+            if isinstance(item, Mapping):
+                keys.update(str(key) for key in item)
+        return keys
+    return None
+
+
+def _csv_fieldnames(text: str) -> set[str]:
+    reader = csv.DictReader(io.StringIO(text.strip()))
+    return {str(field) for field in (reader.fieldnames or [])}
 
 
 def _holding_from_mapping(mapping: Mapping[str, object], *, row: int) -> InvestmentHolding:

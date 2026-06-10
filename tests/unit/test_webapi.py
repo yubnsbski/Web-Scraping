@@ -374,6 +374,26 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     status, imported = handle_api("POST", "/api/holdings/import", {"csv_text": holdings_csv})
     assert status == 200
     assert imported["count"] == 2
+    assert imported["recommended_columns"] == ["data_provider", "price_as_of"]
+    warning_codes = {
+        str(item.get("code"))
+        for item in imported["input_warnings"]  # type: ignore[index]
+        if isinstance(item, dict)
+    }
+    assert {"recommended_column_missing", "price_as_of_recommended"} <= warning_codes
+
+    holdings_csv_with_guidance = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of\n"
+        "stock,8306,MUFG,100,1000,tokutei,nisa_growth,user_csv,1200,,,user_csv,2026-06-10\n"
+    )
+    status, guided_import = handle_api(
+        "POST",
+        "/api/holdings/import",
+        {"csv_text": holdings_csv_with_guidance},
+    )
+    assert status == 200
+    assert guided_import["input_warnings"] == []
 
     status, analysis = handle_api(
         "POST",

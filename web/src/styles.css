@@ -950,13 +950,15 @@ textarea { min-height: 140px; }
 
 .nisa-alert-panel,
 .data-alert-panel,
-.income-alert-panel {
+.income-alert-panel,
+.csv-guidance-panel {
   overflow-x: auto;
 }
 
 .nisa-alert-panel table,
 .data-alert-panel table,
-.income-alert-panel table {
+.income-alert-panel table,
+.csv-guidance-panel table {
   min-width: 720px;
 }
 

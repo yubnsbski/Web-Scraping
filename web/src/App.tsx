@@ -181,6 +181,13 @@ const SAMPLE_HOLDINGS_CSV =
   "fund,FND001,低コスト全世界株式,120,10000,nisa,nisa_tsumitate,examples/investment_holdings_sample.csv,12500,,25\n" +
   "fund,FND002,債券バランス型,80,9000,tokutei,taxable,examples/investment_holdings_sample.csv,9300,,10\n";
 
+const AUDITABLE_SAMPLE_HOLDINGS_CSV =
+  "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of\n" +
+  "stock,7203,Stable Dividend Holdings,100,1800,tokutei,nisa_growth,examples/investment_holdings_sample.csv,2200,,,user_csv,2026-06-10\n" +
+  "stock,9999,Scenario Trial,50,1200,tokutei,taxable,examples/investment_holdings_sample.csv,1000,,,user_csv,2026-06-10\n" +
+  "fund,FND001,Low Cost Global Equity,120,10000,nisa,nisa_tsumitate,examples/investment_holdings_sample.csv,12500,,25,user_csv,2026-06-10\n" +
+  "fund,FND002,Balanced Bond Fund,80,9000,tokutei,taxable,examples/investment_holdings_sample.csv,9300,,10,user_csv,2026-06-10\n";
+
 const SAMPLE_FUNDS_CSV =
   "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score\n" +
   "FND001,低コスト全世界株式,global_equity,0.12,reinvest,true,user_csv,0.95\n" +
@@ -764,7 +771,7 @@ function SearchTab() {
 // --- Investment-only MVP --------------------------------------------------
 
 function HoldingsTab() {
-  const [csv, setCsv] = useState(SAMPLE_HOLDINGS_CSV);
+  const [csv, setCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const importState = useAsync<Json>();
   const analysisState = useAsync<Json>();
 
@@ -777,13 +784,17 @@ function HoldingsTab() {
         financials_csv: SAMPLE_FINANCIALS_PATH,
       }),
     );
-  const loadSampleHoldings = () => setCsv(SAMPLE_HOLDINGS_CSV);
+  const loadSampleHoldings = () => setCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
+  const loadMinimalHoldings = () => setCsv(SAMPLE_HOLDINGS_CSV);
 
   const summary: Json = analysisState.data?.summary ?? {};
   const rows: Json[] =
     (analysisState.data?.holdings as Json[] | undefined) ??
     (importState.data?.holdings as Json[] | undefined) ??
     [];
+  const inputWarnings: Json[] = Array.isArray(importState.data?.input_warnings)
+    ? importState.data.input_warnings
+    : [];
   const nisaAlerts: Json[] = Array.isArray(summary.nisa?.alerts)
     ? summary.nisa.alerts
     : [];
@@ -812,6 +823,7 @@ function HoldingsTab() {
       </Field>
       <div className="form">
         <button onClick={loadSampleHoldings}>サンプル保有CSVを読み込む</button>
+        <button onClick={loadMinimalHoldings}>最小CSVを読み込む</button>
         <button onClick={importHoldings} disabled={importState.loading}>
           形式を確認
         </button>
@@ -821,6 +833,34 @@ function HoldingsTab() {
       </div>
       <Status loading={importState.loading} error={importState.error} />
       <Status loading={analysisState.loading} error={analysisState.error} />
+
+      {inputWarnings.length > 0 && (
+        <div className="subpanel csv-guidance-panel">
+          <h3>CSV input guidance</h3>
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>level</th>
+                <th>row</th>
+                <th>column</th>
+                <th>reason</th>
+                <th>message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {inputWarnings.map((warning, index) => (
+                <tr key={`${String(warning.code)}-${String(warning.row ?? warning.column)}-${index}`}>
+                  <td><span className="badge">{String(warning.level)}</span></td>
+                  <td className="mono">{String(warning.row ?? "-")}</td>
+                  <td className="mono">{String(warning.column ?? "-")}</td>
+                  <td>{String(warning.code)}</td>
+                  <td>{String(warning.message)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {analysisState.data && (
         <section className="metric-grid">
@@ -1272,7 +1312,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
 }
 
 function InvestmentReportTab() {
-  const [holdingsCsv, setHoldingsCsv] = useState(SAMPLE_HOLDINGS_CSV);
+  const [holdingsCsv, setHoldingsCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
   const [targetDividend, setTargetDividend] = useState(60000);
   const state = useAsync<Json>();
@@ -1346,7 +1386,7 @@ function InvestmentReportTab() {
     });
   };
   const loadReportSamples = () => {
-    setHoldingsCsv(SAMPLE_HOLDINGS_CSV);
+    setHoldingsCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
     setFundsCsv(SAMPLE_FUNDS_CSV);
     setTargetDividend(60000);
   };
@@ -1557,7 +1597,7 @@ function InvestmentReportTab() {
 function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
   const [code, setCode] = useState(seed.code);
   const [assetType, setAssetType] = useState(seed.assetType);
-  const [holdingsCsv, setHoldingsCsv] = useState(SAMPLE_HOLDINGS_CSV);
+  const [holdingsCsv, setHoldingsCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
   const state = useAsync<Json>();
 
@@ -1567,7 +1607,7 @@ function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
   }, [seed.assetType, seed.code, seed.nonce]);
 
   const loadSamples = () => {
-    setHoldingsCsv(SAMPLE_HOLDINGS_CSV);
+    setHoldingsCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
     setFundsCsv(SAMPLE_FUNDS_CSV);
   };
   const loadDetail = () =>

@@ -594,14 +594,23 @@ def _financials_compare(body: JsonDict) -> JsonDict:
 
 
 def _holdings_import(body: JsonDict) -> JsonDict:
-    from investment_assistant.investment.loader import holdings_from_payload
-    from investment_assistant.investment.models import DISCLAIMER, HOLDING_COLUMNS
+    from investment_assistant.investment.loader import (
+        holding_input_warnings,
+        holdings_from_payload,
+    )
+    from investment_assistant.investment.models import (
+        DISCLAIMER,
+        HOLDING_COLUMNS,
+        HOLDING_RECOMMENDED_COLUMNS,
+    )
 
     holdings = holdings_from_payload(body)
     return {
         "count": len(holdings),
         "holdings": [holding.to_dict() for holding in holdings],
         "required_columns": list(HOLDING_COLUMNS),
+        "recommended_columns": list(HOLDING_RECOMMENDED_COLUMNS),
+        "input_warnings": holding_input_warnings(body, holdings),
         "disclaimer": DISCLAIMER,
         "auto_trading": False,
         "call_real_api": False,

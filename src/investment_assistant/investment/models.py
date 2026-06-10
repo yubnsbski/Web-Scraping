@@ -20,6 +20,11 @@ HOLDING_COLUMNS: tuple[str, ...] = (
     "source",
 )
 
+HOLDING_RECOMMENDED_COLUMNS: tuple[str, ...] = (
+    "data_provider",
+    "price_as_of",
+)
+
 FUND_PROFILE_COLUMNS: tuple[str, ...] = (
     "fund_code",
     "name",
