@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
 import { api } from "./api";
 import { DashboardTab } from "./DashboardTab";
 
@@ -50,6 +50,8 @@ type DetailSeed = {
   assetType: string;
   nonce: number;
 };
+
+type CsvDraft = Record<string, string>;
 
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const CANDIDATE_SCREEN_PRESETS_STORAGE_KEY =
@@ -196,6 +198,60 @@ const SAMPLE_FUNDS_CSV =
   "FND999,高コストテーマ型,theme,1.20,distribution,false,user_csv,0.40\n";
 
 const SAMPLE_FINANCIALS_PATH = "examples/financials_sample.csv";
+
+const HOLDING_CSV_COLUMNS = [
+  "asset_type",
+  "ticker_or_fund_code",
+  "name",
+  "quantity",
+  "avg_cost",
+  "account_type",
+  "tax_wrapper",
+  "source",
+  "current_price",
+  "annual_income",
+  "distribution_per_unit",
+  "data_provider",
+  "price_as_of",
+] as const;
+
+const FUND_CSV_COLUMNS = [
+  "fund_code",
+  "name",
+  "asset_class",
+  "expense_ratio",
+  "distribution_policy",
+  "nisa_eligible",
+  "provider_id",
+  "diversification_score",
+] as const;
+
+const DEFAULT_HOLDING_DRAFT: CsvDraft = {
+  asset_type: "stock",
+  ticker_or_fund_code: "7203",
+  name: "Manual Holding",
+  quantity: "100",
+  avg_cost: "1800",
+  account_type: "tokutei",
+  tax_wrapper: "taxable",
+  source: "manual",
+  current_price: "2200",
+  annual_income: "",
+  distribution_per_unit: "",
+  data_provider: "manual",
+  price_as_of: "2026-06-11",
+};
+
+const DEFAULT_FUND_DRAFT: CsvDraft = {
+  fund_code: "FND001",
+  name: "Manual Fund",
+  asset_class: "global_equity",
+  expense_ratio: "0.12",
+  distribution_policy: "reinvest",
+  nisa_eligible: "true",
+  provider_id: "manual",
+  diversification_score: "0.90",
+};
 
 const SAMPLE_SOURCES = JSON.stringify([presetToSource(SOURCE_PRESETS[0])], null, 2);
 const DISCLOSURE_AUTO_SOURCES = [
@@ -366,6 +422,43 @@ function Field(props: { label: string; children: ReactNode }) {
       {props.children}
     </label>
   );
+}
+
+function csvEscape(value: unknown): string {
+  const text = String(value ?? "");
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function appendCsvDraft(
+  csvText: string,
+  columns: readonly string[],
+  draft: CsvDraft,
+): string {
+  const header = columns.join(",");
+  const row = columns.map((column) => csvEscape(draft[column] ?? "")).join(",");
+  const trimmed = csvText.trim();
+  if (!trimmed) return `${header}\n${row}\n`;
+  const lines = trimmed.split(/\r?\n/);
+  const firstLine = lines[0] ?? "";
+  const hasRelatedHeader = columns.some((column) => firstLine.split(",").includes(column));
+  const body = hasRelatedHeader ? lines.slice(1).join("\n") : trimmed;
+  return `${header}\n${body ? `${body}\n` : ""}${row}\n`;
+}
+
+function downloadTextFile(filename: string, text: string, type = "text/csv"): void {
+  const blob = new Blob([text], { type: `${type};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function jsonText(value: unknown): string {
+  return JSON.stringify(value ?? {}, null, 2);
 }
 
 function Status(props: { loading: boolean; error: string | null }) {
@@ -837,6 +930,7 @@ function HoldingsTab() {
   const analysisState = useAsync<Json>();
   const templateState = useAsync<Json>();
   const validationState = useAsync<Json>();
+  const [holdingDraft, setHoldingDraft] = useState<CsvDraft>(DEFAULT_HOLDING_DRAFT);
   const [validationActionMessage, setValidationActionMessage] = useState<string | null>(null);
 
   const importHoldings = () =>
@@ -877,6 +971,28 @@ function HoldingsTab() {
     });
   const loadSampleHoldings = () => setCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const loadMinimalHoldings = () => setCsv(SAMPLE_HOLDINGS_CSV);
+  const updateHoldingDraft = (column: string, value: string) =>
+    setHoldingDraft((current) => ({ ...current, [column]: value }));
+  const addHoldingDraftRow = () => {
+    setCsv((current) => appendCsvDraft(current, HOLDING_CSV_COLUMNS, holdingDraft));
+    setValidationActionMessage("Manual holding row was added to the CSV. Validate before import.");
+  };
+  const importHoldingFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    void file.text().then((text) => {
+      setCsv(text);
+      setValidationActionMessage(`Loaded ${file.name}. Validate before import or analysis.`);
+    });
+  };
+  const downloadHoldingCsv = () => downloadTextFile("investment_holdings.csv", csv);
+  const downloadHoldingImportJson = () =>
+    downloadTextFile(
+      "investment_holdings_import.json",
+      jsonText(importState.data),
+      "application/json",
+    );
   const loadHoldingTemplate = () =>
     templateState.run(async () => {
       const template = await api<Json>("/api/holdings/template", { include_examples: true });
@@ -918,6 +1034,33 @@ function HoldingsTab() {
       <Field label="保有CSV">
         <textarea rows={7} value={csv} onChange={(e) => setCsv(e.target.value)} />
       </Field>
+      <div className="subpanel csv-manual-panel">
+        <h3>Manual holding row</h3>
+        <p className="hint">
+          Fill one row, append it to the CSV, then validate/import/analyze. This does not place orders.
+        </p>
+        <div className="csv-manual-grid">
+          {HOLDING_CSV_COLUMNS.map((column) => (
+            <Field key={column} label={column}>
+              <input
+                value={holdingDraft[column] ?? ""}
+                onChange={(event) => updateHoldingDraft(column, event.target.value)}
+              />
+            </Field>
+          ))}
+        </div>
+        <div className="form">
+          <button onClick={addHoldingDraftRow}>Add manual row to CSV</button>
+          <label className="button-like">
+            Import CSV file
+            <input type="file" accept=".csv,text/csv" onChange={importHoldingFile} />
+          </label>
+          <button onClick={downloadHoldingCsv}>Download CSV</button>
+          <button onClick={downloadHoldingImportJson} disabled={!importState.data}>
+            Download import JSON
+          </button>
+        </div>
+      </div>
       <div className="form">
         <button onClick={loadSampleHoldings}>サンプル保有CSVを読み込む</button>
         <button onClick={loadHoldingTemplate} disabled={templateState.loading}>
@@ -1164,6 +1307,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   const providerState = useAsync<Json>();
   const fundTemplateState = useAsync<Json>();
   const fundValidationState = useAsync<Json>();
+  const [fundDraft, setFundDraft] = useState<CsvDraft>(DEFAULT_FUND_DRAFT);
   const [screenActionMessage, setScreenActionMessage] = useState<string | null>(null);
 
   const screen = () =>
@@ -1218,6 +1362,28 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       }),
     );
   const loadSampleFunds = () => setFundsCsv(SAMPLE_FUNDS_CSV);
+  const updateFundDraft = (column: string, value: string) =>
+    setFundDraft((current) => ({ ...current, [column]: value }));
+  const addFundDraftRow = () => {
+    setFundsCsv((current) => appendCsvDraft(current, FUND_CSV_COLUMNS, fundDraft));
+    setScreenActionMessage("Manual fund row was added to the CSV. Validate before screening.");
+  };
+  const importFundFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    void file.text().then((text) => {
+      setFundsCsv(text);
+      setScreenActionMessage(`Loaded ${file.name}. Validate before screening.`);
+    });
+  };
+  const downloadFundCsv = () => downloadTextFile("investment_funds.csv", fundsCsv);
+  const downloadFundValidationJson = () =>
+    downloadTextFile(
+      "investment_funds_validation.json",
+      jsonText(fundValidationState.data),
+      "application/json",
+    );
   const loadFundTemplate = () =>
     fundTemplateState.run(async () => {
       const template = await api<Json>("/api/funds/template", { include_examples: true });
@@ -1402,6 +1568,33 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       <Field label="投信プロファイルCSV">
         <textarea rows={5} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
       </Field>
+      <div className="subpanel csv-manual-panel">
+        <h3>Manual fund row</h3>
+        <p className="hint">
+          Add a fund profile row, import a fund CSV file, or export the current profile CSV.
+        </p>
+        <div className="csv-manual-grid">
+          {FUND_CSV_COLUMNS.map((column) => (
+            <Field key={column} label={column}>
+              <input
+                value={fundDraft[column] ?? ""}
+                onChange={(event) => updateFundDraft(column, event.target.value)}
+              />
+            </Field>
+          ))}
+        </div>
+        <div className="form">
+          <button onClick={addFundDraftRow}>Add manual row to CSV</button>
+          <label className="button-like">
+            Import CSV file
+            <input type="file" accept=".csv,text/csv" onChange={importFundFile} />
+          </label>
+          <button onClick={downloadFundCsv}>Download CSV</button>
+          <button onClick={downloadFundValidationJson} disabled={!fundValidationState.data}>
+            Download validation JSON
+          </button>
+        </div>
+      </div>
       <div className="form">
         <button onClick={loadSampleFunds}>サンプル投信CSVを読み込む</button>
         <button onClick={loadFundTemplate} disabled={fundTemplateState.loading}>
