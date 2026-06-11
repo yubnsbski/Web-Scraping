@@ -86,6 +86,7 @@ const TABS = [
   { id: "holdings", label: "Holdings" },
   { id: "candidates", label: "Candidates" },
   { id: "detail", label: "Detail" },
+  { id: "simulate", label: "Simulate" },
   { id: "report", label: "Report" },
   { id: "evidence", label: "Evidence" },
 ] as const;
@@ -295,6 +296,7 @@ export function App() {
         {tab === "holdings" && <HoldingsTab />}
         {tab === "candidates" && <CandidateScreenTab onOpenDetail={openDetail} />}
         {tab === "detail" && <InvestmentDetailTab seed={detailSeed} />}
+        {tab === "simulate" && <SimulateTab />}
         {tab === "report" && <InvestmentReportTab />}
         {tab === "evidence" && <SearchTab />}
       </main>
@@ -2992,6 +2994,5 @@ export const LEGACY_TOOL_TABS = {
   forecast: ForecastTab,
   scrape: ScrapeTab,
   analysis: AnalysisTab,
-  simulate: SimulateTab,
   ops: OpsTab,
 } as const;
