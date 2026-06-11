@@ -1510,13 +1510,36 @@ function InvestmentReportTab() {
   const historyState = useAsync<Json>();
   const markdownState = useAsync<Json>();
   const compareState = useAsync<Json>();
+  const reportHoldingValidationState = useAsync<Json>();
+  const reportFundValidationState = useAsync<Json>();
 
   useEffect(() => {
     void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
   }, []);
 
+  const validateReportInputs = async (): Promise<boolean> => {
+    const holdingValidation = await reportHoldingValidationState.run(() =>
+      api<Json>("/api/holdings/validate", { csv_text: holdingsCsv }),
+    );
+    if (!holdingValidation || holdingValidation.valid !== true) return false;
+
+    if (fundsCsv.trim()) {
+      const fundValidation = await reportFundValidationState.run(() =>
+        api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
+      );
+      if (!fundValidation || fundValidation.valid !== true) return false;
+    }
+    return true;
+  };
+  const validateReportCsvs = () => {
+    void validateReportInputs();
+  };
   const generate = () =>
     state.run(async () => {
+      const inputsValid = await validateReportInputs();
+      if (!inputsValid) {
+        throw new Error("Fix report CSV validation errors before report generation.");
+      }
       const candidates = await api<Json>("/api/candidates/screen", {
         asset_types: ["stock", "fund"],
         exclude_dividend_cut: true,
@@ -1628,11 +1651,35 @@ function InvestmentReportTab() {
       </Field>
       <div className="form">
         <button onClick={loadReportSamples}>サンプルCSVを読み込む</button>
-        <button className="primary" onClick={generate} disabled={state.loading}>
+        <button
+          onClick={validateReportCsvs}
+          disabled={reportHoldingValidationState.loading || reportFundValidationState.loading}
+        >
+          Validate report CSVs
+        </button>
+        <button
+          className="primary"
+          onClick={generate}
+          disabled={
+            state.loading ||
+            reportHoldingValidationState.loading ||
+            reportFundValidationState.loading
+          }
+        >
           レポート生成
         </button>
       </div>
+      <Status loading={reportHoldingValidationState.loading} error={reportHoldingValidationState.error} />
+      <Status loading={reportFundValidationState.loading} error={reportFundValidationState.error} />
       <Status loading={state.loading} error={state.error} />
+      <CsvValidationPanel
+        title="Report holding CSV validation"
+        data={reportHoldingValidationState.data}
+      />
+      <CsvValidationPanel
+        title="Report fund CSV validation"
+        data={reportFundValidationState.data}
+      />
 
       {state.data?.publish_audit && (
         <div className="subpanel report-audit-panel">
