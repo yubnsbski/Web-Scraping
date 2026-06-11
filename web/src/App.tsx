@@ -56,6 +56,14 @@ type CsvDraft = Record<string, string>;
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const CANDIDATE_SCREEN_PRESETS_STORAGE_KEY =
   "investment_assistant.candidate_screen_presets.v1";
+const FINANCIALS_CSV_STORAGE_KEY =
+  "investment_assistant.financials_csv_path.v1";
+const AI_CHAT_TARGET_SOURCE_STORAGE_KEY =
+  "investment_assistant.ai_chat.target_source.v1";
+const AI_CHAT_SELECTED_TICKER_STORAGE_KEY =
+  "investment_assistant.ai_chat.selected_ticker.v1";
+const AI_CHAT_SELECTED_SECURITY_NAME_STORAGE_KEY =
+  "investment_assistant.ai_chat.selected_security_name.v1";
 
 const TARGET_SOURCE_OPTIONS: TargetSourceOption[] = [
   {
@@ -322,7 +330,9 @@ type TabId = (typeof TABS)[number]["id"];
 
 export function App() {
   const [tab, setTab] = useState<TabId>("dashboard");
-  const [financialsCsvPath, setFinancialsCsvPath] = useState(DEFAULT_FINANCIALS_PATH);
+  const [financialsCsvPath, setFinancialsCsvPath] = useState(() =>
+    readLocalStorageString(FINANCIALS_CSV_STORAGE_KEY, DEFAULT_FINANCIALS_PATH),
+  );
   const [detailSeed, setDetailSeed] = useState<DetailSeed>({
     code: "7203",
     assetType: "stock",
@@ -332,6 +342,9 @@ export function App() {
     setDetailSeed({ code, assetType, nonce: Date.now() });
     setTab("detail");
   };
+  useEffect(() => {
+    writeLocalStorageString(FINANCIALS_CSV_STORAGE_KEY, financialsCsvPath);
+  }, [financialsCsvPath]);
   return (
     <div className="app">
       <header className="terminal-hero">
@@ -459,6 +472,30 @@ function Field(props: { label: string; children: ReactNode }) {
       {props.children}
     </label>
   );
+}
+
+function readLocalStorageString(key: string, fallback = ""): string {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const value = window.localStorage.getItem(key);
+    return value && value.trim() ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocalStorageString(key: string, value: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (value.trim()) {
+      window.localStorage.setItem(key, value);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function FinancialsSourceBar(props: { value: string; onChange: (value: string) => void }) {
@@ -2622,9 +2659,15 @@ function FeedbackButtons({ message }: { message: ChatMessage }) {
 function AnswerTab({ financialsCsvPath }: { financialsCsvPath: string }) {
   const [query, setQuery] = useState("選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
-  const [targetSource, setTargetSource] = useState(TARGET_SOURCE_OPTIONS[1].source);
-  const [selectedTicker, setSelectedTicker] = useState("");
-  const [selectedSecurityName, setSelectedSecurityName] = useState("");
+  const [targetSource, setTargetSource] = useState(() =>
+    readLocalStorageString(AI_CHAT_TARGET_SOURCE_STORAGE_KEY, TARGET_SOURCE_OPTIONS[1].source),
+  );
+  const [selectedTicker, setSelectedTicker] = useState(() =>
+    readLocalStorageString(AI_CHAT_SELECTED_TICKER_STORAGE_KEY),
+  );
+  const [selectedSecurityName, setSelectedSecurityName] = useState(() =>
+    readLocalStorageString(AI_CHAT_SELECTED_SECURITY_NAME_STORAGE_KEY),
+  );
   const [evidenceLimit, setEvidenceLimit] = useState(20);
   const [drafts, setDrafts] = useState(3);
   const [hybrid, setHybrid] = useState(true);
@@ -2644,6 +2687,18 @@ function AnswerTab({ financialsCsvPath }: { financialsCsvPath: string }) {
   const selectedTarget =
     TARGET_SOURCE_OPTIONS.find((option) => option.source === targetSource) ??
     TARGET_SOURCE_OPTIONS[0];
+
+  useEffect(() => {
+    writeLocalStorageString(AI_CHAT_TARGET_SOURCE_STORAGE_KEY, targetSource);
+  }, [targetSource]);
+
+  useEffect(() => {
+    writeLocalStorageString(AI_CHAT_SELECTED_TICKER_STORAGE_KEY, selectedTicker);
+    writeLocalStorageString(
+      AI_CHAT_SELECTED_SECURITY_NAME_STORAGE_KEY,
+      selectedSecurityName,
+    );
+  }, [selectedSecurityName, selectedTicker]);
 
   async function ask() {
     const trimmed = query.trim();
@@ -2716,6 +2771,8 @@ function AnswerTab({ financialsCsvPath }: { financialsCsvPath: string }) {
       },
     ]);
     setQuery("");
+    setSelectedTicker("");
+    setSelectedSecurityName("");
     setUseRealApi(false);
     setLoading(false);
     setLastData(null);
