@@ -92,23 +92,74 @@ const TARGET_SOURCE_OPTIONS: TargetSourceOption[] = [
 ];
 
 const TABS = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "holdings", label: "Holdings" },
-  { id: "candidates", label: "Candidates" },
-  { id: "detail", label: "Detail" },
-  { id: "simulate", label: "Simulate" },
-  { id: "report", label: "Report" },
-  { id: "answer", label: "AI Chat" },
-  { id: "data", label: "Data" },
-  { id: "evidence", label: "Evidence" },
+  { id: "dashboard", label: "概要" },
+  { id: "data", label: "データ準備" },
+  { id: "holdings", label: "保有分析" },
+  { id: "candidates", label: "候補抽出" },
+  { id: "simulate", label: "試算" },
+  { id: "report", label: "レポート" },
+  { id: "detail", label: "詳細" },
+  { id: "answer", label: "AI確認" },
+  { id: "evidence", label: "根拠検索" },
 ] as const;
 
 const HERO_CARDS = [
-  { label: "Holdings", value: "Analyze", desc: "保有・NISA・損益を集計" },
-  { label: "Candidates", value: "Screen", desc: "条件一致だけを提示" },
-  { label: "Report", value: "Evidence", desc: "計算式と根拠を保存" },
-  { label: "Detail", value: "Review", desc: "銘柄・投信を根拠付き確認" },
+  { label: "Step 1", value: "データ準備", desc: "EDINET/CSVを取り込む" },
+  { label: "Step 2", value: "保有分析", desc: "評価額・損益・NISAを確認" },
+  { label: "Step 3", value: "候補比較", desc: "条件に合う対象だけを見る" },
+  { label: "Step 4", value: "根拠付き出力", desc: "試算とレポートを残す" },
 ] as const;
+
+const WORKFLOW_STEPS = [
+  {
+    id: "data",
+    step: "1",
+    title: "データを準備",
+    body: "EDINET自動取得、手動CSV、サンプルCSVのどれかを選びます。",
+    action: "データ準備へ",
+  },
+  {
+    id: "holdings",
+    step: "2",
+    title: "保有を入れる",
+    body: "CSV貼り付け、ファイル取込、手入力で保有一覧を作ります。",
+    action: "保有分析へ",
+  },
+  {
+    id: "candidates",
+    step: "3",
+    title: "条件で絞る",
+    body: "減配履歴、自己資本比率、信託報酬、NISA対象などで比較します。",
+    action: "候補抽出へ",
+  },
+  {
+    id: "simulate",
+    step: "4",
+    title: "試算する",
+    body: "銘柄検索から追加し、配当・分配金の見込みを確認します。",
+    action: "試算へ",
+  },
+  {
+    id: "report",
+    step: "5",
+    title: "レポート化",
+    body: "重要KPI、計算式、根拠、免責をまとめて出力します。",
+    action: "レポートへ",
+  },
+  {
+    id: "answer",
+    step: "6",
+    title: "AIで確認",
+    body: "根拠付きで疑問点を整理します。売買判断はユーザーが行います。",
+    action: "AI確認へ",
+  },
+] satisfies {
+  id: TabId;
+  step: string;
+  title: string;
+  body: string;
+  action: string;
+}[];
 
 const SUGGESTED_QUESTIONS = [
   "選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して",
@@ -352,13 +403,14 @@ export function App() {
           <p className="eyebrow">Investment Research Terminal</p>
           <h1>Investment Assistant</h1>
           <p className="hero-lead">
-            日本株と投信の保有分析、候補抽出、NISA枠、根拠付きレポートを1画面で進めます。
+            日本株と投信の情報整理を、データ準備から保有分析、候補比較、試算、根拠付きレポートまで順番に進めます。
+            個別商品の断定推奨や自動売買は行いません。
           </p>
         </div>
         <div className="hero-badges">
-          <span className="badge safe">自動売買なし</span>
-          <span className="badge">売買推奨なし</span>
-          <span className="badge">ローカルRAG</span>
+          <span className="badge safe">非助言</span>
+          <span className="badge">日本株 + 投信</span>
+          <span className="badge">EDINET / CSV</span>
         </div>
       </header>
 
@@ -377,6 +429,7 @@ export function App() {
           <button
             key={t.id}
             className={t.id === tab ? "tab active" : "tab"}
+            aria-current={t.id === tab ? "page" : undefined}
             onClick={() => setTab(t.id)}
           >
             {t.label}
@@ -387,6 +440,20 @@ export function App() {
         value={financialsCsvPath}
         onChange={setFinancialsCsvPath}
       />
+      <section className="workflow quick-workflow" aria-label="操作ステップ">
+        {WORKFLOW_STEPS.map((step) => (
+          <button
+            key={step.id}
+            className={step.id === tab ? "step-card active" : "step-card"}
+            onClick={() => setTab(step.id)}
+          >
+            <span className="step-number">{step.step}</span>
+            <b>{step.title}</b>
+            <span>{step.body}</span>
+            <small>{step.action}</small>
+          </button>
+        ))}
+      </section>
       <main className="panel">
         {tab === "dashboard" && <DashboardTab />}
         {tab === "holdings" && <HoldingsTab financialsCsvPath={financialsCsvPath} />}
@@ -414,7 +481,7 @@ export function App() {
         {tab === "evidence" && <SearchTab />}
       </main>
       <footer className="footer">
-        本ツールは投資助言ではありません。最終的な投資判断はユーザー本人が行います。
+        本ツールは投資助言ではありません。表示内容は比較材料であり、最終的な投資判断はユーザー本人が行います。
       </footer>
     </div>
   );
@@ -502,20 +569,21 @@ function FinancialsSourceBar(props: { value: string; onChange: (value: string) =
   return (
     <section className="financials-source-bar" aria-label="EDINET financials source">
       <div>
-        <b>EDINET財務CSV</b>
+        <b>現在使う財務データ</b>
+        <span>候補抽出、銘柄詳細、試算、レポートで共通利用します。</span>
         <span className="mono">{props.value}</span>
       </div>
       <div className="financials-source-actions">
         <input
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
-          aria-label="EDINET財務CSVパス"
+          aria-label="財務CSVパス"
         />
         <button onClick={() => props.onChange(DEFAULT_FINANCIALS_PATH)}>
-          取得済みCSV
+          取得済み
         </button>
         <button onClick={() => props.onChange(SAMPLE_FINANCIALS_PATH)}>
-          サンプルCSV
+          サンプル
         </button>
       </div>
     </section>

@@ -441,6 +441,11 @@ button:disabled {
   gap: 10px;
 }
 
+.quick-workflow {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin: 14px 0 18px;
+}
+
 .step-card,
 .source-builder,
 .manual-ingest,
@@ -452,8 +457,29 @@ button:disabled {
   padding: 14px;
 }
 
+.step-card {
+  min-height: 148px;
+  color: var(--text);
+  text-align: left;
+}
+
+.quick-workflow .step-card {
+  min-height: 164px;
+}
+
+.step-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.58);
+}
+
+.step-card.active {
+  border-color: rgba(56, 189, 248, 0.88);
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.2), rgba(15, 23, 42, 0.86));
+}
+
 .step-card b,
-.step-card span {
+.step-card span,
+.step-card small {
   display: block;
 }
 
@@ -461,6 +487,26 @@ button:disabled {
   margin-top: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.step-card .step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 0 10px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.16);
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.step-card small {
+  margin-top: 12px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .source-builder,
