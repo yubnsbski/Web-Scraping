@@ -945,6 +945,8 @@ textarea { min-height: 140px; }
   .report-history-head,
   .history-item { grid-template-columns: 1fr; }
   .report-history-head { display: grid; }
+  .report-wizard { grid-template-columns: 1fr; }
+  .report-wizard-rail { grid-template-columns: 1fr; }
   .history-item dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .history-actions { display: grid; justify-content: stretch; }
   /* Full-width action buttons inside forms (not the scrollable tabs) */
@@ -987,6 +989,82 @@ textarea { min-height: 140px; }
 .subpanel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .subpanel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .subpanel > h3 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 800; color: var(--text); }
+
+.report-wizard {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.86fr) minmax(0, 2fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.report-wizard-rail {
+  display: grid;
+  gap: 8px;
+}
+
+.wizard-step {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: start;
+  min-height: 76px;
+  padding: 12px;
+  text-align: left;
+}
+
+.wizard-step span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.wizard-step b,
+.wizard-step small,
+.wizard-step i {
+  grid-column: 2;
+}
+
+.wizard-step small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.wizard-step i {
+  color: var(--safe);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.wizard-step.active {
+  border-color: rgba(56, 189, 248, 0.86);
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.88));
+}
+
+.report-wizard-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(142, 161, 189, 0.22);
+  border-radius: 16px;
+  background: rgba(11, 18, 32, 0.46);
+}
+
+.wizard-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
 
 .report-history-head {
   display: flex;

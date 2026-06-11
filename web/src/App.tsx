@@ -161,6 +161,47 @@ const WORKFLOW_STEPS = [
   action: string;
 }[];
 
+const REPORT_WIZARD_STEPS = [
+  {
+    id: "data",
+    step: "1",
+    title: "データ確認",
+    body: "使う財務CSVと入力CSVを確認します。",
+  },
+  {
+    id: "holdings",
+    step: "2",
+    title: "保有確認",
+    body: "保有CSVを検証し、分析対象を固めます。",
+  },
+  {
+    id: "candidates",
+    step: "3",
+    title: "候補条件",
+    body: "候補抽出に使う条件と投信CSVを確認します。",
+  },
+  {
+    id: "target",
+    step: "4",
+    title: "目標配当",
+    body: "任意の目標年間配当から必要予算を逆算します。",
+  },
+  {
+    id: "preview",
+    step: "5",
+    title: "プレビュー",
+    body: "生成、KPI、根拠、公開前監査を確認します。",
+  },
+  {
+    id: "export",
+    step: "6",
+    title: "保存/Markdown",
+    body: "履歴、比較、Markdown出力を扱います。",
+  },
+] as const;
+
+type ReportWizardStepId = (typeof REPORT_WIZARD_STEPS)[number]["id"];
+
 const SUGGESTED_QUESTIONS = [
   "選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して",
   "選択中の対象銘柄について、株主還元方針と未確認の危険ポイントを分けて",
@@ -2194,6 +2235,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
   const [holdingsCsv, setHoldingsCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
   const [targetDividend, setTargetDividend] = useState(60000);
+  const [wizardStep, setWizardStep] = useState<ReportWizardStepId>("data");
   const state = useAsync<Json>();
   const historyState = useAsync<Json>();
   const markdownState = useAsync<Json>();
@@ -2267,6 +2309,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
       });
       void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
       setReportActionMessage("Report generated after CSV validation.");
+      setWizardStep("preview");
       return report;
     });
   const refreshHistory = () =>
@@ -2274,18 +2317,23 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
   const loadSavedReport = (id: string) =>
     state.run(async () => {
       const entry = await api<Json>("/api/reports/investment-monthly/history/load", { id });
+      setWizardStep("preview");
       return (entry.report as Json) ?? {};
     });
   const showCurrentMarkdown = () => {
     if (!state.data) return;
+    setWizardStep("export");
     markdownState.run(() =>
       api<Json>("/api/reports/investment-monthly/markdown", { report: state.data }),
     );
   };
-  const showSavedMarkdown = (id: string) =>
+  const showSavedMarkdown = (id: string) => {
+    setWizardStep("export");
     markdownState.run(() => api<Json>("/api/reports/investment-monthly/markdown", { id }));
+  };
   const compareLatestReports = () => {
     if (reports.length < 2) return;
+    setWizardStep("export");
     compareState.run(() =>
       api<Json>("/api/reports/investment-monthly/history/compare", {
         base_id: reports[1].id,
@@ -2328,6 +2376,21 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
   const comparedMetrics: Json[] = Array.isArray(compareState.data?.metrics)
     ? compareState.data.metrics
     : [];
+  const wizardIndex = REPORT_WIZARD_STEPS.findIndex((step) => step.id === wizardStep);
+  const currentWizardStep = REPORT_WIZARD_STEPS[Math.max(wizardIndex, 0)];
+  const canGoBack = wizardIndex > 0;
+  const canGoNext = wizardIndex >= 0 && wizardIndex < REPORT_WIZARD_STEPS.length - 1;
+  const holdingCsvValid = reportHoldingValidationState.data?.valid === true;
+  const fundCsvValid = !fundsCsv.trim() || reportFundValidationState.data?.valid === true;
+  const reportGenerated = Boolean(state.data);
+  const goBack = () => {
+    if (!canGoBack) return;
+    setWizardStep(REPORT_WIZARD_STEPS[wizardIndex - 1].id);
+  };
+  const goNext = () => {
+    if (!canGoNext) return;
+    setWizardStep(REPORT_WIZARD_STEPS[wizardIndex + 1].id);
+  };
 
   return (
     <section className="tool-section">
@@ -2341,54 +2404,192 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
       <p className="hint">
         保有分析と候補抽出結果から、根拠と計算式つきの非助言レポートを生成します。
       </p>
-      <Field label="保有CSV">
-        <textarea rows={6} value={holdingsCsv} onChange={(e) => setHoldingsCsv(e.target.value)} />
-      </Field>
-      <Field label="投信プロファイルCSV（候補抽出用）">
-        <textarea rows={4} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
-      </Field>
-      <Field label="目標年間配当（円・任意）">
-        <input
-          type="number"
-          value={targetDividend}
-          onChange={(e) => setTargetDividend(Number(e.target.value))}
-          placeholder="例: 60000"
-        />
-      </Field>
-      <div className="form">
-        <button onClick={loadReportSamples}>サンプルCSVを読み込む</button>
-        <button
-          onClick={validateReportCsvs}
-          disabled={reportHoldingValidationState.loading || reportFundValidationState.loading}
-        >
-          Validate report CSVs
-        </button>
-        <button
-          className="primary"
-          onClick={generate}
-          disabled={
-            state.loading ||
-            reportHoldingValidationState.loading ||
-            reportFundValidationState.loading
-          }
-        >
-          レポート生成
-        </button>
+      <div className="report-wizard">
+        <div className="report-wizard-rail" aria-label="レポート生成ステップ">
+          {REPORT_WIZARD_STEPS.map((step, index) => (
+            <button
+              key={step.id}
+              className={step.id === wizardStep ? "wizard-step active" : "wizard-step"}
+              onClick={() => setWizardStep(step.id)}
+            >
+              <span>{step.step}</span>
+              <b>{step.title}</b>
+              <small>{step.body}</small>
+              {index < wizardIndex && <i>完了</i>}
+            </button>
+          ))}
+        </div>
+        <article className="report-wizard-panel">
+          <div className="report-audit-head">
+            <div>
+              <p className="eyebrow">Step {currentWizardStep.step}</p>
+              <h3>{currentWizardStep.title}</h3>
+              <p className="hint">{currentWizardStep.body}</p>
+            </div>
+            <span className="badge">非助言レポート</span>
+          </div>
+
+          {wizardStep === "data" && (
+            <>
+              <div className="callout">
+                <b>このレポートで使うデータ</b>
+                <p>
+                  財務CSVは候補抽出と根拠表示に使います。保有CSVと投信CSVは下のステップで確認します。
+                  まだ本番EDINET CSVがなければ、サンプルで流れを確認できます。
+                </p>
+                <p className="mono">{financialsCsvPath}</p>
+              </div>
+              <div className="form">
+                <button onClick={loadReportSamples}>サンプルCSVを読み込む</button>
+                <button onClick={() => setWizardStep("holdings")}>保有確認へ</button>
+              </div>
+            </>
+          )}
+
+          {wizardStep === "holdings" && (
+            <>
+              <Field label="保有CSV">
+                <textarea
+                  rows={8}
+                  value={holdingsCsv}
+                  onChange={(e) => setHoldingsCsv(e.target.value)}
+                />
+              </Field>
+              <div className="form">
+                <button
+                  onClick={validateReportCsvs}
+                  disabled={reportHoldingValidationState.loading || reportFundValidationState.loading}
+                >
+                  CSVを検証
+                </button>
+                <button onClick={() => setWizardStep("candidates")}>
+                  候補条件へ
+                </button>
+              </div>
+              <CsvValidationPanel
+                title="Report holding CSV validation"
+                data={reportHoldingValidationState.data}
+              />
+            </>
+          )}
+
+          {wizardStep === "candidates" && (
+            <>
+              <div className="callout">
+                <b>候補抽出条件</b>
+                <p>
+                  現在は「日本株+投信」「減配履歴なし」「信託報酬0.2%以下」
+                  「NISA対象」を固定条件として、比較対象だけを抽出します。推奨ではありません。
+                </p>
+              </div>
+              <Field label="投信プロファイルCSV（候補抽出用）">
+                <textarea rows={7} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
+              </Field>
+              <div className="form">
+                <button
+                  onClick={validateReportCsvs}
+                  disabled={reportHoldingValidationState.loading || reportFundValidationState.loading}
+                >
+                  CSVを検証
+                </button>
+                <button onClick={() => setWizardStep("target")}>
+                  目標配当へ
+                </button>
+              </div>
+              <CsvValidationPanel
+                title="Report fund CSV validation"
+                data={reportFundValidationState.data}
+              />
+            </>
+          )}
+
+          {wizardStep === "target" && (
+            <>
+              <Field label="目標年間配当（円・任意）">
+                <input
+                  type="number"
+                  value={targetDividend}
+                  onChange={(e) => setTargetDividend(Number(e.target.value))}
+                  placeholder="例: 60000"
+                />
+              </Field>
+              <div className="callout">
+                <b>逆算の意味</b>
+                <p>
+                  目標配当から必要予算を機械的に逆算します。達成を保証するものではなく、
+                  現在の入力条件での試算です。
+                </p>
+              </div>
+              <div className="form">
+                <button onClick={() => setWizardStep("preview")}>プレビューへ</button>
+              </div>
+            </>
+          )}
+
+          {wizardStep === "preview" && (
+            <>
+              <dl className="mini-stats">
+                <div>
+                  <dt>保有CSV</dt>
+                  <dd>{holdingCsvValid ? "検証OK" : "未検証/要確認"}</dd>
+                </div>
+                <div>
+                  <dt>投信CSV</dt>
+                  <dd>{fundCsvValid ? "検証OK" : "未検証/要確認"}</dd>
+                </div>
+                <div>
+                  <dt>レポート</dt>
+                  <dd>{reportGenerated ? "生成済み" : "未生成"}</dd>
+                </div>
+              </dl>
+              <div className="form">
+                <button
+                  onClick={validateReportCsvs}
+                  disabled={reportHoldingValidationState.loading || reportFundValidationState.loading}
+                >
+                  入力を再検証
+                </button>
+                <button
+                  className="primary"
+                  onClick={generate}
+                  disabled={
+                    state.loading ||
+                    reportHoldingValidationState.loading ||
+                    reportFundValidationState.loading
+                  }
+                >
+                  レポート生成
+                </button>
+                {state.data && (
+                  <button onClick={() => setWizardStep("export")}>
+                    保存/Markdownへ
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+
+          {wizardStep === "export" && (
+            <div className="callout">
+              <b>保存と出力</b>
+              <p>
+                レポート生成時に履歴へ保存されます。ここでは履歴の再表示、比較、Markdown出力を行います。
+              </p>
+            </div>
+          )}
+
+          <div className="wizard-actions">
+            <button onClick={goBack} disabled={!canGoBack}>戻る</button>
+            <button onClick={goNext} disabled={!canGoNext}>次へ</button>
+          </div>
+        </article>
       </div>
       <Status loading={reportHoldingValidationState.loading} error={reportHoldingValidationState.error} />
       <Status loading={reportFundValidationState.loading} error={reportFundValidationState.error} />
       <Status loading={state.loading} error={state.error} />
       {reportActionMessage && <p className="status">{reportActionMessage}</p>}
-      <CsvValidationPanel
-        title="Report holding CSV validation"
-        data={reportHoldingValidationState.data}
-      />
-      <CsvValidationPanel
-        title="Report fund CSV validation"
-        data={reportFundValidationState.data}
-      />
 
-      {state.data?.publish_audit && (
+      {wizardStep === "preview" && state.data?.publish_audit && (
         <div className="subpanel report-audit-panel">
           <div className="report-audit-head">
             <div>
@@ -2438,6 +2639,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
         </div>
       )}
 
+      {wizardStep === "export" && (
       <div className="subpanel report-history">
         <div className="report-history-head">
           <div>
@@ -2543,23 +2745,24 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
           </div>
         )}
       </div>
+      )}
 
-      {state.data && (
+      {wizardStep === "export" && state.data && (
         <div className="form">
           <button onClick={showCurrentMarkdown} disabled={markdownState.loading}>
             Markdownを表示
           </button>
         </div>
       )}
-      <Status loading={markdownState.loading} error={markdownState.error} />
-      {markdownText && (
+      {wizardStep === "export" && <Status loading={markdownState.loading} error={markdownState.error} />}
+      {wizardStep === "export" && markdownText && (
         <div className="subpanel">
           <h3>Markdown</h3>
           <textarea className="markdown-output" rows={12} readOnly value={markdownText} />
         </div>
       )}
 
-      {kpis.length > 0 && (
+      {wizardStep === "preview" && kpis.length > 0 && (
         <section className="metric-grid">
           {kpis.map((kpi) => (
             <article className="metric-card accent" key={String(kpi.metric_key)}>
@@ -2575,7 +2778,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
           ))}
         </section>
       )}
-      {sections.length > 0 && (
+      {wizardStep === "preview" && sections.length > 0 && (
         <div className="guide-grid">
           {sections.map((section) => (
             <article className="guide-card" key={String(section.key)}>
@@ -2585,7 +2788,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
           ))}
         </div>
       )}
-      {evidence.length > 0 && (
+      {wizardStep === "preview" && evidence.length > 0 && (
         <div className="subpanel">
           <EvidencePanel
             title={`根拠一覧（${evidence.length}件）`}
@@ -2599,7 +2802,9 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
           />
         </div>
       )}
-      {state.data?.disclaimer && <p className="hint">{String(state.data.disclaimer)}</p>}
+      {wizardStep === "preview" && state.data?.disclaimer && (
+        <p className="hint">{String(state.data.disclaimer)}</p>
+      )}
     </section>
   );
 }
