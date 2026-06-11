@@ -536,6 +536,7 @@ def _portfolio_target(body: JsonDict) -> JsonDict:
     holdings = [h for h in raw if isinstance(h, dict)] if isinstance(raw, list) else []
     return plan_for_target_dividend(
         target_annual_dividend=_as_float(body.get("target_annual_dividend"), 0.0),
+        net_target=_as_bool(body.get("net_target"), False),
         holdings=holdings,
         years=_as_int(body.get("years"), 10),
         reinvest=_as_bool(body.get("reinvest"), True),

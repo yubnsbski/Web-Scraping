@@ -243,6 +243,67 @@ def test_summary_reports_concentration() -> None:
     assert conc["effective_names"] > 1.0  # two names -> behaves like ~2  # type: ignore[index]
 
 
+def test_after_tax_dividend_taxable_vs_nisa() -> None:
+    out = simulate_portfolio(
+        budget=1_000_000,
+        holdings=[
+            {"ticker": "TAXED", "price": 1000, "dividend_per_share": 40},
+            {"ticker": "NISA", "price": 1000, "dividend_per_share": 40, "nisa": True},
+        ],
+        auto_weight="equal",
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+    )
+    allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
+    # 500 shares × 40 = 20,000 gross each; taxable nets 20,000 × (1 − 0.20315).
+    assert allocs["TAXED"]["annual_dividend"] == 20_000
+    assert allocs["TAXED"]["annual_dividend_net"] == round(20_000 * (1 - 0.20315))
+    assert allocs["TAXED"]["dividend_tax"] == round(20_000 * 0.20315)
+    assert allocs["NISA"]["annual_dividend_net"] == 20_000
+    assert allocs["NISA"]["dividend_tax"] == 0
+    summary = out["summary"]
+    assert summary["annual_dividend_net"] == (  # type: ignore[index]
+        allocs["TAXED"]["annual_dividend_net"] + allocs["NISA"]["annual_dividend_net"]
+    )
+    assert summary["dividend_tax"] == allocs["TAXED"]["dividend_tax"]  # type: ignore[index]
+    proj = out["projection"]
+    assert proj["conservative_net"][0] == summary["annual_dividend_net"]  # type: ignore[index]
+
+
+def test_target_dividend_net_needs_bigger_budget() -> None:
+    holdings = [{"ticker": "A", "price": 1000, "dividend_per_share": 40}]
+    gross = plan_for_target_dividend(
+        target_annual_dividend=20_000,
+        holdings=holdings,
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+    )
+    net = plan_for_target_dividend(
+        target_annual_dividend=20_000,
+        holdings=holdings,
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+        net_target=True,
+    )
+    assert net["target"]["net_target"] is True  # type: ignore[index]
+    # Net per lot = 4,000 × 0.79685 ≈ 3,187 -> 7 lots (700 shares) vs 5 gross.
+    assert net["target"]["required_budget"] == 700_000  # type: ignore[index]
+    assert net["target"]["required_budget"] > gross["target"]["required_budget"]  # type: ignore[index]
+    assert net["target"]["achieved_annual_dividend_net"] >= 20_000  # type: ignore[index]
+
+
+def test_target_dividend_net_nisa_counts_in_full() -> None:
+    out = plan_for_target_dividend(
+        target_annual_dividend=20_000,
+        holdings=[{"ticker": "N", "price": 1000, "dividend_per_share": 40, "nisa": True}],
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+        net_target=True,
+    )
+    # NISA is tax-free, so the net target behaves like the gross one: 5 lots.
+    assert out["target"]["required_budget"] == 500_000  # type: ignore[index]
+
+
 def test_no_valid_holdings_returns_unavailable() -> None:
     out = simulate_portfolio(
         budget=1000, holdings=[{"ticker": "X", "price": 0}], financials_csv=_NO_CSV

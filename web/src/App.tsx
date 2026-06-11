@@ -2519,7 +2519,7 @@ const OPTIMIZE_MODES: { value: string; label: string }[] = [
   { value: "balanced", label: "バランス（配当×安全性）" },
 ];
 
-type Holding = { ticker: string; name: string; price: number; shares: number; amount: number };
+type Holding = { ticker: string; name: string; price: number; shares: number; amount: number; nisa: boolean };
 
 function MultiLineChart({
   series,
@@ -2616,6 +2616,7 @@ function SimulateTab() {
   const [weightMode, setWeightMode] = useState("equal");
   const [optimizeMode, setOptimizeMode] = useState("none");
   const [targetDividend, setTargetDividend] = useState(0);
+  const [netTarget, setNetTarget] = useState(true);
   const [universe, setUniverse] = useState<Json[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pick, setPick] = useState("");
@@ -2633,7 +2634,7 @@ function SimulateTab() {
     if (!u || holdings.some((h) => h.ticker === String(u.ticker))) return;
     setHoldings([
       ...holdings,
-      { ticker: String(u.ticker), name: String(u.name ?? ""), price: Number(u.price) || 0, shares: 100, amount: 100000 },
+      { ticker: String(u.ticker), name: String(u.name ?? ""), price: Number(u.price) || 0, shares: 100, amount: 100000, nisa: false },
     ]);
   };
   const patch = (i: number, p: Partial<Holding>) =>
@@ -2668,7 +2669,7 @@ function SimulateTab() {
         auto_weight: weightMode,
         optimization: optimizeMode,
         dividend_basis: "conservative",
-        holdings: holdings.map((h) => ({ ticker: h.ticker, price: h.price, shares: h.shares, amount: h.amount })),
+        holdings: holdings.map((h) => ({ ticker: h.ticker, price: h.price, shares: h.shares, amount: h.amount, nisa: h.nisa })),
       }),
     );
 
@@ -2676,13 +2677,14 @@ function SimulateTab() {
     run(() =>
       api<Json>("/api/portfolio/target", {
         target_annual_dividend: targetDividend,
+        net_target: netTarget,
         years,
         growth_rate: growth / 100,
         reinvest,
         auto_weight: weightMode,
         optimization: optimizeMode,
         dividend_basis: "conservative",
-        holdings: holdings.map((h) => ({ ticker: h.ticker, price: h.price, shares: h.shares, amount: h.amount })),
+        holdings: holdings.map((h) => ({ ticker: h.ticker, price: h.price, shares: h.shares, amount: h.amount, nisa: h.nisa })),
       }),
     );
 
@@ -2773,6 +2775,7 @@ function SimulateTab() {
               <th>株価</th>
               {showShares && <th>株数</th>}
               {showAmount && <th>投資額</th>}
+              <th>NISA</th>
               <th></th>
             </tr>
           </thead>
@@ -2796,6 +2799,14 @@ function SimulateTab() {
                   </td>
                 )}
                 <td>
+                  <input
+                    type="checkbox"
+                    checked={h.nisa}
+                    onChange={(e) => patch(i, { nisa: e.target.checked })}
+                    title="NISA口座（非課税）として計算"
+                  />
+                </td>
+                <td>
                   <button onClick={() => removeAt(i)}>削除</button>
                 </td>
               </tr>
@@ -2816,6 +2827,10 @@ function SimulateTab() {
             placeholder="例: 600000"
           />
         </Field>
+        <label className="field check-field">
+          <input type="checkbox" checked={netTarget} onChange={(e) => setNetTarget(e.target.checked)} />
+          <span>手取り（税引後）で指定</span>
+        </label>
         <button
           onClick={planTarget}
           disabled={loading || holdings.length === 0 || targetDividend <= 0}
@@ -2829,7 +2844,7 @@ function SimulateTab() {
       {data && target && (
         <p className={`status ${target.reachable ? "" : "warn-text"}`}>
           {target.reachable
-            ? `目標 ${yen(target.target_annual_dividend)}/年 → 必要予算 約${yen(target.required_budget)}（達成見込み ${yen(target.achieved_annual_dividend)}/年・安全側）`
+            ? `目標 ${yen(target.target_annual_dividend)}/年${target.net_target ? "（手取り）" : ""} → 必要予算 約${yen(target.required_budget)}（達成見込み 手取り${yen(target.achieved_annual_dividend_net)}/年・安全側）`
             : String(data.hint ?? "目標に到達できませんでした。")}
         </p>
       )}
@@ -2848,6 +2863,11 @@ function SimulateTab() {
               <span>年間配当（安全側）</span>
               <b>{yen(summary.annual_dividend)}</b>
               <small>名目 {yen(summary.annual_dividend_latest)}</small>
+            </article>
+            <article className="metric-card pos">
+              <span>手取り配当（税引後）</span>
+              <b>{yen(summary.annual_dividend_net)}</b>
+              <small>税 {yen(summary.dividend_tax)}（20.315%・NISA除く）</small>
             </article>
             <article className="metric-card accent">
               <span>利回り（安全側）</span>
