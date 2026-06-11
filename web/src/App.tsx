@@ -837,24 +837,43 @@ function HoldingsTab() {
   const analysisState = useAsync<Json>();
   const templateState = useAsync<Json>();
   const validationState = useAsync<Json>();
+  const [validationActionMessage, setValidationActionMessage] = useState<string | null>(null);
 
   const importHoldings = () =>
-    importState.run(() => api<Json>("/api/holdings/import", { csv_text: csv }));
+    importState.run(async () => {
+      setValidationActionMessage(null);
+      return api<Json>("/api/holdings/import", { csv_text: csv });
+    });
   const validateHoldings = () =>
-    validationState.run(() => api<Json>("/api/holdings/validate", { csv_text: csv }));
+    validationState.run(async () => {
+      const validation = await api<Json>("/api/holdings/validate", { csv_text: csv });
+      setValidationActionMessage(
+        validation.valid === true
+          ? "Holding CSV validation passed. Analysis can run."
+          : "Holding CSV validation failed. Analysis is blocked until the listed issues are fixed.",
+      );
+      return validation;
+    });
   const analyze = () =>
     analysisState.run(async () => {
+      setValidationActionMessage("Validating holding CSV before analysis.");
       const validation = await validationState.run(() =>
         api<Json>("/api/holdings/validate", { csv_text: csv }),
       );
       if (!validation) throw new Error("Holding CSV validation could not complete.");
       if (validation.valid !== true) {
+        setValidationActionMessage(
+          "Analysis stopped: holding CSV validation failed. Review the validation table.",
+        );
         throw new Error("Fix holding CSV validation errors before analysis.");
       }
-      return api<Json>("/api/portfolio/analyze", {
+      setValidationActionMessage("Holding CSV validation passed. Running analysis.");
+      const result = await api<Json>("/api/portfolio/analyze", {
         csv_text: csv,
         financials_csv: SAMPLE_FINANCIALS_PATH,
       });
+      setValidationActionMessage("Analysis completed after holding CSV validation.");
+      return result;
     });
   const loadSampleHoldings = () => setCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const loadMinimalHoldings = () => setCsv(SAMPLE_HOLDINGS_CSV);
@@ -919,6 +938,7 @@ function HoldingsTab() {
       <Status loading={validationState.loading} error={validationState.error} />
       <Status loading={importState.loading} error={importState.error} />
       <Status loading={analysisState.loading} error={analysisState.error} />
+      {validationActionMessage && <p className="status">{validationActionMessage}</p>}
       <CsvValidationPanel title="Holding CSV validation" data={validationState.data} />
 
       {inputWarnings.length > 0 && (
@@ -1144,19 +1164,27 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   const providerState = useAsync<Json>();
   const fundTemplateState = useAsync<Json>();
   const fundValidationState = useAsync<Json>();
+  const [screenActionMessage, setScreenActionMessage] = useState<string | null>(null);
 
   const screen = () =>
     state.run(async () => {
       if (includeFunds) {
+        setScreenActionMessage("Validating fund CSV before candidate screening.");
         const validation = await fundValidationState.run(() =>
           api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
         );
         if (!validation) throw new Error("Fund CSV validation could not complete.");
         if (validation.valid !== true) {
+          setScreenActionMessage(
+            "Candidate screening stopped: fund CSV validation failed. Review the validation table.",
+          );
           throw new Error("Fix fund CSV validation errors before screening.");
         }
+      } else {
+        setScreenActionMessage("Fund CSV validation skipped because fund candidates are disabled.");
       }
-      return api<Json>("/api/candidates/screen", {
+      setScreenActionMessage("Candidate input validation passed. Running screen.");
+      const result = await api<Json>("/api/candidates/screen", {
         asset_types: [
           ...(includeStocks ? ["stock"] : []),
           ...(includeFunds ? ["fund"] : []),
@@ -1171,6 +1199,8 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
         financials_csv: SAMPLE_FINANCIALS_PATH,
         sort_by: "score",
       });
+      setScreenActionMessage("Candidate screening completed after validation.");
+      return result;
     });
   const loadProviderPolicyLedger = () =>
     providerState.run(() =>
@@ -1195,9 +1225,15 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       return template;
     });
   const validateFunds = () =>
-    fundValidationState.run(() =>
-      api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
-    );
+    fundValidationState.run(async () => {
+      const validation = await api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv });
+      setScreenActionMessage(
+        validation.valid === true
+          ? "Fund CSV validation passed. Candidate screening can run."
+          : "Fund CSV validation failed. Candidate screening is blocked until the listed issues are fixed.",
+      );
+      return validation;
+    });
   const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
 
   const savePreset = () => {
@@ -1381,6 +1417,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       <Status loading={fundTemplateState.loading} error={fundTemplateState.error} />
       <Status loading={fundValidationState.loading} error={fundValidationState.error} />
       <Status loading={state.loading} error={state.error} />
+      {screenActionMessage && <p className="status">{screenActionMessage}</p>}
       <CsvValidationPanel title="Fund CSV validation" data={fundValidationState.data} />
       <div className="subpanel provider-ledger-panel">
         <div className="report-audit-head">
@@ -1512,34 +1549,51 @@ function InvestmentReportTab() {
   const compareState = useAsync<Json>();
   const reportHoldingValidationState = useAsync<Json>();
   const reportFundValidationState = useAsync<Json>();
+  const [reportActionMessage, setReportActionMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
   }, []);
 
-  const validateReportInputs = async (): Promise<boolean> => {
+  const validateReportInputs = async (actionLabel = "report action"): Promise<boolean> => {
+    setReportActionMessage(`Validating report holding CSV before ${actionLabel}.`);
     const holdingValidation = await reportHoldingValidationState.run(() =>
       api<Json>("/api/holdings/validate", { csv_text: holdingsCsv }),
     );
-    if (!holdingValidation || holdingValidation.valid !== true) return false;
+    if (!holdingValidation || holdingValidation.valid !== true) {
+      setReportActionMessage(
+        "Report action stopped: holding CSV validation failed. Review the validation table.",
+      );
+      return false;
+    }
 
     if (fundsCsv.trim()) {
+      setReportActionMessage(`Validating report fund CSV before ${actionLabel}.`);
       const fundValidation = await reportFundValidationState.run(() =>
         api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
       );
-      if (!fundValidation || fundValidation.valid !== true) return false;
+      if (!fundValidation || fundValidation.valid !== true) {
+        setReportActionMessage(
+          "Report action stopped: fund CSV validation failed. Review the validation table.",
+        );
+        return false;
+      }
+    } else {
+      setReportActionMessage("Report fund CSV validation skipped because the fund CSV is empty.");
     }
+    setReportActionMessage("Report CSV validation passed.");
     return true;
   };
   const validateReportCsvs = () => {
-    void validateReportInputs();
+    void validateReportInputs("manual validation");
   };
   const generate = () =>
     state.run(async () => {
-      const inputsValid = await validateReportInputs();
+      const inputsValid = await validateReportInputs("report generation");
       if (!inputsValid) {
         throw new Error("Fix report CSV validation errors before report generation.");
       }
+      setReportActionMessage("Report CSV validation passed. Running candidate screen.");
       const candidates = await api<Json>("/api/candidates/screen", {
         asset_types: ["stock", "fund"],
         exclude_dividend_cut: true,
@@ -1561,6 +1615,7 @@ function InvestmentReportTab() {
         dividend_basis: "conservative",
       });
       void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
+      setReportActionMessage("Report generated after CSV validation.");
       return report;
     });
   const refreshHistory = () =>
@@ -1672,6 +1727,7 @@ function InvestmentReportTab() {
       <Status loading={reportHoldingValidationState.loading} error={reportHoldingValidationState.error} />
       <Status loading={reportFundValidationState.loading} error={reportFundValidationState.error} />
       <Status loading={state.loading} error={state.error} />
+      {reportActionMessage && <p className="status">{reportActionMessage}</p>}
       <CsvValidationPanel
         title="Report holding CSV validation"
         data={reportHoldingValidationState.data}
