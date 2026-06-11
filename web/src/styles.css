@@ -264,9 +264,19 @@ button:hover:not(:disabled),
 
 .financials-source-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) repeat(5, auto);
   gap: 8px;
   align-items: center;
+}
+
+.financials-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .top-security-picker {
@@ -1274,6 +1284,36 @@ textarea { min-height: 140px; }
   border: 1px solid rgba(142, 161, 189, 0.22);
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.38);
+}
+
+.fund-score-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(34, 197, 94, 0.26);
+  border-radius: 8px;
+  background: rgba(7, 11, 18, 0.36);
+}
+
+.score-breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.score-breakdown-table th,
+.score-breakdown-table td {
+  padding: 6px 4px;
+  border-top: 1px solid rgba(142, 161, 189, 0.16);
+  text-align: left;
+  vertical-align: top;
+}
+
+.score-breakdown-table small {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  line-height: 1.4;
 }
 
 .edinet-summary-head {

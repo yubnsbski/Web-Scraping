@@ -140,6 +140,49 @@ def test_financials_import_saves_manual_csv_and_searches_securities(
     assert searched["securities"][0]["name"] == "MUFG"
 
 
+def test_financials_status_reports_saved_data(tmp_path: Path) -> None:
+    csv_text = (
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2023,1000,45,40,stable\n"
+        "8306,MUFG,2024,1200,48,45,stable\n"
+        "7203,Toyota,2024,3000,55,60,stable\n"
+    )
+    output_path = tmp_path / "financials.csv"
+    output_path.write_text(csv_text, encoding="utf-8")
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/status",
+        {"path": str(output_path), "stale_after_days": 3650},
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["status"] == "fresh"
+    assert payload["path"] == str(output_path)
+    assert payload["point_count"] == 3
+    assert payload["company_count"] == 2
+    assert payload["latest_fiscal_year"] == 2024
+    assert payload["modified_at"]
+
+
+def test_financials_status_reports_missing_data(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-financials.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/status",
+        {"path": str(missing)},
+    )
+
+    assert status == 200
+    assert payload["available"] is False
+    assert payload["status"] == "missing"
+    assert payload["point_count"] == 0
+    assert payload["company_count"] == 0
+    assert "財務データ" in payload["hint"]
+
+
 def test_financials_securities_missing_csv_returns_empty_result(tmp_path: Path) -> None:
     missing = tmp_path / "missing-financials.csv"
 
@@ -154,7 +197,7 @@ def test_financials_securities_missing_csv_returns_empty_result(tmp_path: Path) 
     assert payload["count"] == 0
     assert payload["securities"] == []
     assert payload["source_ref"] == str(missing)
-    assert "財務CSV" in payload["hint"]
+    assert "財務データ" in payload["hint"]
 
 
 def test_portfolio_universe_missing_csv_returns_empty_result(tmp_path: Path) -> None:
@@ -171,7 +214,58 @@ def test_portfolio_universe_missing_csv_returns_empty_result(tmp_path: Path) -> 
     assert payload["count"] == 0
     assert payload["universe"] == []
     assert payload["source_ref"] == str(missing)
-    assert "財務CSV" in payload["hint"]
+    assert "財務データ" in payload["hint"]
+
+
+def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> None:
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "7203,Toyota,2024,1000,55,60,stable\n"
+        "8306,MUFG,2024,1200,48,45,stable\n"
+        "9999,Standard Sample,2024,90,18,10,unstable\n",
+        encoding="utf-8",
+    )
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,7203,トヨタ自動車,プライム（内国株式）,輸送用機器\n"
+        "2026-05-31,8306,三菱ＵＦＪフィナンシャル・グループ,プライム（内国株式）,銀行業\n"
+        "2026-05-31,9999,サンプルスタンダード,スタンダード（内国株式）,サービス業\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+
+    status, imported = handle_api(
+        "POST",
+        "/api/market/jpx-listed/import",
+        {"csv_text": listed, "output_path": str(listed_path), "save": True},
+    )
+
+    assert status == 200
+    assert imported["count"] == 3
+    assert imported["prime_count"] == 2
+    assert listed_path.is_file()
+
+    status, universe = handle_api(
+        "POST",
+        "/api/market/universe",
+        {
+            "financials_csv": str(financials),
+            "jpx_listed_path": str(listed_path),
+            "scope": "prime",
+            "query": "",
+            "limit": 10,
+        },
+    )
+
+    assert status == 200
+    codes = {str(item["ticker"]) for item in universe["securities"]}
+    assert codes == {"7203", "8306"}
+    rows = {str(item["ticker"]): item for item in universe["securities"]}
+    assert rows["8306"]["is_prime"] is True
+    assert rows["8306"]["is_nikkei225"] is True
+    assert rows["8306"]["has_financials"] is True
+    assert universe["auto_trading"] is False
+    assert universe["call_real_api"] is False
 
 
 

@@ -104,7 +104,7 @@ const TABS = [
 ] as const;
 
 const HERO_CARDS = [
-  { label: "Step 1", value: "データ準備", desc: "EDINET/CSVを取り込む" },
+  { label: "Step 1", value: "データ準備", desc: "EDINET/データを取り込む" },
   { label: "Step 2", value: "保有分析", desc: "評価額・損益・NISAを確認" },
   { label: "Step 3", value: "候補比較", desc: "条件に合う対象だけを見る" },
   { label: "Step 4", value: "根拠付き出力", desc: "試算とレポートを残す" },
@@ -115,14 +115,14 @@ const WORKFLOW_STEPS = [
     id: "data",
     step: "1",
     title: "データを準備",
-    body: "EDINET自動取得、手動CSV、サンプルCSVのどれかを選びます。",
+    body: "EDINET自動取得、手動データ、サンプルデータのどれかを選びます。",
     action: "データ準備へ",
   },
   {
     id: "holdings",
     step: "2",
     title: "保有を入れる",
-    body: "CSV貼り付け、ファイル取込、手入力で保有一覧を作ります。",
+    body: "データ貼り付け、ファイル取込、手入力で保有一覧を作ります。",
     action: "保有分析へ",
   },
   {
@@ -166,19 +166,19 @@ const REPORT_WIZARD_STEPS = [
     id: "data",
     step: "1",
     title: "データ確認",
-    body: "使う財務CSVと入力CSVを確認します。",
+    body: "使う財務データと入力データを確認します。",
   },
   {
     id: "holdings",
     step: "2",
     title: "保有確認",
-    body: "保有CSVを検証し、分析対象を固めます。",
+    body: "保有データを検証し、分析対象を固めます。",
   },
   {
     id: "candidates",
     step: "3",
     title: "候補条件",
-    body: "候補抽出に使う条件と投信CSVを確認します。",
+    body: "候補抽出に使う条件と投信データを確認します。",
   },
   {
     id: "target",
@@ -314,6 +314,19 @@ const SAMPLE_FINANCIALS_CSV =
   "9999,景気連動マテリアル,2024,260000,39.0,55,業績連動・配当性向40%（下限なし）\n" +
   "9999,景気連動マテリアル,2025,180000,37.4,45,業績連動・配当性向40%（下限なし）\n";
 
+const SAMPLE_JPX_LISTED_ISSUES_DATA =
+  "日付,コード,銘柄名,市場・商品区分,33業種区分\n" +
+  "2026-05-31,7203,トヨタ自動車,プライム（内国株式）,輸送用機器\n" +
+  "2026-05-31,8306,三菱ＵＦＪフィナンシャル・グループ,プライム（内国株式）,銀行業\n" +
+  "2026-05-31,9999,サンプルスタンダード,スタンダード（内国株式）,サービス業\n";
+
+const MARKET_SCOPE_OPTIONS = [
+  { value: "prime", label: "東証プライム" },
+  { value: "nikkei225", label: "日経225" },
+  { value: "financials", label: "財務データあり" },
+  { value: "all", label: "全件" },
+] as const;
+
 const HOLDING_CSV_COLUMNS = [
   "asset_type",
   "ticker_or_fund_code",
@@ -425,6 +438,7 @@ export function App() {
   const [financialsCsvPath, setFinancialsCsvPath] = useState(() =>
     readLocalStorageString(FINANCIALS_CSV_STORAGE_KEY, DEFAULT_FINANCIALS_PATH),
   );
+  const [financialsRefreshNonce, setFinancialsRefreshNonce] = useState(0);
   const [detailSeed, setDetailSeed] = useState<DetailSeed>({
     code: "7203",
     assetType: "stock",
@@ -433,6 +447,9 @@ export function App() {
   const openDetail = (code: string, assetType: string) => {
     setDetailSeed({ code, assetType, nonce: Date.now() });
     setTab("detail");
+  };
+  const markFinancialsDataUpdated = () => {
+    setFinancialsRefreshNonce((value) => value + 1);
   };
   useEffect(() => {
     writeLocalStorageString(FINANCIALS_CSV_STORAGE_KEY, financialsCsvPath);
@@ -451,7 +468,7 @@ export function App() {
         <div className="hero-badges">
           <span className="badge safe">非助言</span>
           <span className="badge">日本株 + 投信</span>
-          <span className="badge">EDINET / CSV</span>
+          <span className="badge">EDINET / データ</span>
         </div>
       </header>
 
@@ -480,6 +497,9 @@ export function App() {
       <FinancialsSourceBar
         value={financialsCsvPath}
         onChange={setFinancialsCsvPath}
+        onOpenData={() => setTab("data")}
+        onDataUpdated={markFinancialsDataUpdated}
+        refreshKey={financialsRefreshNonce}
       />
       <section className="top-security-picker" aria-label="証券コードと企業選択">
         <SecuritySearch
@@ -548,6 +568,7 @@ export function App() {
           <ScrapeTab
             financialsCsvPath={financialsCsvPath}
             onFinancialsCsvPathChange={setFinancialsCsvPath}
+            onFinancialsDataUpdated={markFinancialsDataUpdated}
           />
         )}
         {tab === "evidence" && <SearchTab />}
@@ -637,19 +658,82 @@ function writeLocalStorageString(key: string, value: string): boolean {
   }
 }
 
-function FinancialsSourceBar(props: { value: string; onChange: (value: string) => void }) {
+function FinancialsSourceBar(props: {
+  value: string;
+  onChange: (value: string) => void;
+  onOpenData: () => void;
+  onDataUpdated: () => void;
+  refreshKey: number;
+}) {
+  const statusState = useAsync<Json>();
+  const updateState = useAsync<Json>();
+  const refreshStatus = () =>
+    statusState.run(() =>
+      api<Json>("/api/financials/status", {
+        path: props.value,
+        stale_after_days: 7,
+      }),
+    );
+  const runOneClickUpdate = () =>
+    updateState.run(async () => {
+      const result = await runJob("/api/edinet/ingest-async", {
+        registry_path: "examples/source_registry_nikkei225_edinet.yaml",
+        days: 7,
+        output_dir: "local_docs/edinet",
+        db_path: DEFAULT_RAG_DB_PATH,
+        index_after_fetch: true,
+      });
+      const csvPath = String(result.financials_csv ?? "local_docs/edinet/financials.csv");
+      props.onChange(csvPath);
+      props.onDataUpdated();
+      await statusState.run(() =>
+        api<Json>("/api/financials/status", {
+          path: csvPath,
+          stale_after_days: 7,
+        }),
+      );
+      return result;
+    });
+  useEffect(() => {
+    void refreshStatus();
+  }, [props.value, props.refreshKey]);
+  const status = String(statusState.data?.status ?? "checking");
+  const statusLabel =
+    status === "fresh"
+      ? "利用可能"
+      : status === "stale"
+        ? "更新推奨"
+        : status === "missing"
+          ? "未作成"
+          : status === "invalid"
+            ? "要確認"
+            : "確認中";
+  const statusBadgeClass = status === "fresh" ? "safe" : status === "checking" ? "" : "warn";
   return (
     <section className="financials-source-bar" aria-label="EDINET financials source">
       <div>
         <b>現在使う財務データ</b>
         <span>候補抽出、銘柄詳細、試算、レポートで共通利用します。</span>
         <span className="mono">{props.value}</span>
+        <div className="financials-status-summary">
+          <span className={`badge ${statusBadgeClass}`}>{statusLabel}</span>
+          {statusState.data?.available === true && (
+            <>
+              <span>{Number(statusState.data.company_count ?? 0).toLocaleString()}社</span>
+              <span>{Number(statusState.data.point_count ?? 0).toLocaleString()}件</span>
+              <span>更新: {formatDateTime(statusState.data.modified_at)}</span>
+            </>
+          )}
+          {statusState.data?.available === false && (
+            <span>{String(statusState.data.hint ?? "Dataタブで財務データを更新してください。")}</span>
+          )}
+        </div>
       </div>
       <div className="financials-source-actions">
         <input
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
-          aria-label="財務CSVパス"
+          aria-label="財務データパス"
         />
         <button onClick={() => props.onChange(DEFAULT_FINANCIALS_PATH)}>
           取得済み
@@ -657,7 +741,25 @@ function FinancialsSourceBar(props: { value: string; onChange: (value: string) =
         <button onClick={() => props.onChange(SAMPLE_FINANCIALS_PATH)}>
           サンプル
         </button>
+        <button onClick={() => void refreshStatus()} disabled={statusState.loading}>
+          状態更新
+        </button>
+        <button onClick={runOneClickUpdate} disabled={updateState.loading}>
+          ワンクリック自動更新
+        </button>
+        <button onClick={props.onOpenData}>
+          Dataで更新
+        </button>
       </div>
+      <Status loading={updateState.loading} error={updateState.error} />
+      {updateState.data && (
+        <p className="status">
+          財務データを更新しました:{" "}
+          <span className="mono">
+            {String(updateState.data.financials_csv ?? "local_docs/edinet/financials.csv")}
+          </span>
+        </p>
+      )}
     </section>
   );
 }
@@ -885,6 +987,12 @@ function formatCompactNumber(value: unknown): string {
   return String(value ?? "-");
 }
 
+function formatRatio(value: unknown): string {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return number.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
 function incomeSourceLabel(value: unknown): string {
   const source = String(value ?? "");
   const labels: Record<string, string> = {
@@ -933,13 +1041,67 @@ function EdinetSummaryPanel({ summary }: { summary?: Json | null }) {
 function CandidateMetrics({ item }: { item: Json }) {
   const metrics = item.metrics ?? {};
   const summary = item.edinet_summary as Json | undefined;
+  const assetType = String(item.asset_type ?? "");
+  const score = typeof item.score === "number" ? item.score : Number(item.score);
   return (
     <div className="candidate-metrics">
       <EdinetSummaryPanel summary={summary} />
+      {assetType === "fund" && (
+        <FundScorePanel
+          score={Number.isFinite(score) ? score : null}
+          breakdown={Array.isArray(item.score_breakdown) ? item.score_breakdown : []}
+          model={item.scoring_model as Json | undefined}
+        />
+      )}
       <details className="raw-metrics">
         <summary>指標JSON</summary>
         <pre>{JSON.stringify(metrics, null, 2)}</pre>
       </details>
+    </div>
+  );
+}
+
+function FundScorePanel({
+  score,
+  breakdown,
+  model,
+}: {
+  score: number | null;
+  breakdown: Json[];
+  model?: Json;
+}) {
+  return (
+    <div className="fund-score-panel">
+      <div className="edinet-summary-head">
+        <b>投信スコア</b>
+        <span className="badge">{score === null ? "-" : score.toFixed(3)}</span>
+      </div>
+      <small>{String(model?.note ?? "条件比較のための決定論スコアです。")}</small>
+      {breakdown.length > 0 && (
+        <table className="score-breakdown-table">
+          <thead>
+            <tr>
+              <th>項目</th>
+              <th>重み</th>
+              <th>値</th>
+              <th>寄与</th>
+            </tr>
+          </thead>
+          <tbody>
+            {breakdown.map((row) => (
+              <tr key={String(row.key)}>
+                <td>
+                  <b>{String(row.label ?? row.key)}</b>
+                  <small>{String(row.formula ?? "")}</small>
+                </td>
+                <td className="mono">{formatRatio(row.weight)}</td>
+                <td>{String(row.raw_value ?? "-")}</td>
+                <td className="mono">{formatRatio(row.contribution)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -959,31 +1121,45 @@ function SecuritySearch({
 }) {
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(10);
+  const [scope, setScope] = useState("prime");
   const state = useAsync<Json>();
   const securities: Json[] = Array.isArray(state.data?.securities)
     ? state.data.securities
     : [];
   const search = () =>
     state.run(() =>
-      api<Json>("/api/financials/securities", {
+      api<Json>("/api/market/universe", {
         financials_csv: financialsCsvPath,
         query,
         limit,
+        scope,
       }),
     );
+  const currentScopeLabel =
+    MARKET_SCOPE_OPTIONS.find((option) => option.value === scope)?.label ?? scope;
   return (
     <div className="security-search">
       <div className="report-audit-head">
         <div>
           <h3>{title}</h3>
           <p className="hint">
-            EDINET財務CSVから証券コードまたは企業名で検索します。空欄で検索すると一覧から選べます。
+            東証プライム、日経225、財務データありの範囲を切り替えて、証券コードまたは企業名で検索します。
+            空欄で検索すると選択中の範囲を一覧表示します。
             選択しても売買操作は行いません。
           </p>
         </div>
-        <span className="badge">EDINET CSV</span>
+        <span className="badge">{currentScopeLabel}</span>
       </div>
       <div className="form">
+        <Field label="対象範囲">
+          <select value={scope} onChange={(event) => setScope(event.target.value)}>
+            {MARKET_SCOPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </Field>
         <Field label="証券コード / 名称">
           <input
             value={query}
@@ -1006,10 +1182,11 @@ function SecuritySearch({
         <button
           onClick={() =>
             state.run(() =>
-              api<Json>("/api/financials/securities", {
+              api<Json>("/api/market/universe", {
                 financials_csv: financialsCsvPath,
                 query: "",
                 limit,
+                scope,
               }),
             )
           }
@@ -1019,18 +1196,55 @@ function SecuritySearch({
         </button>
       </div>
       <Status loading={state.loading} error={state.error} />
+      {state.data?.hint && <p className="hint">{String(state.data.hint)}</p>}
+      {state.data?.sources && (
+        <details className="evidence-panel kpi-details">
+          <summary>
+            公式ソース
+            <span>JPX / Nikkei</span>
+          </summary>
+          <dl>
+            <div>
+              <dt>JPX</dt>
+              <dd>
+                <a
+                  className="cite-link"
+                  href={String(state.data.sources?.jpx_listed_issues?.page_url ?? "#")}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  東証上場銘柄一覧
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>Nikkei 225</dt>
+              <dd>
+                <a
+                  className="cite-link"
+                  href={String(state.data.sources?.nikkei225_components?.page_url ?? "#")}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Nikkei 225 Components
+                </a>
+              </dd>
+            </div>
+          </dl>
+        </details>
+      )}
       {state.data?.available === false && (
         <div className="callout warn-callout">
-          <b>財務CSVがまだありません</b>
+          <b>銘柄データがまだありません</b>
           <p>
             {String(
               state.data.hint
-                ?? "DataタブでEDINET取得/手動CSV保存を行うか、サンプルCSVに切り替えてください。",
+                ?? "DataタブでEDINET取得/手動保存を行うか、サンプルデータに切り替えてください。",
             )}
           </p>
           <div className="form">
             {onUseSample && (
-              <button onClick={onUseSample}>サンプルCSVに切替</button>
+              <button onClick={onUseSample}>サンプルデータに切替</button>
             )}
             {onOpenData && (
               <button onClick={onOpenData}>Dataタブで取得・保存</button>
@@ -1044,6 +1258,9 @@ function SecuritySearch({
             <tr>
               <th>コード</th>
               <th>名称</th>
+              <th>市場</th>
+              <th>日経225</th>
+              <th>財務</th>
               <th>最新年度</th>
               <th>自己資本比率</th>
               <th>1株配当</th>
@@ -1055,6 +1272,9 @@ function SecuritySearch({
               <tr key={String(security.ticker)}>
                 <td className="mono">{String(security.ticker)}</td>
                 <td>{String(security.name)}</td>
+                <td>{String(security.market_segment ?? "-")}</td>
+                <td>{security.is_nikkei225 ? <span className="badge safe">日経225</span> : "-"}</td>
+                <td>{security.has_financials ? <span className="badge safe">あり</span> : "未取得"}</td>
                 <td>{String(security.latest_fiscal_year ?? "-")}</td>
                 <td className="mono">
                   {security.latest_equity_ratio !== undefined
@@ -1075,8 +1295,8 @@ function SecuritySearch({
       {state.data && securities.length === 0 && (
         <p className="hint">
           {state.data.available === false
-            ? "財務CSVが見つからないため、銘柄一覧を表示できません。"
-            : "一致する銘柄がありません。財務CSVパスと検索語を確認してください。"}
+            ? "財務データまたは市場区分データが見つからないため、銘柄一覧を表示できません。"
+            : "一致する銘柄がありません。対象範囲、データ取込状況、検索語を確認してください。"}
         </p>
       )}
     </div>
@@ -1363,7 +1583,7 @@ function CsvValidationPanel(props: { title: string; data?: Json | null }) {
           </tbody>
         </table>
       ) : (
-        <p className="hint">No blocking CSV issues were found.</p>
+        <p className="hint">入力データにブロック要因はありません。</p>
       )}
     </div>
   );
@@ -1396,30 +1616,30 @@ function HoldingsTab({
       const validation = await api<Json>("/api/holdings/validate", { csv_text: csv });
       setValidationActionMessage(
         validation.valid === true
-          ? "Holding CSV validation passed. Analysis can run."
-          : "Holding CSV validation failed. Analysis is blocked until the listed issues are fixed.",
+          ? "保有データの検証に通りました。分析できます。"
+          : "保有データの検証に失敗しました。表示された問題を修正してください。",
       );
       return validation;
     });
   const analyze = () =>
     analysisState.run(async () => {
-      setValidationActionMessage("Validating holding CSV before analysis.");
+      setValidationActionMessage("分析前に保有データを検証しています。");
       const validation = await validationState.run(() =>
         api<Json>("/api/holdings/validate", { csv_text: csv }),
       );
-      if (!validation) throw new Error("Holding CSV validation could not complete.");
+      if (!validation) throw new Error("保有データの検証を完了できませんでした。");
       if (validation.valid !== true) {
         setValidationActionMessage(
-          "Analysis stopped: holding CSV validation failed. Review the validation table.",
+          "保有データの検証に失敗したため、分析を停止しました。検証結果を確認してください。",
         );
-        throw new Error("Fix holding CSV validation errors before analysis.");
+        throw new Error("分析前に保有データの検証エラーを修正してください。");
       }
-      setValidationActionMessage("Holding CSV validation passed. Running analysis.");
+      setValidationActionMessage("保有データの検証に通りました。分析を実行しています。");
       const result = await api<Json>("/api/portfolio/analyze", {
         csv_text: csv,
         financials_csv: financialsCsvPath,
       });
-      setValidationActionMessage("Analysis completed after holding CSV validation.");
+      setValidationActionMessage("保有データ検証後に分析が完了しました。");
       return result;
     });
   const loadSampleHoldings = () => setCsv(AUDITABLE_SAMPLE_HOLDINGS_CSV);
@@ -1428,7 +1648,7 @@ function HoldingsTab({
     setHoldingDraft((current) => ({ ...current, [column]: value }));
   const addHoldingDraftRow = () => {
     setCsv((current) => appendCsvDraft(current, HOLDING_CSV_COLUMNS, holdingDraft));
-    setValidationActionMessage("Manual holding row was added to the CSV. Validate before import.");
+    setValidationActionMessage("手入力行を保有データに追加しました。取込前に検証してください。");
   };
   const importHoldingFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
@@ -1481,16 +1701,16 @@ function HoldingsTab({
         <span className="badge">日本株 + 投信</span>
       </div>
       <p className="hint">
-        保有CSVまたは手入力相当のCSVから、評価額、評価損益、配当/分配金見込み、NISA枠、
+        保有データまたは手入力データから、評価額、評価損益、配当/分配金見込み、NISA枠、
         集中度を機械的に集計します。売買推奨や注文連携は行いません。
       </p>
-      <Field label="保有CSV">
+      <Field label="保有データ">
         <textarea rows={7} value={csv} onChange={(e) => setCsv(e.target.value)} />
       </Field>
       <div className="subpanel csv-manual-panel">
         <h3>Manual holding row</h3>
         <p className="hint">
-          Fill one row, append it to the CSV, then validate/import/analyze. This does not place orders.
+          1行ずつ手入力して保有データへ追加できます。注文や売買操作は行いません。
         </p>
         <SecuritySearch
           financialsCsvPath={financialsCsvPath}
@@ -1515,25 +1735,25 @@ function HoldingsTab({
           ))}
         </div>
         <div className="form">
-          <button onClick={addHoldingDraftRow}>Add manual row to CSV</button>
+          <button onClick={addHoldingDraftRow}>手入力行を追加</button>
           <label className="button-like">
-            Import CSV file
+            ファイル取込
             <input type="file" accept=".csv,text/csv" onChange={importHoldingFile} />
           </label>
-          <button onClick={downloadHoldingCsv}>Download CSV</button>
+          <button onClick={downloadHoldingCsv}>データを出力</button>
           <button onClick={downloadHoldingImportJson} disabled={!importState.data}>
             Download import JSON
           </button>
         </div>
       </div>
       <div className="form">
-        <button onClick={loadSampleHoldings}>サンプル保有CSVを読み込む</button>
+        <button onClick={loadSampleHoldings}>サンプル保有データを読み込む</button>
         <button onClick={loadHoldingTemplate} disabled={templateState.loading}>
-          CSVテンプレート
+          データテンプレート
         </button>
-        <button onClick={loadMinimalHoldings}>最小CSVを読み込む</button>
+        <button onClick={loadMinimalHoldings}>最小データを読み込む</button>
         <button onClick={validateHoldings} disabled={validationState.loading}>
-          Validate CSV
+          データ検証
         </button>
         <button onClick={importHoldings} disabled={importState.loading}>
           形式を確認
@@ -1547,11 +1767,11 @@ function HoldingsTab({
       <Status loading={importState.loading} error={importState.error} />
       <Status loading={analysisState.loading} error={analysisState.error} />
       {validationActionMessage && <p className="status">{validationActionMessage}</p>}
-      <CsvValidationPanel title="Holding CSV validation" data={validationState.data} />
+      <CsvValidationPanel title="保有データ検証" data={validationState.data} />
 
       {inputWarnings.length > 0 && (
         <div className="subpanel csv-guidance-panel">
-          <h3>CSV input guidance</h3>
+          <h3>データ入力ガイド</h3>
           <table className="grid">
             <thead>
               <tr>
@@ -1807,19 +2027,19 @@ function CandidateScreenTab({
   const screen = () =>
     state.run(async () => {
       if (includeFunds) {
-        setScreenActionMessage("Validating fund CSV before candidate screening.");
+        setScreenActionMessage("候補抽出前に投信データを検証しています。");
         const validation = await fundValidationState.run(() =>
           api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
         );
-        if (!validation) throw new Error("Fund CSV validation could not complete.");
+        if (!validation) throw new Error("投信データの検証を完了できませんでした。");
         if (validation.valid !== true) {
           setScreenActionMessage(
-            "Candidate screening stopped: fund CSV validation failed. Review the validation table.",
+            "投信データの検証に失敗したため、候補抽出を停止しました。検証結果を確認してください。",
           );
-          throw new Error("Fix fund CSV validation errors before screening.");
+          throw new Error("候補抽出前に投信データの検証エラーを修正してください。");
         }
       } else {
-        setScreenActionMessage("Fund CSV validation skipped because fund candidates are disabled.");
+        setScreenActionMessage("投信候補が無効のため、投信データ検証をスキップしました。");
       }
       setScreenActionMessage("Candidate input validation passed. Running screen.");
       const result = await api<Json>("/api/candidates/screen", {
@@ -1860,7 +2080,7 @@ function CandidateScreenTab({
     setFundDraft((current) => ({ ...current, [column]: value }));
   const addFundDraftRow = () => {
     setFundsCsv((current) => appendCsvDraft(current, FUND_CSV_COLUMNS, fundDraft));
-    setScreenActionMessage("Manual fund row was added to the CSV. Validate before screening.");
+    setScreenActionMessage("手入力行を投信データに追加しました。候補抽出前に検証してください。");
   };
   const importFundFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
@@ -1889,8 +2109,8 @@ function CandidateScreenTab({
       const validation = await api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv });
       setScreenActionMessage(
         validation.valid === true
-          ? "Fund CSV validation passed. Candidate screening can run."
-          : "Fund CSV validation failed. Candidate screening is blocked until the listed issues are fixed.",
+          ? "投信データの検証に通りました。候補抽出できます。"
+          : "投信データの検証に失敗しました。表示された問題を修正してください。",
       );
       return validation;
     });
@@ -1942,7 +2162,7 @@ function CandidateScreenTab({
     setMinDiversification(preset.minDiversification);
     setSelectedPresetId(preset.id);
     setPresetName(preset.name);
-    setPresetStatus(`${preset.name} を適用しました。CSV本文は変更していません。`);
+    setPresetStatus(`${preset.name} を適用しました。入力データ本文は変更していません。`);
   };
 
   const applySelectedPreset = () => {
@@ -1994,7 +2214,7 @@ function CandidateScreenTab({
       <div className="subpanel">
         <h3>抽出条件プリセット</h3>
         <p className="hint">
-          保存するのは条件だけです。投信プロファイルCSVや抽出結果はブラウザ保存に含めません。
+          保存するのは条件だけです。投信データや抽出結果はブラウザ保存に含めません。
         </p>
         <div className="form">
           <Field label="プリセット名">
@@ -2059,13 +2279,13 @@ function CandidateScreenTab({
           <input value={minDiversification} onChange={(e) => setMinDiversification(e.target.value)} />
         </Field>
       </div>
-      <Field label="投信プロファイルCSV">
+      <Field label="投信データ">
         <textarea rows={5} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
       </Field>
       <div className="subpanel csv-manual-panel">
         <h3>Manual fund row</h3>
         <p className="hint">
-          Add a fund profile row, import a fund CSV file, or export the current profile CSV.
+          投信プロファイルを手入力、ファイル取込、または現在のデータとして出力できます。
         </p>
         <div className="csv-manual-grid">
           {FUND_CSV_COLUMNS.map((column) => (
@@ -2078,24 +2298,24 @@ function CandidateScreenTab({
           ))}
         </div>
         <div className="form">
-          <button onClick={addFundDraftRow}>Add manual row to CSV</button>
+          <button onClick={addFundDraftRow}>手入力行を追加</button>
           <label className="button-like">
-            Import CSV file
+            ファイル取込
             <input type="file" accept=".csv,text/csv" onChange={importFundFile} />
           </label>
-          <button onClick={downloadFundCsv}>Download CSV</button>
+          <button onClick={downloadFundCsv}>データを出力</button>
           <button onClick={downloadFundValidationJson} disabled={!fundValidationState.data}>
             Download validation JSON
           </button>
         </div>
       </div>
       <div className="form">
-        <button onClick={loadSampleFunds}>サンプル投信CSVを読み込む</button>
+        <button onClick={loadSampleFunds}>サンプル投信データを読み込む</button>
         <button onClick={loadFundTemplate} disabled={fundTemplateState.loading}>
           投信テンプレート
         </button>
         <button onClick={validateFunds} disabled={fundValidationState.loading}>
-          Validate funds CSV
+          投信データ検証
         </button>
         <button className="primary" onClick={screen} disabled={state.loading}>
           条件に一致する比較対象を表示
@@ -2105,7 +2325,7 @@ function CandidateScreenTab({
       <Status loading={fundValidationState.loading} error={fundValidationState.error} />
       <Status loading={state.loading} error={state.error} />
       {screenActionMessage && <p className="status">{screenActionMessage}</p>}
-      <CsvValidationPanel title="Fund CSV validation" data={fundValidationState.data} />
+      <CsvValidationPanel title="投信データ検証" data={fundValidationState.data} />
       <div className="subpanel provider-ledger-panel">
         <div className="report-audit-head">
           <div>
@@ -2165,7 +2385,7 @@ function CandidateScreenTab({
       )}
       {state.data?.financials_source_ref && (
         <p className="hint">
-          EDINET財務CSV: <span className="mono">{String(state.data.financials_source_ref)}</span>
+          EDINET財務データ: <span className="mono">{String(state.data.financials_source_ref)}</span>
         </p>
       )}
       {blocked.length > 0 && (
@@ -2249,32 +2469,32 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
   }, []);
 
   const validateReportInputs = async (actionLabel = "report action"): Promise<boolean> => {
-    setReportActionMessage(`Validating report holding CSV before ${actionLabel}.`);
+    setReportActionMessage(`レポート用の保有データを検証しています: ${actionLabel}`);
     const holdingValidation = await reportHoldingValidationState.run(() =>
       api<Json>("/api/holdings/validate", { csv_text: holdingsCsv }),
     );
     if (!holdingValidation || holdingValidation.valid !== true) {
       setReportActionMessage(
-        "Report action stopped: holding CSV validation failed. Review the validation table.",
+        "保有データの検証に失敗したため、レポート操作を停止しました。検証結果を確認してください。",
       );
       return false;
     }
 
     if (fundsCsv.trim()) {
-      setReportActionMessage(`Validating report fund CSV before ${actionLabel}.`);
+      setReportActionMessage(`レポート用の投信データを検証しています: ${actionLabel}`);
       const fundValidation = await reportFundValidationState.run(() =>
         api<Json>("/api/funds/validate", { funds_csv_text: fundsCsv }),
       );
       if (!fundValidation || fundValidation.valid !== true) {
         setReportActionMessage(
-          "Report action stopped: fund CSV validation failed. Review the validation table.",
+          "投信データの検証に失敗したため、レポート操作を停止しました。検証結果を確認してください。",
         );
         return false;
       }
     } else {
-      setReportActionMessage("Report fund CSV validation skipped because the fund CSV is empty.");
+      setReportActionMessage("投信データが空のため、投信データ検証をスキップしました。");
     }
-    setReportActionMessage("Report CSV validation passed.");
+    setReportActionMessage("レポート入力データの検証に通りました。");
     return true;
   };
   const validateReportCsvs = () => {
@@ -2284,9 +2504,9 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
     state.run(async () => {
       const inputsValid = await validateReportInputs("report generation");
       if (!inputsValid) {
-        throw new Error("Fix report CSV validation errors before report generation.");
+        throw new Error("レポート生成前に入力データの検証エラーを修正してください。");
       }
-      setReportActionMessage("Report CSV validation passed. Running candidate screen.");
+      setReportActionMessage("入力データの検証に通りました。候補抽出を実行しています。");
       const candidates = await api<Json>("/api/candidates/screen", {
         asset_types: ["stock", "fund"],
         exclude_dividend_cut: true,
@@ -2308,7 +2528,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
         dividend_basis: "conservative",
       });
       void historyState.run(() => api<Json>("/api/reports/investment-monthly/history"));
-      setReportActionMessage("Report generated after CSV validation.");
+      setReportActionMessage("入力データ検証後にレポートを生成しました。");
       setWizardStep("preview");
       return report;
     });
@@ -2434,13 +2654,13 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
               <div className="callout">
                 <b>このレポートで使うデータ</b>
                 <p>
-                  財務CSVは候補抽出と根拠表示に使います。保有CSVと投信CSVは下のステップで確認します。
-                  まだ本番EDINET CSVがなければ、サンプルで流れを確認できます。
+                  財務データは候補抽出と根拠表示に使います。保有データと投信データは下のステップで確認します。
+                  まだ本番EDINETデータがなければ、サンプルで流れを確認できます。
                 </p>
                 <p className="mono">{financialsCsvPath}</p>
               </div>
               <div className="form">
-                <button onClick={loadReportSamples}>サンプルCSVを読み込む</button>
+                <button onClick={loadReportSamples}>サンプルデータを読み込む</button>
                 <button onClick={() => setWizardStep("holdings")}>保有確認へ</button>
               </div>
             </>
@@ -2448,7 +2668,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
 
           {wizardStep === "holdings" && (
             <>
-              <Field label="保有CSV">
+              <Field label="保有データ">
                 <textarea
                   rows={8}
                   value={holdingsCsv}
@@ -2460,14 +2680,14 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
                   onClick={validateReportCsvs}
                   disabled={reportHoldingValidationState.loading || reportFundValidationState.loading}
                 >
-                  CSVを検証
+                  データを検証
                 </button>
                 <button onClick={() => setWizardStep("candidates")}>
                   候補条件へ
                 </button>
               </div>
               <CsvValidationPanel
-                title="Report holding CSV validation"
+                title="レポート用保有データ検証"
                 data={reportHoldingValidationState.data}
               />
             </>
@@ -2482,7 +2702,7 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
                   「NISA対象」を固定条件として、比較対象だけを抽出します。推奨ではありません。
                 </p>
               </div>
-              <Field label="投信プロファイルCSV（候補抽出用）">
+              <Field label="投信データ（候補抽出用）">
                 <textarea rows={7} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
               </Field>
               <div className="form">
@@ -2490,14 +2710,14 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
                   onClick={validateReportCsvs}
                   disabled={reportHoldingValidationState.loading || reportFundValidationState.loading}
                 >
-                  CSVを検証
+                  データを検証
                 </button>
                 <button onClick={() => setWizardStep("target")}>
                   目標配当へ
                 </button>
               </div>
               <CsvValidationPanel
-                title="Report fund CSV validation"
+                title="レポート用投信データ検証"
                 data={reportFundValidationState.data}
               />
             </>
@@ -2530,11 +2750,11 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
             <>
               <dl className="mini-stats">
                 <div>
-                  <dt>保有CSV</dt>
+                  <dt>保有データ</dt>
                   <dd>{holdingCsvValid ? "検証OK" : "未検証/要確認"}</dd>
                 </div>
                 <div>
-                  <dt>投信CSV</dt>
+                  <dt>投信データ</dt>
                   <dd>{fundCsvValid ? "検証OK" : "未検証/要確認"}</dd>
                 </div>
                 <div>
@@ -2860,7 +3080,7 @@ function InvestmentDetailTab({
         <span className="badge">比較材料のみ</span>
       </div>
       <p className="hint">
-        保有CSV、投信プロファイルCSV、EDINET由来財務CSVを使い、1コードの保有状況と根拠を確認します。
+        保有データ、投信データ、EDINET由来財務データを使い、1コードの保有状況と根拠を確認します。
         売買判断は代行しません。
       </p>
       <SecuritySearch
@@ -2884,14 +3104,14 @@ function InvestmentDetailTab({
           </select>
         </Field>
       </div>
-      <Field label="保有CSV">
+      <Field label="保有データ">
         <textarea rows={5} value={holdingsCsv} onChange={(e) => setHoldingsCsv(e.target.value)} />
       </Field>
-      <Field label="投信プロファイルCSV">
+      <Field label="投信データ">
         <textarea rows={4} value={fundsCsv} onChange={(e) => setFundsCsv(e.target.value)} />
       </Field>
       <div className="form">
-        <button onClick={loadSamples}>サンプルCSVを読み込む</button>
+        <button onClick={loadSamples}>サンプルデータを読み込む</button>
         <button className="primary" onClick={loadDetail} disabled={state.loading || !code.trim()}>
           詳細を表示
         </button>
@@ -3090,7 +3310,7 @@ function AnswerTab({
           selectedTicker
             ? `対象証券コード: ${selectedTicker}\n対象銘柄名: ${selectedSecurityName || "未指定"}`
             : "",
-          `EDINET財務CSV: ${financialsCsvPath}`,
+          `EDINET財務データ: ${financialsCsvPath}`,
         ]
           .filter(Boolean)
           .join("\n")
@@ -3183,7 +3403,7 @@ function AnswerTab({
         <div className="callout">
           選択中: <span className="mono">{selectedTicker}</span> {selectedSecurityName}
           <br />
-          EDINET財務CSV: <span className="mono">{financialsCsvPath}</span>
+          EDINET財務データ: <span className="mono">{financialsCsvPath}</span>
         </div>
       )}
 
@@ -3407,7 +3627,7 @@ function StockScorePanel() {
     <div className="subpanel">
       <h3>EDINET銘柄スコア（自動・配当品質）</h3>
       <p className="hint">
-        取得済みの財務（配当・減配履歴・自己資本比率・営業CF）から銘柄を自動採点します。手動CSV不要。売買推奨ではありません。
+        取得済みの財務（配当・減配履歴・自己資本比率・営業CF）から銘柄を自動採点します。手動データ入力は不要です。売買推奨ではありません。
       </p>
       <div className="form">
         <Field label="戦略プリセット">
@@ -3444,7 +3664,7 @@ function StockScorePanel() {
       </div>
       <Status loading={loading} error={error} />
       {data && data.available === false && (
-        <p className="status">{String(data.hint ?? "financials.csv が見つかりません")}</p>
+        <p className="status">{String(data.hint ?? "財務データが見つかりません")}</p>
       )}
       {data && data.available !== false && (
         <p className="hint">
@@ -3507,16 +3727,16 @@ function ScoringTab() {
           <p className="eyebrow">Score</p>
           <h2>投資スコアリング</h2>
         </div>
-        <span className="badge">EDINET / CSV</span>
+        <span className="badge">EDINET / データ</span>
       </div>
 
       <StockScorePanel />
 
       <div className="subpanel">
-        <h3>ファンド/ETF比較（CSV）</h3>
+        <h3>ファンド/ETF比較データ</h3>
         <p className="hint">経費率・リターン・リスク・分散度を正規化して比較します。売買推奨ではありません。</p>
       <div className="form">
-        <Field label="CSV（name,expense_ratio,annual_return,volatility,diversification_score）">
+        <Field label="比較データ（name,expense_ratio,annual_return,volatility,diversification_score）">
           <textarea rows={6} value={csv} onChange={(e) => setCsv(e.target.value)} />
         </Field>
         <Field label="上位件数">
@@ -3647,9 +3867,11 @@ function ForecastTab() {
 function ScrapeTab({
   financialsCsvPath,
   onFinancialsCsvPathChange,
+  onFinancialsDataUpdated,
 }: {
   financialsCsvPath: string;
   onFinancialsCsvPathChange: (path: string) => void;
+  onFinancialsDataUpdated: () => void;
 }) {
   const [name, setName] = useState(SOURCE_PRESETS[0].name);
   const [url, setUrl] = useState(SOURCE_PRESETS[0].url);
@@ -3673,11 +3895,16 @@ function ScrapeTab({
   const [manualFinancialsCsv, setManualFinancialsCsv] = useState(SAMPLE_FINANCIALS_CSV);
   const [manualFinancialsOutputPath, setManualFinancialsOutputPath] =
     useState(financialsCsvPath);
+  const [jpxListedText, setJpxListedText] = useState(SAMPLE_JPX_LISTED_ISSUES_DATA);
+  const [jpxListedOutputPath, setJpxListedOutputPath] =
+    useState("local_docs/jpx/listed_issues.csv");
   const sourceState = useAsync<Json>();
   const manualState = useAsync<Json>();
   const edinetState = useAsync<Json>();
   const edinetStatusState = useAsync<Json>();
   const financialsState = useAsync<Json>();
+  const jpxListedState = useAsync<Json>();
+  const jpxDownloadState = useAsync<Json>();
 
   useEffect(() => {
     setManualFinancialsOutputPath(financialsCsvPath);
@@ -3773,6 +4000,7 @@ function ScrapeTab({
         result.financials_csv ?? `${edinetOutputDir.replace(/[\\/]$/, "")}/financials.csv`,
       );
       onFinancialsCsvPathChange(csvPath);
+      onFinancialsDataUpdated();
       setManualFinancialsOutputPath(csvPath);
       return result;
     });
@@ -3803,6 +4031,7 @@ function ScrapeTab({
       });
       const savedPath = String(result.saved_path ?? manualFinancialsOutputPath);
       onFinancialsCsvPathChange(savedPath);
+      onFinancialsDataUpdated();
       setManualFinancialsOutputPath(savedPath);
       return result;
     });
@@ -3811,6 +4040,33 @@ function ScrapeTab({
       api<Json>("/api/financials/import", {
         path: financialsCsvPath,
         save: false,
+      }),
+    );
+
+  const importJpxListedFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    void file.text().then((text) => setJpxListedText(text));
+  };
+  const loadJpxListedTemplate = () =>
+    jpxListedState.run(async () => {
+      const template = await api<Json>("/api/market/jpx-listed/template");
+      setJpxListedText(String(template.csv_text ?? SAMPLE_JPX_LISTED_ISSUES_DATA));
+      return template;
+    });
+  const saveJpxListedData = () =>
+    jpxListedState.run(() =>
+      api<Json>("/api/market/jpx-listed/import", {
+        csv_text: jpxListedText,
+        output_path: jpxListedOutputPath,
+        save: true,
+      }),
+    );
+  const downloadOfficialJpxListedData = () =>
+    jpxDownloadState.run(() =>
+      api<Json>("/api/market/jpx-listed/download", {
+        output_path: "local_docs/jpx/data_j.xls",
       }),
     );
 
@@ -3950,9 +4206,99 @@ function ScrapeTab({
       <div className="edinet-ingest">
         <div className="report-audit-head">
           <div>
+            <h3>市場区分データ（JPX公式）</h3>
+            <p className="hint">
+              東証プライムで銘柄を選択するためのデータです。価格や指数ウェイトは扱わず、市場区分と会社名だけを選択補助として使います。
+            </p>
+          </div>
+          <span className="badge">JPX</span>
+        </div>
+        <div className="callout">
+          <b>公式ソース</b>
+          <p className="hint">
+            JPXの東証上場銘柄一覧は毎月更新されます。公式ファイルは旧Excel形式のため、このアプリでは取得後にExcel等でCSV/TSVへ変換したデータを保存します。
+          </p>
+          <p>
+            <a
+              className="cite-link"
+              href="https://www.jpx.co.jp/markets/statistics-equities/misc/01.html"
+              target="_blank"
+              rel="noreferrer"
+            >
+              JPX 東証上場銘柄一覧
+            </a>{" "}
+            /{" "}
+            <a
+              className="cite-link"
+              href="https://indexes.nikkei.co.jp/en/nkave/index/component?idx=nk225"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Nikkei 225 Components
+            </a>
+          </p>
+        </div>
+        <div className="form">
+          <Field label="保存先 listed_issues">
+            <input
+              value={jpxListedOutputPath}
+              onChange={(event) => setJpxListedOutputPath(event.target.value)}
+            />
+          </Field>
+          <button onClick={downloadOfficialJpxListedData} disabled={jpxDownloadState.loading}>
+            JPX公式ファイルを取得
+          </button>
+          <button onClick={loadJpxListedTemplate} disabled={jpxListedState.loading}>
+            入力テンプレート
+          </button>
+          <label className="button-like">
+            データを読み込む
+            <input type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" onChange={importJpxListedFile} />
+          </label>
+          <button
+            className="primary"
+            onClick={saveJpxListedData}
+            disabled={jpxListedState.loading || !jpxListedText.trim()}
+          >
+            保存して東証プライム選択に反映
+          </button>
+        </div>
+        <Field label="市場区分データ">
+          <textarea
+            rows={8}
+            value={jpxListedText}
+            onChange={(event) => setJpxListedText(event.target.value)}
+          />
+        </Field>
+        <Status loading={jpxDownloadState.loading} error={jpxDownloadState.error} />
+        <Status loading={jpxListedState.loading} error={jpxListedState.error} />
+        {jpxDownloadState.data && (
+          <div className="callout">
+            取得結果: <span className="mono">{String(jpxDownloadState.data.saved_path ?? "-")}</span>
+            <br />
+            {String(jpxDownloadState.data.hint ?? "")}
+          </div>
+        )}
+        {jpxListedState.data && (
+          <div className="callout">
+            保存件数: {String(jpxListedState.data.count ?? 0)} / 東証プライム:{" "}
+            {String(jpxListedState.data.prime_count ?? 0)}
+            {jpxListedState.data.saved_path ? (
+              <>
+                <br />
+                保存先: <span className="mono">{String(jpxListedState.data.saved_path)}</span>
+              </>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      <div className="edinet-ingest">
+        <div className="report-audit-head">
+          <div>
             <h3>EDINET（公的API）から財務数値を取得</h3>
             <p className="hint">
-              金融庁EDINETの公式開示（XBRL/CSV）から営業CF・自己資本比率・配当性向などの数値を取得し、RAGと財務CSVに反映します。
+              金融庁EDINETの公式開示データから営業CF・自己資本比率・配当性向などの数値を取得し、RAGと財務データに反映します。
             </p>
           </div>
           <span className={`badge ${edinetStatusState.data?.api_key_configured ? "safe" : "warn"}`}>
@@ -3960,7 +4306,7 @@ function ScrapeTab({
           </span>
         </div>
         <p className="hint">
-          取得後はこの画面の財務CSVパスを自動で更新します。以後の保有分析・候補抽出・詳細・レポートは同じCSVを参照します。
+          取得後はこの画面の財務データパスを自動で更新します。以後の保有分析・候補抽出・詳細・レポートは同じデータを参照します。
         </p>
         <div className="form">
           <Field label="EDINET API KEY（一時入力・保存しない）">
@@ -4001,13 +4347,13 @@ function ScrapeTab({
           </Field>
           <button
             className="primary"
-            onClick={() => runEdinetIngest()}
+            onClick={() => runEdinetIngest(7, 0)}
             disabled={edinetState.loading}
           >
-            EDINETから取得 + RAG登録
+            ワンクリック自動更新
           </button>
-          <button onClick={() => runEdinetIngest(7, 0)} disabled={edinetState.loading}>
-            最新7日を自動取得
+          <button onClick={() => runEdinetIngest()} disabled={edinetState.loading}>
+            設定値で更新
           </button>
           <button onClick={() => runEdinetIngest(31, 1)} disabled={edinetState.loading}>
             1年分をバックフィル
@@ -4017,7 +4363,7 @@ function ScrapeTab({
         <Status loading={edinetState.loading} error={edinetState.error} />
         {edinetState.data && (
           <div className="callout">
-            財務CSV:{" "}
+            財務データ:{" "}
             <span className="mono">
               {String(edinetState.data.financials_csv ?? financialsCsvPath)}
             </span>
@@ -4059,12 +4405,12 @@ function ScrapeTab({
       <div className="edinet-ingest manual-financials-panel">
         <div className="report-audit-head">
           <div>
-            <h3>手動EDINET財務CSV</h3>
+            <h3>手動EDINET財務データ</h3>
             <p className="hint">
-              CSVを貼り付けるかファイルから読み込み、検証してから現在の財務CSVとして保存します。
+              データを貼り付けるかファイルから読み込み、検証してから現在の財務データとして保存します。
             </p>
           </div>
-          <span className="badge">CSV</span>
+          <span className="badge">データ</span>
         </div>
         <div className="form">
           <Field label="保存先 financials.csv">
@@ -4073,12 +4419,12 @@ function ScrapeTab({
               onChange={(e) => setManualFinancialsOutputPath(e.target.value)}
             />
           </Field>
-          <button onClick={loadSampleFinancials}>サンプルCSVを読み込む</button>
+          <button onClick={loadSampleFinancials}>サンプルデータを読み込む</button>
           <label className="button-like">
-            CSVファイルを読み込む
+            ファイルを読み込む
             <input type="file" accept=".csv,text/csv" onChange={importFinancialsFile} />
           </label>
-          <button onClick={downloadManualFinancialsCsv}>CSVをダウンロード</button>
+          <button onClick={downloadManualFinancialsCsv}>データをダウンロード</button>
           <button onClick={previewManualFinancials} disabled={financialsState.loading}>
             検証/プレビュー
           </button>
@@ -4090,10 +4436,10 @@ function ScrapeTab({
             保存して分析に反映
           </button>
           <button onClick={compareCurrentFinancials} disabled={financialsState.loading}>
-            現在の財務CSVを確認
+            現在の財務データを確認
           </button>
         </div>
-        <Field label="財務CSV">
+        <Field label="財務データ">
           <textarea
             rows={9}
             value={manualFinancialsCsv}
@@ -4584,7 +4930,9 @@ function SimulateTab({
   const [optimizeMode, setOptimizeMode] = useState("none");
   const [targetDividend, setTargetDividend] = useState(0);
   const [netTarget, setNetTarget] = useState(true);
+  const [universeScope, setUniverseScope] = useState("prime");
   const [universe, setUniverse] = useState<Json[]>([]);
+  const [universeMeta, setUniverseMeta] = useState<Json | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
@@ -4593,17 +4941,26 @@ function SimulateTab({
   useEffect(() => {
     let active = true;
     setPick("");
-    api<Json>("/api/portfolio/universe", { financials_csv: financialsCsvPath })
+    api<Json>("/api/portfolio/universe", {
+      financials_csv: financialsCsvPath,
+      scope: universeScope,
+    })
       .then((r) => {
-        if (active) setUniverse(Array.isArray(r.universe) ? r.universe : []);
+        if (active) {
+          setUniverse(Array.isArray(r.universe) ? r.universe : []);
+          setUniverseMeta(r);
+        }
       })
       .catch(() => {
-        if (active) setUniverse([]);
+        if (active) {
+          setUniverse([]);
+          setUniverseMeta(null);
+        }
       });
     return () => {
       active = false;
     };
-  }, [financialsCsvPath]);
+  }, [financialsCsvPath, universeScope]);
 
   const appendHolding = (next: Holding) =>
     setHoldings((current) =>
@@ -4749,12 +5106,24 @@ function SimulateTab({
       </div>
 
       <div className="form">
-        <Field label="銘柄を選択（EDINET・安全性順）">
+        <Field label="選択対象">
+          <select value={universeScope} onChange={(event) => setUniverseScope(event.target.value)}>
+            {MARKET_SCOPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="銘柄を選択（安全性順）">
           <select value={pick} onChange={(e) => setPick(e.target.value)}>
             <option value="">― 選択 ―</option>
             {universe.map((u) => (
               <option key={String(u.ticker)} value={String(u.ticker)}>
-                {String(u.ticker)} {String(u.name ?? "")}（安全性 {Number(u.safety).toFixed(2)}）
+                {String(u.ticker)} {String(u.name ?? "")}
+                {u.is_nikkei225 ? " / 日経225" : ""}
+                {u.is_prime ? " / Prime" : ""}
+                （安全性 {Number(u.safety).toFixed(2)}）
               </option>
             ))}
           </select>
@@ -4769,7 +5138,8 @@ function SimulateTab({
 
       {universe.length === 0 && (
         <p className="hint">
-          Simulate銘柄リストが空です。上部の財務CSVパスを確認するか、DataタブでEDINET取得/手動CSV保存を行ってください。
+          Simulate銘柄リストが空です。{String(universeMeta?.hint ?? "")}
+          上部の財務データパスを確認するか、Dataタブで市場区分データ/EDINET財務データを取得してください。
           下の証券コード検索からも追加できます。
         </p>
       )}

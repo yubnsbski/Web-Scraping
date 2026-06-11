@@ -583,6 +583,7 @@ def _portfolio_target(body: JsonDict) -> JsonDict:
 
 
 def _portfolio_universe(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.universe import build_market_universe
     from investment_assistant.portfolio.simulator import build_universe
 
     raw_prices = body.get("prices")
@@ -599,8 +600,8 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
             "count": 0,
             "source_ref": financials_csv,
             "hint": (
-                "財務CSVがまだ作成されていません。DataタブでEDINET取得/手動CSV保存を行うか、"
-                "サンプルCSVに切り替えてください。"
+                "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
+                "サンプルデータに切り替えてください。"
             ),
             "auto_trading": False,
             "call_real_api": False,
@@ -614,17 +615,172 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
             "count": 0,
             "source_ref": financials_csv,
             "hint": (
-                "財務CSVがまだ作成されていません。DataタブでEDINET取得/手動CSV保存を行うか、"
-                "サンプルCSVに切り替えてください。"
+                "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
+                "サンプルデータに切り替えてください。"
             ),
             "auto_trading": False,
             "call_real_api": False,
         }
+    scope = str(body.get("scope") or "financials")
+    market = build_market_universe(
+        financials_csv=financials_csv,
+        jpx_listed_path=str(body.get("jpx_listed_path") or "local_docs/jpx/listed_issues.csv"),
+        query="",
+        scope="all",
+        limit=10000,
+    )
+    raw_market_rows = market.get("securities")
+    market_rows = {
+        str(row.get("ticker") or row.get("code") or ""): row
+        for row in (raw_market_rows if isinstance(raw_market_rows, list) else [])
+        if isinstance(row, dict)
+    }
+    enriched: list[dict[str, object]] = []
+    for row in universe:
+        ticker = str(row.get("ticker") or "")
+        meta = market_rows.get(ticker, {})
+        enriched_row = {
+            **row,
+            "market_segment": meta.get("market_segment", "未取込"),
+            "sector": meta.get("sector", ""),
+            "is_prime": bool(meta.get("is_prime")),
+            "is_nikkei225": bool(meta.get("is_nikkei225")),
+            "has_financials": True,
+        }
+        if _market_scope_matches(enriched_row, scope):
+            enriched.append(enriched_row)
     return {
         "available": True,
-        "universe": universe,
-        "count": len(universe),
+        "universe": enriched,
+        "count": len(enriched),
+        "scope": scope,
         "source_ref": financials_csv,
+        "market_sources": market.get("sources"),
+        "jpx_listed_available": market.get("jpx_listed_available"),
+        "hint": market.get("hint"),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _market_universe(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.universe import build_market_universe
+
+    return build_market_universe(
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        jpx_listed_path=str(body.get("jpx_listed_path") or "local_docs/jpx/listed_issues.csv"),
+        nikkei225_registry=str(
+            body.get("nikkei225_registry") or "examples/source_registry_nikkei225_edinet.yaml"
+        ),
+        query=str(body.get("query") or ""),
+        scope=str(body.get("scope") or body.get("universe") or "prime"),
+        limit=max(_as_int(body.get("limit"), 50), 1),
+    )
+
+
+def _jpx_listed_template(_: JsonDict) -> JsonDict:
+    from investment_assistant.investment.universe import jpx_listed_issue_template
+
+    return jpx_listed_issue_template()
+
+
+def _jpx_listed_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+    from investment_assistant.investment.universe import (
+        DEFAULT_JPX_LISTED_ISSUES_PATH,
+        parse_jpx_listed_issues_text,
+        source_manifest,
+        write_jpx_listed_issues,
+    )
+
+    text = str(body.get("csv_text") or body.get("text") or "")
+    source_ref = "screen_input"
+    path_value = str(body.get("path") or "").strip()
+    if not text.strip() and path_value:
+        path = Path(path_value)
+        if path.suffix.lower() == ".xls":
+            raise ApiError(
+                "JPX公式ファイルは旧Excel形式です。Excel等でCSV/TSVに変換してから取り込んでください。"
+            )
+        text = path.read_text(encoding="utf-8")
+        source_ref = str(path)
+    if not text.strip():
+        raise ApiError("JPX上場銘柄一覧データを貼り付けるか、CSV/TSV path を指定してください。")
+
+    issues = parse_jpx_listed_issues_text(text, source_ref=source_ref)
+    output_path = str(body.get("output_path") or DEFAULT_JPX_LISTED_ISSUES_PATH)
+    saved_path: str | None = None
+    if _as_bool(body.get("save"), True):
+        target = reject_path_traversal(output_path)
+        saved_path = write_jpx_listed_issues(issues, target)
+    prime_count = sum(1 for issue in issues if issue.is_prime)
+    return {
+        "available": True,
+        "count": len(issues),
+        "prime_count": prime_count,
+        "saved": saved_path is not None,
+        "saved_path": saved_path,
+        "sample": [issue.to_dict() for issue in issues[:20]],
+        "sources": source_manifest(),
+        "disclaimer": "市場区分は銘柄選択補助です。投資助言や売買推奨ではありません。",
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _jpx_listed_download(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import SafeFetcher, reject_path_traversal
+    from investment_assistant.investment.universe import (
+        JPX_LISTED_ISSUES_FILE_URL,
+        JPX_LISTED_ISSUES_PAGE_URL,
+        source_manifest,
+    )
+
+    url = str(body.get("url") or JPX_LISTED_ISSUES_FILE_URL)
+    output_path = str(body.get("output_path") or "local_docs/jpx/data_j.xls")
+    fetcher = SafeFetcher(timeout_seconds=30.0)
+    decision = fetcher.robots.can_fetch(url)
+    if not decision.allowed:
+        return {
+            "available": False,
+            "downloaded": False,
+            "source_url": url,
+            "robots_url": decision.robots_url,
+            "reason": decision.reason,
+            "hint": "robots.txtで許可されていないため自動取得しません。",
+            "sources": source_manifest(),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    response = fetcher.transport.get(
+        url,
+        timeout_seconds=30.0,
+        user_agent=fetcher.user_agent,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"JPXファイル取得に失敗しました: status={response.status_code}")
+    target = reject_path_traversal(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(response.body)
+    is_legacy_xls = response.body.startswith(bytes.fromhex("d0cf11e0a1b11ae1"))
+    return {
+        "available": True,
+        "downloaded": True,
+        "saved_path": str(target),
+        "bytes": len(response.body),
+        "status_code": response.status_code,
+        "source_url": url,
+        "source_page_url": JPX_LISTED_ISSUES_PAGE_URL,
+        "robots_url": decision.robots_url,
+        "parse_supported": not is_legacy_xls,
+        "file_format": "legacy_xls" if is_legacy_xls else "text_or_unknown",
+        "hint": (
+            "公式ファイルを取得しました。旧Excel形式のため、Excel等でCSV/TSVに変換して"
+            "市場区分データとして保存してください。"
+            if is_legacy_xls
+            else "取得ファイルを市場区分データとして取り込めます。"
+        ),
+        "sources": source_manifest(),
         "auto_trading": False,
         "call_real_api": False,
     }
@@ -674,6 +830,76 @@ def _portfolio_performance(body: JsonDict) -> JsonDict:
 def _financials_compare(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/financials_sample.csv")
     return compare_financials(load_financials(path))
+
+
+def _financials_status(body: JsonDict) -> JsonDict:
+    path = Path(str(body.get("path") or body.get("financials_csv") or DEFAULT_FINANCIALS_CSV))
+    stale_after_days = max(_as_int(body.get("stale_after_days"), 7), 1)
+    if not path.is_file():
+        return {
+            "available": False,
+            "status": "missing",
+            "path": str(path),
+            "point_count": 0,
+            "company_count": 0,
+            "latest_fiscal_year": None,
+            "modified_at": None,
+            "age_days": None,
+            "stale_after_days": stale_after_days,
+            "hint": (
+                "財務データがまだありません。"
+                "DataタブでEDINET取得または手動保存を行ってください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    try:
+        points = load_financials(path)
+        comparison = compare_financials(points)
+    except (ValueError, OSError) as exc:
+        return {
+            "available": False,
+            "status": "invalid",
+            "path": str(path),
+            "point_count": 0,
+            "company_count": 0,
+            "latest_fiscal_year": None,
+            "modified_at": None,
+            "age_days": None,
+            "stale_after_days": stale_after_days,
+            "hint": f"財務データを読み込めません: {type(exc).__name__}: {exc}",
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    stat = path.stat()
+    modified_at = datetime.fromtimestamp(stat.st_mtime, UTC)
+    age_days = (datetime.now(UTC) - modified_at).total_seconds() / 86400
+    companies = comparison.get("companies")
+    rows = companies if isinstance(companies, list) else []
+    latest_years = [
+        _as_int(row.get("latest_fiscal_year"), 0)
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    is_stale = age_days > stale_after_days
+    return {
+        "available": True,
+        "status": "stale" if is_stale else "fresh",
+        "path": str(path),
+        "point_count": len(points),
+        "company_count": len(rows),
+        "latest_fiscal_year": max(latest_years) if latest_years else None,
+        "modified_at": modified_at.isoformat(),
+        "age_days": round(age_days, 2),
+        "stale_after_days": stale_after_days,
+        "hint": (
+            "更新推奨です。Dataタブで最新7日取得またはバックフィルを実行してください。"
+            if is_stale
+            else "財務データは利用可能です。必要に応じてDataタブから更新できます。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _financials_import(body: JsonDict) -> JsonDict:
@@ -756,8 +982,8 @@ def _financials_securities(body: JsonDict) -> JsonDict:
             "count": 0,
             "securities": [],
             "hint": (
-                "財務CSVが見つかりません。DataタブでEDINET取得/手動CSV保存を行うか、"
-                "上部の財務データをサンプルCSVに切り替えてください。"
+                "財務データが見つかりません。DataタブでEDINET取得/手動保存を行うか、"
+                "上部の財務データをサンプルデータに切り替えてください。"
             ),
             "auto_trading": False,
             "call_real_api": False,
@@ -1413,6 +1639,17 @@ def _as_bool(value: object, default: bool = False) -> bool:
     return default
 
 
+def _market_scope_matches(row: JsonDict, scope: str) -> bool:
+    normalized = scope.strip().lower()
+    if normalized in {"prime", "tse_prime", "tosho_prime"}:
+        return bool(row.get("is_prime"))
+    if normalized in {"nikkei225", "nikkei_225", "n225"}:
+        return bool(row.get("is_nikkei225"))
+    if normalized in {"financials", "edinet", "financials_available"}:
+        return bool(row.get("has_financials"))
+    return True
+
+
 def _as_int(value: object, default: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int | float | str):
         return default
@@ -1506,6 +1743,10 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/simulate"): _portfolio_simulate,
     ("POST", "/api/portfolio/target"): _portfolio_target,
     ("POST", "/api/portfolio/universe"): _portfolio_universe,
+    ("POST", "/api/market/universe"): _market_universe,
+    ("POST", "/api/market/jpx-listed/template"): _jpx_listed_template,
+    ("POST", "/api/market/jpx-listed/import"): _jpx_listed_import,
+    ("POST", "/api/market/jpx-listed/download"): _jpx_listed_download,
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
@@ -1527,6 +1768,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/reports/investment-monthly/history/verify"): _investment_report_history_verify,
     ("POST", "/api/reports/investment-monthly/history/compare"): _investment_report_history_compare,
     ("POST", "/api/financials/compare"): _financials_compare,
+    ("GET", "/api/financials/status"): _financials_status,
+    ("POST", "/api/financials/status"): _financials_status,
     ("POST", "/api/financials/import"): _financials_import,
     ("POST", "/api/financials/securities"): _financials_securities,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
