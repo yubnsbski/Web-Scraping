@@ -23,13 +23,18 @@ from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, loa
 
 DISCLAIMER = (
     "これは投資助言ではありません。EDINET由来の配当履歴と市場/入力株価を用いた"
-    "機械的な試算で、配当はボリンジャー下限で安全側に見積もっています。将来を"
-    "保証しない参考値です。"
+    "機械的な試算で、配当はボリンジャー下限で安全側に見積もっています。税引後は"
+    "源泉徴収20.315%の概算（配当控除・総合課税等は未考慮、NISAは非課税扱い）です。"
+    "将来を保証しない参考値です。"
 )
 
 _AUTO_WEIGHT_MODES = ("equal", "safety", "amount", "shares")
 _OPTIMIZATION_MODES = ("none", "cash_min", "dividend_max", "balanced")
 _BAND_K = 2.0
+
+# Japanese listed-stock dividend withholding: 15.315% income + 5% resident tax.
+# Mechanical approximation only — ignores 配当控除/総合課税 elections. NISA = 0%.
+DIVIDEND_TAX_RATE = 0.20315
 
 # Cap on the cash_min knapsack table (cells = reduced_budget × holdings) so an
 # adversarial budget can never make the exact fill blow up; above it we fall back
@@ -94,6 +99,7 @@ class _Prepared:
     weight_hint: float
     shares_fixed: float
     amount_fixed: float
+    nisa: bool
 
 
 def build_universe(
@@ -202,6 +208,7 @@ def plan_for_target_dividend(
     dividend_basis: str = "conservative",
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
     lot_default: int = 100,
+    net_target: bool = False,
 ) -> dict[str, object]:
     """Reverse the simulator: find the budget that yields a target annual income.
 
@@ -210,6 +217,10 @@ def plan_for_target_dividend(
     of ``dividend_max`` / ``balanced`` reaches the target with the *least* budget
     (best dividend-per-yen first); otherwise lots are spread round-robin across
     the holdings for diversification.
+
+    ``net_target`` interprets the target as *after-tax* (手取り) income: taxable
+    holdings count their dividend net of ``DIVIDEND_TAX_RATE``, NISA holdings
+    count in full.
     """
 
     target = max(0.0, float(target_annual_dividend))
@@ -228,7 +239,7 @@ def plan_for_target_dividend(
             "disclaimer": DISCLAIMER,
         }
 
-    shares_list, reachable = _target_shares(prepared, target, optimize, basis)
+    shares_list, reachable = _target_shares(prepared, target, optimize, basis, net=net_target)
     invested = sum(shares * h.price for shares, h in zip(shares_list, prepared, strict=True))
     # Display weights reflect the realised allocation by invested amount.
     weights = [
@@ -248,9 +259,12 @@ def plan_for_target_dividend(
         basis=basis,
     )
     achieved = sum(_num(a["annual_dividend"]) for a in allocations)
+    achieved_net = sum(_num(a["annual_dividend_net"]) for a in allocations)
     result["target"] = {
         "target_annual_dividend": round(target),
         "achieved_annual_dividend": round(achieved),
+        "achieved_annual_dividend_net": round(achieved_net),
+        "net_target": net_target,
         "required_budget": round(invested),
         "reachable": reachable,
     }
@@ -263,15 +277,17 @@ def plan_for_target_dividend(
 
 
 def _target_shares(
-    prepared: list[_Prepared], target: float, optimize: str, basis: str
+    prepared: list[_Prepared], target: float, optimize: str, basis: str, *, net: bool = False
 ) -> tuple[list[int], bool]:
-    """Greedily buy lots until conservative annual dividend reaches ``target``."""
+    """Greedily buy lots until the annual dividend (net if ``net``) reaches ``target``."""
 
     shares = [0 for _ in prepared]
     if target <= 0:
         return shares, True
     lot_dividend = [
-        h.lot * (h.dps_conservative if basis == "conservative" else h.dps_latest)
+        h.lot
+        * (h.dps_conservative if basis == "conservative" else h.dps_latest)
+        * ((1.0 if h.nisa else 1.0 - DIVIDEND_TAX_RATE) if net else 1.0)
         for h in prepared
     ]
     eligible = [i for i, div in enumerate(lot_dividend) if div > 0 and prepared[i].price > 0]
@@ -327,6 +343,8 @@ def _build_result(
 ) -> dict[str, object]:
     invested = sum(_num(a["invested"]) for a in allocations)
     annual = sum(_num(a["annual_dividend"]) for a in allocations)
+    annual_net = sum(_num(a["annual_dividend_net"]) for a in allocations)
+    tax = sum(_num(a["dividend_tax"]) for a in allocations)
     annual_latest = sum(_num(a["annual_dividend_latest"]) for a in allocations)
     band_lower = sum(_num(a["annual_band_lower"]) for a in allocations)
     band_upper = sum(_num(a["annual_band_upper"]) for a in allocations)
@@ -337,10 +355,14 @@ def _build_result(
         "invested": round(invested),
         "cash_left": round(budget - invested),
         "annual_dividend": round(annual),
+        "annual_dividend_net": round(annual_net),
+        "dividend_tax": round(tax),
+        "tax_rate": DIVIDEND_TAX_RATE,
         "annual_dividend_latest": round(annual_latest),
         "annual_band_lower": round(band_lower),
         "annual_band_upper": round(band_upper),
         "portfolio_yield": round(annual / invested, 4) if invested > 0 else 0.0,
+        "portfolio_yield_net": round(annual_net / invested, 4) if invested > 0 else 0.0,
         "portfolio_yield_latest": round(annual_latest / invested, 4) if invested > 0 else 0.0,
         "holdings": len(allocations),
         "dividend_basis": basis,
@@ -355,6 +377,7 @@ def _build_result(
         "summary": summary,
         "projection": _project(
             annual=annual,
+            annual_net=annual_net,
             annual_latest=annual_latest,
             band_lower=band_lower,
             band_upper=band_upper,
@@ -408,6 +431,7 @@ def _prepare_holding(
         weight_hint=_num(holding.get("weight")),
         shares_fixed=_num(holding.get("shares")),
         amount_fixed=_num(holding.get("amount")),
+        nisa=bool(holding.get("nisa")),
     )
 
 
@@ -558,6 +582,7 @@ def _allocate(
         dps = holding.dps_conservative if basis == "conservative" else holding.dps_latest
         annual = shares * dps
         annual_latest = shares * holding.dps_latest
+        tax = 0.0 if holding.nisa else annual * DIVIDEND_TAX_RATE
         band = holding.band or {}
         allocations.append(
             {
@@ -570,6 +595,9 @@ def _allocate(
                 "dividend_per_share": dps,
                 "dividend_per_share_latest": holding.dps_latest,
                 "annual_dividend": round(annual),
+                "annual_dividend_net": round(annual - tax),
+                "dividend_tax": round(tax),
+                "nisa": holding.nisa,
                 "annual_dividend_latest": round(annual_latest),
                 "annual_band_lower": round(shares * float(band.get("lower", dps))),
                 "annual_band_upper": round(shares * float(band.get("upper", holding.dps_latest))),
@@ -591,10 +619,13 @@ def _project(
     years: int,
     growth_rate: float,
     reinvest: bool,
+    annual_net: float | None = None,
 ) -> dict[str, object]:
     yield_safe = (annual / invested) if invested > 0 else 0.0
+    net = annual if annual_net is None else annual_net
     nominal: list[int] = []
     conservative: list[int] = []
+    conservative_net: list[int] = []
     reinvested: list[int] = []
     lower: list[int] = []
     upper: list[int] = []
@@ -603,6 +634,7 @@ def _project(
         factor = (1 + growth_rate) ** year
         nominal.append(round(annual_latest * factor))
         conservative.append(round(annual * factor))
+        conservative_net.append(round(net * factor))
         lower.append(round(band_lower * factor))
         upper.append(round(band_upper * factor))
         reinvested.append(round(income))
@@ -611,6 +643,7 @@ def _project(
         "years": list(range(0, years + 1)),
         "nominal": nominal,
         "conservative": conservative,
+        "conservative_net": conservative_net,
         "band_lower": lower,
         "band_upper": upper,
         "reinvested": reinvested,
