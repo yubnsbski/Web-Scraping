@@ -402,7 +402,7 @@ export function App() {
             financialsCsvPath={financialsCsvPath}
           />
         )}
-        {tab === "simulate" && <SimulateTab />}
+        {tab === "simulate" && <SimulateTab financialsCsvPath={financialsCsvPath} />}
         {tab === "report" && <InvestmentReportTab financialsCsvPath={financialsCsvPath} />}
         {tab === "answer" && <AnswerTab financialsCsvPath={financialsCsvPath} />}
         {tab === "data" && (
@@ -4195,7 +4195,7 @@ function Heatmap({ surface }: { surface: Json }) {
   );
 }
 
-function SimulateTab() {
+function SimulateTab({ financialsCsvPath }: { financialsCsvPath: string }) {
   const [budget, setBudget] = useState(1000000);
   const [years, setYears] = useState(10);
   const [growth, setGrowth] = useState(0);
@@ -4211,18 +4211,49 @@ function SimulateTab() {
   const { loading, error, data, run } = useAsync<Json>();
 
   useEffect(() => {
-    api<Json>("/api/portfolio/universe", {})
-      .then((r) => setUniverse(Array.isArray(r.universe) ? r.universe : []))
-      .catch(() => setUniverse([]));
-  }, []);
+    let active = true;
+    setPick("");
+    api<Json>("/api/portfolio/universe", { financials_csv: financialsCsvPath })
+      .then((r) => {
+        if (active) setUniverse(Array.isArray(r.universe) ? r.universe : []);
+      })
+      .catch(() => {
+        if (active) setUniverse([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [financialsCsvPath]);
+
+  const appendHolding = (next: Holding) =>
+    setHoldings((current) =>
+      current.some((h) => h.ticker === next.ticker) ? current : [...current, next],
+    );
 
   const addHolding = () => {
     const u = universe.find((x) => String(x.ticker) === pick);
-    if (!u || holdings.some((h) => h.ticker === String(u.ticker))) return;
-    setHoldings([
-      ...holdings,
-      { ticker: String(u.ticker), name: String(u.name ?? ""), price: Number(u.price) || 0, shares: 100, amount: 100000, nisa: false },
-    ]);
+    if (!u) return;
+    appendHolding({
+      ticker: String(u.ticker),
+      name: String(u.name ?? ""),
+      price: Number(u.price) || 0,
+      shares: 100,
+      amount: 100000,
+      nisa: false,
+    });
+  };
+
+  const addSearchedSecurity = (security: Json) => {
+    const ticker = String(security.ticker ?? security.code ?? "").trim();
+    if (!ticker) return;
+    appendHolding({
+      ticker,
+      name: String(security.name ?? ""),
+      price: Number(security.price) || 0,
+      shares: 100,
+      amount: 100000,
+      nisa: false,
+    });
   };
   const patch = (i: number, p: Partial<Holding>) =>
     setHoldings(holdings.map((h, idx) => (idx === i ? { ...h, ...p } : h)));
@@ -4249,6 +4280,7 @@ function SimulateTab() {
   const simulate = () =>
     run(() =>
       api<Json>("/api/portfolio/simulate", {
+        financials_csv: financialsCsvPath,
         budget,
         years,
         growth_rate: growth / 100,
@@ -4263,6 +4295,7 @@ function SimulateTab() {
   const planTarget = () =>
     run(() =>
       api<Json>("/api/portfolio/target", {
+        financials_csv: financialsCsvPath,
         target_annual_dividend: targetDividend,
         net_target: netTarget,
         years,
@@ -4352,6 +4385,20 @@ function SimulateTab() {
         <button onClick={() => void updatePrices()} disabled={busy || holdings.length === 0}>
           市場価格を更新
         </button>
+      </div>
+
+      {universe.length === 0 && (
+        <p className="hint">
+          Simulate銘柄リストが空です。上部の財務CSVパスを確認するか、DataタブでEDINET取得/手動CSV保存を行ってください。
+          下の証券コード検索からも追加できます。
+        </p>
+      )}
+      <div className="subpanel csv-manual-panel">
+        <SecuritySearch
+          financialsCsvPath={financialsCsvPath}
+          title="シミュレート用の証券コード検索"
+          onSelect={addSearchedSecurity}
+        />
       </div>
 
       {holdings.length > 0 && (
