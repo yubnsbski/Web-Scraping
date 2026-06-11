@@ -591,10 +591,43 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
         if isinstance(raw_prices, dict)
         else None
     )
-    universe = build_universe(
-        str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV), prices=prices
-    )
-    return {"universe": universe, "count": len(universe)}
+    financials_csv = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
+    if not Path(financials_csv).is_file():
+        return {
+            "available": False,
+            "universe": [],
+            "count": 0,
+            "source_ref": financials_csv,
+            "hint": (
+                "財務CSVがまだ作成されていません。DataタブでEDINET取得/手動CSV保存を行うか、"
+                "サンプルCSVに切り替えてください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    try:
+        universe = build_universe(financials_csv, prices=prices)
+    except FileNotFoundError:
+        return {
+            "available": False,
+            "universe": [],
+            "count": 0,
+            "source_ref": financials_csv,
+            "hint": (
+                "財務CSVがまだ作成されていません。DataタブでEDINET取得/手動CSV保存を行うか、"
+                "サンプルCSVに切り替えてください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    return {
+        "available": True,
+        "universe": universe,
+        "count": len(universe),
+        "source_ref": financials_csv,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _market_prices(body: JsonDict) -> JsonDict:
@@ -715,6 +748,20 @@ def _financials_securities(body: JsonDict) -> JsonDict:
     )
     query = str(body.get("query") or "").strip().lower()
     limit = max(_as_int(body.get("limit"), 20), 1)
+    if not Path(path).is_file():
+        return {
+            "available": False,
+            "query": query,
+            "source_ref": path,
+            "count": 0,
+            "securities": [],
+            "hint": (
+                "財務CSVが見つかりません。DataタブでEDINET取得/手動CSV保存を行うか、"
+                "上部の財務データをサンプルCSVに切り替えてください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
     comparison = compare_financials(load_financials(path))
     companies = comparison.get("companies")
     rows = companies if isinstance(companies, list) else []

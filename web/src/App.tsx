@@ -440,6 +440,17 @@ export function App() {
         value={financialsCsvPath}
         onChange={setFinancialsCsvPath}
       />
+      <section className="top-security-picker" aria-label="証券コードと企業選択">
+        <SecuritySearch
+          financialsCsvPath={financialsCsvPath}
+          title="証券コード・企業を選択"
+          onUseSample={() => setFinancialsCsvPath(SAMPLE_FINANCIALS_PATH)}
+          onOpenData={() => setTab("data")}
+          onSelect={(security) =>
+            openDetail(String(security.ticker ?? security.code ?? ""), "stock")
+          }
+        />
+      </section>
       <section className="workflow quick-workflow" aria-label="操作ステップ">
         {WORKFLOW_STEPS.map((step) => (
           <button
@@ -456,7 +467,13 @@ export function App() {
       </section>
       <main className="panel">
         {tab === "dashboard" && <DashboardTab />}
-        {tab === "holdings" && <HoldingsTab financialsCsvPath={financialsCsvPath} />}
+        {tab === "holdings" && (
+          <HoldingsTab
+            financialsCsvPath={financialsCsvPath}
+            onFinancialsCsvPathChange={setFinancialsCsvPath}
+            onOpenData={() => setTab("data")}
+          />
+        )}
         {tab === "candidates" && (
           <CandidateScreenTab
             financialsCsvPath={financialsCsvPath}
@@ -467,11 +484,25 @@ export function App() {
           <InvestmentDetailTab
             seed={detailSeed}
             financialsCsvPath={financialsCsvPath}
+            onFinancialsCsvPathChange={setFinancialsCsvPath}
+            onOpenData={() => setTab("data")}
           />
         )}
-        {tab === "simulate" && <SimulateTab financialsCsvPath={financialsCsvPath} />}
+        {tab === "simulate" && (
+          <SimulateTab
+            financialsCsvPath={financialsCsvPath}
+            onFinancialsCsvPathChange={setFinancialsCsvPath}
+            onOpenData={() => setTab("data")}
+          />
+        )}
         {tab === "report" && <InvestmentReportTab financialsCsvPath={financialsCsvPath} />}
-        {tab === "answer" && <AnswerTab financialsCsvPath={financialsCsvPath} />}
+        {tab === "answer" && (
+          <AnswerTab
+            financialsCsvPath={financialsCsvPath}
+            onFinancialsCsvPathChange={setFinancialsCsvPath}
+            onOpenData={() => setTab("data")}
+          />
+        )}
         {tab === "data" && (
           <ScrapeTab
             financialsCsvPath={financialsCsvPath}
@@ -875,10 +906,14 @@ function CandidateMetrics({ item }: { item: Json }) {
 function SecuritySearch({
   financialsCsvPath,
   onSelect,
+  onUseSample,
+  onOpenData,
   title = "証券コード検索",
 }: {
   financialsCsvPath: string;
   onSelect: (security: Json) => void;
+  onUseSample?: () => void;
+  onOpenData?: () => void;
   title?: string;
 }) {
   const [query, setQuery] = useState("");
@@ -901,7 +936,8 @@ function SecuritySearch({
         <div>
           <h3>{title}</h3>
           <p className="hint">
-            EDINET財務CSVから証券コードまたは名称で検索します。選択しても売買操作は行いません。
+            EDINET財務CSVから証券コードまたは企業名で検索します。空欄で検索すると一覧から選べます。
+            選択しても売買操作は行いません。
           </p>
         </div>
         <span className="badge">EDINET CSV</span>
@@ -926,8 +962,41 @@ function SecuritySearch({
         <button onClick={search} disabled={state.loading}>
           検索
         </button>
+        <button
+          onClick={() =>
+            state.run(() =>
+              api<Json>("/api/financials/securities", {
+                financials_csv: financialsCsvPath,
+                query: "",
+                limit,
+              }),
+            )
+          }
+          disabled={state.loading}
+        >
+          一覧表示
+        </button>
       </div>
       <Status loading={state.loading} error={state.error} />
+      {state.data?.available === false && (
+        <div className="callout warn-callout">
+          <b>財務CSVがまだありません</b>
+          <p>
+            {String(
+              state.data.hint
+                ?? "DataタブでEDINET取得/手動CSV保存を行うか、サンプルCSVに切り替えてください。",
+            )}
+          </p>
+          <div className="form">
+            {onUseSample && (
+              <button onClick={onUseSample}>サンプルCSVに切替</button>
+            )}
+            {onOpenData && (
+              <button onClick={onOpenData}>Dataタブで取得・保存</button>
+            )}
+          </div>
+        </div>
+      )}
       {securities.length > 0 && (
         <table className="grid">
           <thead>
@@ -963,7 +1032,11 @@ function SecuritySearch({
         </table>
       )}
       {state.data && securities.length === 0 && (
-        <p className="hint">一致する銘柄がありません。財務CSVパスと検索語を確認してください。</p>
+        <p className="hint">
+          {state.data.available === false
+            ? "財務CSVが見つからないため、銘柄一覧を表示できません。"
+            : "一致する銘柄がありません。財務CSVパスと検索語を確認してください。"}
+        </p>
       )}
     </div>
   );
@@ -1255,7 +1328,15 @@ function CsvValidationPanel(props: { title: string; data?: Json | null }) {
   );
 }
 
-function HoldingsTab({ financialsCsvPath }: { financialsCsvPath: string }) {
+function HoldingsTab({
+  financialsCsvPath,
+  onFinancialsCsvPathChange,
+  onOpenData,
+}: {
+  financialsCsvPath: string;
+  onFinancialsCsvPathChange: (value: string) => void;
+  onOpenData: () => void;
+}) {
   const [csv, setCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const importState = useAsync<Json>();
   const analysisState = useAsync<Json>();
@@ -1373,6 +1454,8 @@ function HoldingsTab({ financialsCsvPath }: { financialsCsvPath: string }) {
         <SecuritySearch
           financialsCsvPath={financialsCsvPath}
           title="保有入力用の銘柄検索"
+          onUseSample={() => onFinancialsCsvPathChange(SAMPLE_FINANCIALS_PATH)}
+          onOpenData={onOpenData}
           onSelect={(security) => {
             updateHoldingDraft("asset_type", "stock");
             updateHoldingDraft("ticker_or_fund_code", String(security.ticker ?? ""));
@@ -2524,9 +2607,13 @@ function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string 
 function InvestmentDetailTab({
   seed,
   financialsCsvPath,
+  onFinancialsCsvPathChange,
+  onOpenData,
 }: {
   seed: DetailSeed;
   financialsCsvPath: string;
+  onFinancialsCsvPathChange: (value: string) => void;
+  onOpenData: () => void;
 }) {
   const [code, setCode] = useState(seed.code);
   const [assetType, setAssetType] = useState(seed.assetType);
@@ -2573,6 +2660,8 @@ function InvestmentDetailTab({
       </p>
       <SecuritySearch
         financialsCsvPath={financialsCsvPath}
+        onUseSample={() => onFinancialsCsvPathChange(SAMPLE_FINANCIALS_PATH)}
+        onOpenData={onOpenData}
         onSelect={(security) => {
           setCode(String(security.ticker ?? ""));
           setAssetType("stock");
@@ -2724,7 +2813,15 @@ function FeedbackButtons({ message }: { message: ChatMessage }) {
   );
 }
 
-function AnswerTab({ financialsCsvPath }: { financialsCsvPath: string }) {
+function AnswerTab({
+  financialsCsvPath,
+  onFinancialsCsvPathChange,
+  onOpenData,
+}: {
+  financialsCsvPath: string;
+  onFinancialsCsvPathChange: (value: string) => void;
+  onOpenData: () => void;
+}) {
   const [query, setQuery] = useState("選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
   const [targetSource, setTargetSource] = useState(() =>
@@ -2866,6 +2963,8 @@ function AnswerTab({ financialsCsvPath }: { financialsCsvPath: string }) {
       <SecuritySearch
         financialsCsvPath={financialsCsvPath}
         title="AI回答に使う証券コード検索"
+        onUseSample={() => onFinancialsCsvPathChange(SAMPLE_FINANCIALS_PATH)}
+        onOpenData={onOpenData}
         onSelect={(security) => {
           setSelectedTicker(String(security.ticker ?? ""));
           setSelectedSecurityName(String(security.name ?? ""));
@@ -4263,7 +4362,15 @@ function Heatmap({ surface }: { surface: Json }) {
   );
 }
 
-function SimulateTab({ financialsCsvPath }: { financialsCsvPath: string }) {
+function SimulateTab({
+  financialsCsvPath,
+  onFinancialsCsvPathChange,
+  onOpenData,
+}: {
+  financialsCsvPath: string;
+  onFinancialsCsvPathChange: (value: string) => void;
+  onOpenData: () => void;
+}) {
   const [budget, setBudget] = useState(1000000);
   const [years, setYears] = useState(10);
   const [growth, setGrowth] = useState(0);
@@ -4465,6 +4572,8 @@ function SimulateTab({ financialsCsvPath }: { financialsCsvPath: string }) {
         <SecuritySearch
           financialsCsvPath={financialsCsvPath}
           title="シミュレート用の証券コード検索"
+          onUseSample={() => onFinancialsCsvPathChange(SAMPLE_FINANCIALS_PATH)}
+          onOpenData={onOpenData}
           onSelect={addSearchedSecurity}
         />
       </div>

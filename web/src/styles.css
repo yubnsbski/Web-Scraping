@@ -269,6 +269,15 @@ button:hover:not(:disabled),
   align-items: center;
 }
 
+.top-security-picker {
+  margin: 12px 0 16px;
+}
+
+.top-security-picker .security-search {
+  border-color: rgba(56, 189, 248, 0.28);
+  background: rgba(15, 23, 42, 0.72);
+}
+
 .button-like {
   display: inline-flex;
   align-items: center;

@@ -140,6 +140,40 @@ def test_financials_import_saves_manual_csv_and_searches_securities(
     assert searched["securities"][0]["name"] == "MUFG"
 
 
+def test_financials_securities_missing_csv_returns_empty_result(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-financials.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/securities",
+        {"financials_csv": str(missing), "query": "7203"},
+    )
+
+    assert status == 200
+    assert payload["available"] is False
+    assert payload["count"] == 0
+    assert payload["securities"] == []
+    assert payload["source_ref"] == str(missing)
+    assert "財務CSV" in payload["hint"]
+
+
+def test_portfolio_universe_missing_csv_returns_empty_result(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-financials.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/portfolio/universe",
+        {"financials_csv": str(missing)},
+    )
+
+    assert status == 200
+    assert payload["available"] is False
+    assert payload["count"] == 0
+    assert payload["universe"] == []
+    assert payload["source_ref"] == str(missing)
+    assert "財務CSV" in payload["hint"]
+
+
 
 def test_rag_stats_endpoint_reports_db_contents(tmp_path) -> None:
     db = tmp_path / "rag.sqlite"
