@@ -165,7 +165,8 @@ textarea {
 }
 
 .tab,
-button {
+button,
+.button-like {
   border: 1px solid var(--line);
   border-radius: 11px;
   background: rgba(15, 23, 42, 0.86);
@@ -184,7 +185,8 @@ button {
 }
 
 .tab:hover,
-button:hover:not(:disabled) {
+button:hover:not(:disabled),
+.button-like:hover {
   transform: translateY(-1px);
   border-color: rgba(56, 189, 248, 0.62);
 }
@@ -242,6 +244,30 @@ button:hover:not(:disabled) {
   flex-wrap: wrap;
   gap: 12px;
   align-items: flex-end;
+}
+
+.button-like {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.button-like input {
+  display: none;
+}
+
+.csv-manual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.csv-manual-panel .form {
+  margin-top: 12px;
 }
 
 .compact-form {
@@ -826,6 +852,7 @@ textarea { min-height: 140px; }
   .history-actions { display: grid; justify-content: stretch; }
   /* Full-width action buttons inside forms (not the scrollable tabs) */
   .form button,
+  .form .button-like,
   .compact-form button,
   .history-item button,
   .tool-section > button,
