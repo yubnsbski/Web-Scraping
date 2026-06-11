@@ -31,6 +31,8 @@ def test_investment_sample_csvs_drive_full_api_smoke() -> None:
     assert analysis["summary"]["market_value"] == 2_514_000.0
     assert analysis["summary"]["cost_basis"] == 2_160_000.0
     assert analysis["summary"]["annual_income_estimate"] == 12_450.0
+    assert analysis["summary"]["edinet_covered_holdings"] == 2
+    assert analysis["summary"]["edinet_source_ref"] == str(FINANCIALS_SAMPLE)
 
     status, candidates = handle_api(
         "POST",
@@ -53,6 +55,9 @@ def test_investment_sample_csvs_drive_full_api_smoke() -> None:
     assert "9999" not in codes
     assert "FND999" not in codes
     assert candidates["auto_trading"] is False
+    stock_rows = [item for item in candidates["results"] if item["asset_type"] == "stock"]
+    assert stock_rows[0]["edinet_summary"]["source_ref"] == str(FINANCIALS_SAMPLE)
+    assert stock_rows[0]["evidence"][0]["source_ref"] == str(FINANCIALS_SAMPLE)
 
     status, report = handle_api(
         "POST",

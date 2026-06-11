@@ -12,6 +12,7 @@ from pathlib import Path
 
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, load_comparison
 from investment_assistant.investment.analysis import analyze_portfolio
+from investment_assistant.investment.edinet import build_edinet_summary
 from investment_assistant.investment.models import DISCLAIMER, FundProfile, InvestmentHolding
 
 
@@ -104,6 +105,15 @@ def build_investment_detail(
             }
         )
         metrics.extend(_financial_metrics(company, claim_key, generated_at))
+    edinet_summary = (
+        build_edinet_summary(
+            company,
+            financials_csv=financials_csv,
+            generated_at=generated_at,
+        )
+        if company is not None
+        else None
+    )
 
     if fund is not None:
         claim_key = f"fund.{normalized_code}.profile"
@@ -130,6 +140,7 @@ def build_investment_detail(
         "holding_summary": holding_summary,
         "holdings": holding_rows,
         "financials": company,
+        "edinet_summary": edinet_summary,
         "fund_profile": fund.to_dict() if fund is not None else None,
         "metrics": _dedupe_metrics(metrics),
         "sections": _sections(

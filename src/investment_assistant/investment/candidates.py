@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
-from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
+from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, load_comparison
+from investment_assistant.investment.edinet import build_edinet_summary
 from investment_assistant.investment.models import DISCLAIMER, CandidateScreen, FundProfile
 from investment_assistant.investment.provider_policy import provider_policy
 from investment_assistant.scoring.stock import run_stock_scoring
@@ -23,6 +25,9 @@ def screen_candidates(
     items: list[dict[str, object]] = []
     blocked_providers: list[dict[str, object]] = []
     asset_types = set(screen.asset_types)
+    generated_at = datetime.now(UTC).isoformat()
+    financials_source_ref = str(financials_csv)
+    companies = _company_index(financials_csv)
 
     if "stock" in asset_types:
         stock_result = run_stock_scoring(
@@ -34,7 +39,16 @@ def screen_candidates(
             limit=None,
         )
         for row in _rows(stock_result.get("results")):
-            items.append(_stock_candidate(row, screen))
+            code = str(row.get("ticker") or "")
+            items.append(
+                _stock_candidate(
+                    row,
+                    screen,
+                    financials_source_ref=financials_source_ref,
+                    generated_at=generated_at,
+                    company=companies.get(code),
+                )
+            )
 
     if "fund" in asset_types:
         for fund in funds:
@@ -62,6 +76,8 @@ def screen_candidates(
         items = items[: max(screen.limit, 0)]
     return {
         "available": True,
+        "generated_at": generated_at,
+        "financials_source_ref": financials_source_ref,
         "screen": {
             "asset_types": list(screen.asset_types),
             "exclude_dividend_cut": screen.exclude_dividend_cut,
@@ -108,7 +124,14 @@ def screen_from_values(
     )
 
 
-def _stock_candidate(row: dict[str, object], screen: CandidateScreen) -> dict[str, object]:
+def _stock_candidate(
+    row: dict[str, object],
+    screen: CandidateScreen,
+    *,
+    financials_source_ref: str,
+    generated_at: str,
+    company: dict[str, object] | None,
+) -> dict[str, object]:
     metrics = row.get("metrics")
     metric_map = metrics if isinstance(metrics, dict) else {}
     conditions = ["EDINET財務データあり"]
@@ -116,6 +139,16 @@ def _stock_candidate(row: dict[str, object], screen: CandidateScreen) -> dict[st
         conditions.append("減配履歴なし")
     if screen.min_equity_ratio is not None:
         conditions.append(f"自己資本比率 {screen.min_equity_ratio:g}% 以上")
+    evidence = [
+        {
+            "claim_key": f"candidate.{row.get('ticker')}.edinet_financials",
+            "source_type": "edinet_financials",
+            "metric_key": "dividend/equity/operating_cf",
+            "source_ref": financials_source_ref,
+            "formula": "EDINET-derived financials CSV -> deterministic stock score inputs",
+            "last_updated": generated_at,
+        }
+    ]
     return {
         "asset_type": "stock",
         "code": row.get("ticker"),
@@ -123,13 +156,14 @@ def _stock_candidate(row: dict[str, object], screen: CandidateScreen) -> dict[st
         "score": row.get("total_score"),
         "matched_conditions": conditions,
         "metrics": metric_map,
-        "evidence": [
-            {
-                "source_type": "edinet_financials",
-                "metric_key": "dividend/equity/operating_cf",
-                "source_ref": str(DEFAULT_FINANCIALS_CSV),
-            }
-        ],
+        "edinet_summary": build_edinet_summary(
+            company,
+            financials_csv=financials_source_ref,
+            generated_at=generated_at,
+        )
+        if company is not None
+        else None,
+        "evidence": evidence,
     }
 
 
@@ -171,6 +205,23 @@ def _rows(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _company_index(financials_csv: str | Path) -> dict[str, dict[str, object]]:
+    comparison = load_comparison(financials_csv)
+    if comparison is None:
+        return {}
+    companies = comparison.get("companies")
+    if not isinstance(companies, list):
+        return {}
+    out: dict[str, dict[str, object]] = {}
+    for company in companies:
+        if not isinstance(company, dict):
+            continue
+        ticker = str(company.get("ticker") or "").strip()
+        if ticker:
+            out[ticker] = company
+    return out
 
 
 def _sort(items: list[dict[str, object]], sort_by: str) -> list[dict[str, object]]:

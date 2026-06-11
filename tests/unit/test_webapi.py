@@ -39,6 +39,7 @@ def test_edinet_ingest_route_is_registered_and_routed(monkeypatch) -> None:
     from investment_assistant.webapi import service
 
     assert "POST /api/edinet/ingest" in available_routes()
+    assert "GET /api/edinet/status" in available_routes()
 
     captured: dict[str, object] = {}
 
@@ -56,6 +57,87 @@ def test_edinet_ingest_route_is_registered_and_routed(monkeypatch) -> None:
     assert status == 200
     assert payload["ingested_count"] == 0
     assert captured["days"] == 5
+
+
+def test_edinet_status_reports_api_key_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("EDINET_API_KEY", "dummy-key")
+
+    status, payload = handle_api("GET", "/api/edinet/status")
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["default_financials_csv"] == "local_docs/edinet/financials.csv"
+    assert payload["auto_trading"] is False
+
+
+def test_edinet_api_key_can_be_set_for_runtime_without_echo(monkeypatch) -> None:
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/edinet/api-key",
+        {"api_key": "runtime-secret"},
+    )
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["request_api_key_applied"] is True
+    assert "runtime-secret" not in str(payload)
+
+
+def test_edinet_status_reads_local_dotenv_without_exposing_key(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("EDINET_API_KEY=from-dotenv\n", encoding="utf-8")
+
+    status, payload = handle_api("GET", "/api/edinet/status")
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert "from-dotenv" not in str(payload)
+
+
+def test_financials_import_saves_manual_csv_and_searches_securities(
+    tmp_path: Path,
+) -> None:
+    csv_text = (
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2023,1000,45,40,stable\n"
+        "8306,MUFG,2024,1200,48,45,stable\n"
+        "7203,Toyota,2024,3000,55,60,stable\n"
+    )
+    output_path = tmp_path / "financials.csv"
+
+    status, imported = handle_api(
+        "POST",
+        "/api/financials/import",
+        {
+            "csv_text": csv_text,
+            "save": True,
+            "output_path": str(output_path),
+        },
+    )
+
+    assert status == 200
+    assert imported["saved_path"] == str(output_path)
+    assert imported["count"] == 3
+    assert imported["company_count"] == 2
+    assert imported["auto_trading"] is False
+    assert output_path.is_file()
+
+    status, searched = handle_api(
+        "POST",
+        "/api/financials/securities",
+        {"financials_csv": str(output_path), "query": "8306"},
+    )
+
+    assert status == 200
+    assert searched["count"] == 1
+    assert searched["securities"][0]["ticker"] == "8306"
+    assert searched["securities"][0]["name"] == "MUFG"
 
 
 
@@ -402,6 +484,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     )
     assert status == 200
     assert analysis["summary"]["market_value"] == 670000.0
+    assert analysis["summary"]["edinet_covered_holdings"] == 1
+    assert analysis["summary"]["edinet_source_ref"] == str(financials)
     assert analysis["summary"]["nisa"]["status"] == "ok"
     assert analysis["summary"]["nisa"]["alerts"] == []
     assert analysis["summary"]["data_quality"]["missing_timestamp_count"] == 2
@@ -441,6 +525,12 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert status == 200
     assert candidates["count"] >= 2
     assert candidates["auto_trading"] is False
+    stock_candidate = next(
+        item for item in candidates["results"] if item["asset_type"] == "stock"
+    )
+    assert stock_candidate["edinet_summary"]["source_ref"] == str(financials)
+    assert stock_candidate["edinet_summary"]["latest_dividend_per_share"] == 45.0
+    assert stock_candidate["evidence"][0]["source_ref"] == str(financials)
 
     status, detail = handle_api(
         "POST",
@@ -458,6 +548,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert detail["asset_type"] == "stock"
     assert detail["metrics"]
     assert detail["evidence"]
+    assert detail["edinet_summary"]["source_ref"] == str(financials)
+    assert detail["edinet_summary"]["latest_fiscal_year"] == 2024
     assert detail["auto_trading"] is False
 
     status, report = handle_api(
@@ -498,6 +590,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     }
     assert "portfolio.target.required_budget" in evidence_keys
     assert "portfolio.concentration.current" in evidence_keys
+    assert "candidate.8306.edinet_financials" in evidence_keys
+    assert "candidate.8306.edinet_summary" in evidence_keys
 
     status, audit = handle_api(
         "POST",

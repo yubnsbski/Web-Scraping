@@ -90,6 +90,8 @@ const TABS = [
   { id: "detail", label: "Detail" },
   { id: "simulate", label: "Simulate" },
   { id: "report", label: "Report" },
+  { id: "answer", label: "AI Chat" },
+  { id: "data", label: "Data" },
   { id: "evidence", label: "Evidence" },
 ] as const;
 
@@ -198,6 +200,19 @@ const SAMPLE_FUNDS_CSV =
   "FND999,高コストテーマ型,theme,1.20,distribution,false,user_csv,0.40\n";
 
 const SAMPLE_FINANCIALS_PATH = "examples/financials_sample.csv";
+const DEFAULT_FINANCIALS_PATH = "local_docs/edinet/financials.csv";
+const SAMPLE_FINANCIALS_CSV =
+  "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n" +
+  "7203,安定配当ホールディングス,2021,820000,58.2,42,連結配当性向30%目安・累進配当を志向\n" +
+  "7203,安定配当ホールディングス,2022,910000,59.1,46,連結配当性向30%目安・累進配当を志向\n" +
+  "7203,安定配当ホールディングス,2023,985000,60.4,52,連結配当性向30%目安・累進配当を志向\n" +
+  "7203,安定配当ホールディングス,2024,1040000,61.0,58,連結配当性向30%目安・累進配当を志向\n" +
+  "7203,安定配当ホールディングス,2025,1105000,62.3,64,連結配当性向30%目安・累進配当を志向\n" +
+  "9999,景気連動マテリアル,2021,310000,38.5,80,業績連動・配当性向40%（下限なし）\n" +
+  "9999,景気連動マテリアル,2022,420000,41.2,100,業績連動・配当性向40%（下限なし）\n" +
+  "9999,景気連動マテリアル,2023,150000,36.8,40,業績連動・配当性向40%（下限なし）\n" +
+  "9999,景気連動マテリアル,2024,260000,39.0,55,業績連動・配当性向40%（下限なし）\n" +
+  "9999,景気連動マテリアル,2025,180000,37.4,45,業績連動・配当性向40%（下限なし）\n";
 
 const HOLDING_CSV_COLUMNS = [
   "asset_type",
@@ -307,6 +322,7 @@ type TabId = (typeof TABS)[number]["id"];
 
 export function App() {
   const [tab, setTab] = useState<TabId>("dashboard");
+  const [financialsCsvPath, setFinancialsCsvPath] = useState(DEFAULT_FINANCIALS_PATH);
   const [detailSeed, setDetailSeed] = useState<DetailSeed>({
     code: "7203",
     assetType: "stock",
@@ -354,13 +370,34 @@ export function App() {
           </button>
         ))}
       </nav>
+      <FinancialsSourceBar
+        value={financialsCsvPath}
+        onChange={setFinancialsCsvPath}
+      />
       <main className="panel">
         {tab === "dashboard" && <DashboardTab />}
-        {tab === "holdings" && <HoldingsTab />}
-        {tab === "candidates" && <CandidateScreenTab onOpenDetail={openDetail} />}
-        {tab === "detail" && <InvestmentDetailTab seed={detailSeed} />}
+        {tab === "holdings" && <HoldingsTab financialsCsvPath={financialsCsvPath} />}
+        {tab === "candidates" && (
+          <CandidateScreenTab
+            financialsCsvPath={financialsCsvPath}
+            onOpenDetail={openDetail}
+          />
+        )}
+        {tab === "detail" && (
+          <InvestmentDetailTab
+            seed={detailSeed}
+            financialsCsvPath={financialsCsvPath}
+          />
+        )}
         {tab === "simulate" && <SimulateTab />}
-        {tab === "report" && <InvestmentReportTab />}
+        {tab === "report" && <InvestmentReportTab financialsCsvPath={financialsCsvPath} />}
+        {tab === "answer" && <AnswerTab financialsCsvPath={financialsCsvPath} />}
+        {tab === "data" && (
+          <ScrapeTab
+            financialsCsvPath={financialsCsvPath}
+            onFinancialsCsvPathChange={setFinancialsCsvPath}
+          />
+        )}
         {tab === "evidence" && <SearchTab />}
       </main>
       <footer className="footer">
@@ -421,6 +458,30 @@ function Field(props: { label: string; children: ReactNode }) {
       <span>{props.label}</span>
       {props.children}
     </label>
+  );
+}
+
+function FinancialsSourceBar(props: { value: string; onChange: (value: string) => void }) {
+  return (
+    <section className="financials-source-bar" aria-label="EDINET financials source">
+      <div>
+        <b>EDINET財務CSV</b>
+        <span className="mono">{props.value}</span>
+      </div>
+      <div className="financials-source-actions">
+        <input
+          value={props.value}
+          onChange={(event) => props.onChange(event.target.value)}
+          aria-label="EDINET財務CSVパス"
+        />
+        <button onClick={() => props.onChange(DEFAULT_FINANCIALS_PATH)}>
+          取得済みCSV
+        </button>
+        <button onClick={() => props.onChange(SAMPLE_FINANCIALS_PATH)}>
+          サンプルCSV
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -635,6 +696,171 @@ function EvidencePanel({
         </div>
       </dl>
     </details>
+  );
+}
+
+function formatCompactNumber(value: unknown): string {
+  if (typeof value === "number") {
+    return Number.isInteger(value)
+      ? value.toLocaleString()
+      : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  return String(value ?? "-");
+}
+
+function incomeSourceLabel(value: unknown): string {
+  const source = String(value ?? "");
+  const labels: Record<string, string> = {
+    edinet_latest_dividend_per_share: "EDINET最新1株配当",
+    user_annual_income: "ユーザー入力 年間収入",
+    user_distribution: "ユーザー入力 分配単価",
+    not_available: "未入力",
+  };
+  return labels[source] ?? (source || "-");
+}
+
+function EdinetSummaryPanel({ summary }: { summary?: Json | null }) {
+  if (!summary || typeof summary !== "object") return null;
+  const cutYears = Array.isArray(summary.dividend_cut_years)
+    ? summary.dividend_cut_years.join(", ")
+    : "";
+  return (
+    <div className="edinet-summary">
+      <div className="edinet-summary-head">
+        <b>EDINET財務</b>
+        <span className="badge">FY{String(summary.latest_fiscal_year ?? "-")}</span>
+      </div>
+      <dl>
+        <div>
+          <dt>自己資本比率</dt>
+          <dd>{formatCompactNumber(summary.latest_equity_ratio)}%</dd>
+        </div>
+        <div>
+          <dt>1株配当</dt>
+          <dd>{formatCompactNumber(summary.latest_dividend_per_share)}</dd>
+        </div>
+        <div>
+          <dt>営業CF</dt>
+          <dd>{String(summary.operating_cf_trend_label ?? summary.operating_cf_trend ?? "-")}</dd>
+        </div>
+        <div>
+          <dt>減配年度</dt>
+          <dd>{cutYears || "なし"}</dd>
+        </div>
+      </dl>
+      <small>{String(summary.source_ref ?? "")}</small>
+    </div>
+  );
+}
+
+function CandidateMetrics({ item }: { item: Json }) {
+  const metrics = item.metrics ?? {};
+  const summary = item.edinet_summary as Json | undefined;
+  return (
+    <div className="candidate-metrics">
+      <EdinetSummaryPanel summary={summary} />
+      <details className="raw-metrics">
+        <summary>指標JSON</summary>
+        <pre>{JSON.stringify(metrics, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function SecuritySearch({
+  financialsCsvPath,
+  onSelect,
+  title = "証券コード検索",
+}: {
+  financialsCsvPath: string;
+  onSelect: (security: Json) => void;
+  title?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(10);
+  const state = useAsync<Json>();
+  const securities: Json[] = Array.isArray(state.data?.securities)
+    ? state.data.securities
+    : [];
+  const search = () =>
+    state.run(() =>
+      api<Json>("/api/financials/securities", {
+        financials_csv: financialsCsvPath,
+        query,
+        limit,
+      }),
+    );
+  return (
+    <div className="security-search">
+      <div className="report-audit-head">
+        <div>
+          <h3>{title}</h3>
+          <p className="hint">
+            EDINET財務CSVから証券コードまたは名称で検索します。選択しても売買操作は行いません。
+          </p>
+        </div>
+        <span className="badge">EDINET CSV</span>
+      </div>
+      <div className="form">
+        <Field label="証券コード / 名称">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="例: 7203 / トヨタ"
+          />
+        </Field>
+        <Field label="件数">
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={limit}
+            onChange={(event) => setLimit(Number(event.target.value))}
+          />
+        </Field>
+        <button onClick={search} disabled={state.loading}>
+          検索
+        </button>
+      </div>
+      <Status loading={state.loading} error={state.error} />
+      {securities.length > 0 && (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>コード</th>
+              <th>名称</th>
+              <th>最新年度</th>
+              <th>自己資本比率</th>
+              <th>1株配当</th>
+              <th>選択</th>
+            </tr>
+          </thead>
+          <tbody>
+            {securities.map((security) => (
+              <tr key={String(security.ticker)}>
+                <td className="mono">{String(security.ticker)}</td>
+                <td>{String(security.name)}</td>
+                <td>{String(security.latest_fiscal_year ?? "-")}</td>
+                <td className="mono">
+                  {security.latest_equity_ratio !== undefined
+                    ? `${formatCompactNumber(security.latest_equity_ratio)}%`
+                    : "-"}
+                </td>
+                <td className="mono">
+                  {formatCompactNumber(security.latest_dividend_per_share)}
+                </td>
+                <td>
+                  <button onClick={() => onSelect(security)}>選択</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {state.data && securities.length === 0 && (
+        <p className="hint">一致する銘柄がありません。財務CSVパスと検索語を確認してください。</p>
+      )}
+    </div>
   );
 }
 
@@ -924,7 +1150,7 @@ function CsvValidationPanel(props: { title: string; data?: Json | null }) {
   );
 }
 
-function HoldingsTab() {
+function HoldingsTab({ financialsCsvPath }: { financialsCsvPath: string }) {
   const [csv, setCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const importState = useAsync<Json>();
   const analysisState = useAsync<Json>();
@@ -964,7 +1190,7 @@ function HoldingsTab() {
       setValidationActionMessage("Holding CSV validation passed. Running analysis.");
       const result = await api<Json>("/api/portfolio/analyze", {
         csv_text: csv,
-        financials_csv: SAMPLE_FINANCIALS_PATH,
+        financials_csv: financialsCsvPath,
       });
       setValidationActionMessage("Analysis completed after holding CSV validation.");
       return result;
@@ -1039,6 +1265,16 @@ function HoldingsTab() {
         <p className="hint">
           Fill one row, append it to the CSV, then validate/import/analyze. This does not place orders.
         </p>
+        <SecuritySearch
+          financialsCsvPath={financialsCsvPath}
+          title="保有入力用の銘柄検索"
+          onSelect={(security) => {
+            updateHoldingDraft("asset_type", "stock");
+            updateHoldingDraft("ticker_or_fund_code", String(security.ticker ?? ""));
+            updateHoldingDraft("name", String(security.name ?? ""));
+            setValidationActionMessage("銘柄検索結果を手入力行に反映しました。");
+          }}
+        />
         <div className="csv-manual-grid">
           {HOLDING_CSV_COLUMNS.map((column) => (
             <Field key={column} label={column}>
@@ -1135,6 +1371,12 @@ function HoldingsTab() {
             <small>成長枠残 {yen(summary.nisa?.growth_remaining)}</small>
           </article>
         </section>
+      )}
+      {analysisState.data && (
+        <p className="hint">
+          EDINETカバー: {String(summary.edinet_covered_holdings ?? 0)}件 / 出典{" "}
+          <span className="mono">{String(summary.edinet_source_ref ?? financialsCsvPath)}</span>
+        </p>
       )}
 
       {nisaAlerts.length > 0 && (
@@ -1262,6 +1504,8 @@ function HoldingsTab() {
               <th>数量</th>
               <th>評価額</th>
               <th>損益</th>
+              <th>配当/分配金</th>
+              <th>EDINET</th>
               <th>NISA/税区分</th>
             </tr>
           </thead>
@@ -1274,6 +1518,21 @@ function HoldingsTab() {
                 <td className="mono">{String(row.quantity)}</td>
                 <td className="mono">{row.market_value ? yen(row.market_value) : "-"}</td>
                 <td className="mono">{row.unrealized_pnl ? yen(row.unrealized_pnl) : "-"}</td>
+                <td>
+                  <span className="mono">
+                    {row.annual_income_estimate !== undefined
+                      ? yen(row.annual_income_estimate)
+                      : "-"}
+                  </span>
+                  <small>{incomeSourceLabel(row.annual_income_source)}</small>
+                </td>
+                <td>
+                  {row.edinet_summary ? (
+                    <EdinetSummaryPanel summary={row.edinet_summary as Json} />
+                  ) : (
+                    <span className="hint">対象外 / 未取得</span>
+                  )}
+                </td>
                 <td>{String(row.tax_wrapper)}</td>
               </tr>
             ))}
@@ -1287,7 +1546,13 @@ function HoldingsTab() {
   );
 }
 
-function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, assetType: string) => void }) {
+function CandidateScreenTab({
+  financialsCsvPath,
+  onOpenDetail,
+}: {
+  financialsCsvPath: string;
+  onOpenDetail: (code: string, assetType: string) => void;
+}) {
   const [includeStocks, setIncludeStocks] = useState(true);
   const [includeFunds, setIncludeFunds] = useState(true);
   const [excludeCut, setExcludeCut] = useState(true);
@@ -1340,7 +1605,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
         min_diversification_score:
           minDiversification === "" ? undefined : Number(minDiversification),
         funds_csv_text: fundsCsv,
-        financials_csv: SAMPLE_FINANCIALS_PATH,
+        financials_csv: financialsCsvPath,
         sort_by: "score",
       });
       setScreenActionMessage("Candidate screening completed after validation.");
@@ -1669,6 +1934,11 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
       {state.data?.non_advisory_boundary && (
         <p className="hint">{String(state.data.non_advisory_boundary)}</p>
       )}
+      {state.data?.financials_source_ref && (
+        <p className="hint">
+          EDINET財務CSV: <span className="mono">{String(state.data.financials_source_ref)}</span>
+        </p>
+      )}
       {blocked.length > 0 && (
         <p className="status error">
           production利用不可provider: {blocked.map((p) => String(p.provider_id)).join(", ")}
@@ -1698,7 +1968,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
                     : ""}
                 </td>
                 <td>
-                  <pre>{JSON.stringify(item.metrics ?? {}, null, 2)}</pre>
+                  <CandidateMetrics item={item} />
                   {(() => {
                     const rows = evidenceRows(item.evidence);
                     return rows.length > 0 ? (
@@ -1732,7 +2002,7 @@ function CandidateScreenTab({ onOpenDetail }: { onOpenDetail: (code: string, ass
   );
 }
 
-function InvestmentReportTab() {
+function InvestmentReportTab({ financialsCsvPath }: { financialsCsvPath: string }) {
   const [holdingsCsv, setHoldingsCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
   const [targetDividend, setTargetDividend] = useState(60000);
@@ -1793,11 +2063,11 @@ function InvestmentReportTab() {
         max_expense_ratio: 0.2,
         nisa_eligible_only: true,
         funds_csv_text: fundsCsv,
-        financials_csv: SAMPLE_FINANCIALS_PATH,
+        financials_csv: financialsCsvPath,
       });
       const report = await api<Json>("/api/reports/investment-monthly", {
         csv_text: holdingsCsv,
-        financials_csv: SAMPLE_FINANCIALS_PATH,
+        financials_csv: financialsCsvPath,
         candidates: candidates.results ?? [],
         target_annual_dividend: targetDividend,
         years: 10,
@@ -2146,7 +2416,13 @@ function InvestmentReportTab() {
   );
 }
 
-function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
+function InvestmentDetailTab({
+  seed,
+  financialsCsvPath,
+}: {
+  seed: DetailSeed;
+  financialsCsvPath: string;
+}) {
   const [code, setCode] = useState(seed.code);
   const [assetType, setAssetType] = useState(seed.assetType);
   const [holdingsCsv, setHoldingsCsv] = useState(AUDITABLE_SAMPLE_HOLDINGS_CSV);
@@ -2169,7 +2445,7 @@ function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
         asset_type: assetType === "auto" ? undefined : assetType,
         csv_text: holdingsCsv,
         funds_csv_text: fundsCsv,
-        financials_csv: SAMPLE_FINANCIALS_PATH,
+        financials_csv: financialsCsvPath,
       }),
     );
 
@@ -2190,6 +2466,13 @@ function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
         保有CSV、投信プロファイルCSV、EDINET由来財務CSVを使い、1コードの保有状況と根拠を確認します。
         売買判断は代行しません。
       </p>
+      <SecuritySearch
+        financialsCsvPath={financialsCsvPath}
+        onSelect={(security) => {
+          setCode(String(security.ticker ?? ""));
+          setAssetType("stock");
+        }}
+      />
       <div className="form">
         <Field label="コード">
           <input value={code} onChange={(e) => setCode(e.target.value.trim())} />
@@ -2227,6 +2510,12 @@ function InvestmentDetailTab({ seed }: { seed: DetailSeed }) {
           {state.data.non_advisory_boundary && (
             <p className="hint">{String(state.data.non_advisory_boundary)}</p>
           )}
+        </div>
+      )}
+
+      {state.data?.edinet_summary && (
+        <div className="subpanel">
+          <EdinetSummaryPanel summary={state.data.edinet_summary as Json} />
         </div>
       )}
 
@@ -2330,10 +2619,12 @@ function FeedbackButtons({ message }: { message: ChatMessage }) {
   );
 }
 
-function AnswerTab() {
+function AnswerTab({ financialsCsvPath }: { financialsCsvPath: string }) {
   const [query, setQuery] = useState("選択中の対象銘柄について、配当方針と減配リスクを取得済みIR資料だけで整理して");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
   const [targetSource, setTargetSource] = useState(TARGET_SOURCE_OPTIONS[1].source);
+  const [selectedTicker, setSelectedTicker] = useState("");
+  const [selectedSecurityName, setSelectedSecurityName] = useState("");
   const [evidenceLimit, setEvidenceLimit] = useState(20);
   const [drafts, setDrafts] = useState(3);
   const [hybrid, setHybrid] = useState(true);
@@ -2369,11 +2660,21 @@ function AnswerTab() {
       const contextualQuery = buildContextualQuery(
         nextMessages,
         trimmed,
-        selectedTarget.queryContext
+        [
+          selectedTarget.queryContext,
+          selectedTicker
+            ? `対象証券コード: ${selectedTicker}\n対象銘柄名: ${selectedSecurityName || "未指定"}`
+            : "",
+          `EDINET財務CSV: ${financialsCsvPath}`,
+        ]
+          .filter(Boolean)
+          .join("\n")
       );
       const result = await api<Json>("/api/orchestrate", {
         query: contextualQuery,
         db_path: dbPath,
+        ticker: selectedTicker || undefined,
+        financials_csv: financialsCsvPath,
         target_source: targetSource || undefined,
         drafts,
         hybrid,
@@ -2436,6 +2737,26 @@ function AnswerTab() {
         実Geminiを使う場合は、バックエンドで許可設定した上で「実APIを使う」を有効にします。
       </p>
       <GuideCards items={AI_GUIDES} />
+
+      <SecuritySearch
+        financialsCsvPath={financialsCsvPath}
+        title="AI回答に使う証券コード検索"
+        onSelect={(security) => {
+          setSelectedTicker(String(security.ticker ?? ""));
+          setSelectedSecurityName(String(security.name ?? ""));
+          setQuery(
+            `${String(security.ticker ?? "")} ${String(security.name ?? "")} の配当方針、減配履歴、営業CFと自己資本比率を根拠付きで整理して`,
+          );
+        }}
+      />
+
+      {selectedTicker && (
+        <div className="callout">
+          選択中: <span className="mono">{selectedTicker}</span> {selectedSecurityName}
+          <br />
+          EDINET財務CSV: <span className="mono">{financialsCsvPath}</span>
+        </div>
+      )}
 
       <QuestionChips onPick={setQuery} />
 
@@ -2894,7 +3215,13 @@ function ForecastTab() {
 
 // --- Scraping --------------------------------------------------------------
 
-function ScrapeTab() {
+function ScrapeTab({
+  financialsCsvPath,
+  onFinancialsCsvPathChange,
+}: {
+  financialsCsvPath: string;
+  onFinancialsCsvPathChange: (path: string) => void;
+}) {
   const [name, setName] = useState(SOURCE_PRESETS[0].name);
   const [url, setUrl] = useState(SOURCE_PRESETS[0].url);
   const [outputPath, setOutputPath] = useState(SOURCE_PRESETS[0].output_path);
@@ -2912,9 +3239,24 @@ function ScrapeTab() {
   );
   const [edinetDays, setEdinetDays] = useState(7);
   const [edinetYears, setEdinetYears] = useState(0);
+  const [edinetOutputDir, setEdinetOutputDir] = useState("local_docs/edinet");
+  const [edinetApiKeyInput, setEdinetApiKeyInput] = useState("");
+  const [manualFinancialsCsv, setManualFinancialsCsv] = useState(SAMPLE_FINANCIALS_CSV);
+  const [manualFinancialsOutputPath, setManualFinancialsOutputPath] =
+    useState(financialsCsvPath);
   const sourceState = useAsync<Json>();
   const manualState = useAsync<Json>();
   const edinetState = useAsync<Json>();
+  const edinetStatusState = useAsync<Json>();
+  const financialsState = useAsync<Json>();
+
+  useEffect(() => {
+    setManualFinancialsOutputPath(financialsCsvPath);
+  }, [financialsCsvPath]);
+
+  useEffect(() => {
+    void edinetStatusState.run(() => api<Json>("/api/edinet/status"));
+  }, []);
 
   function currentSource() {
     return {
@@ -2988,14 +3330,65 @@ function ScrapeTab() {
     });
   }
 
-  const runEdinetIngest = () =>
-    edinetState.run(() =>
-      runJob("/api/edinet/ingest-async", {
+  const runEdinetIngest = (days = edinetDays, years = edinetYears) =>
+    edinetState.run(async () => {
+      const result = await runJob("/api/edinet/ingest-async", {
         registry_path: edinetRegistry,
-        days: edinetDays,
-        years: edinetYears > 0 ? edinetYears : undefined,
+        days,
+        years: years > 0 ? years : undefined,
+        output_dir: edinetOutputDir,
         db_path: dbPath,
         index_after_fetch: true,
+      });
+      const csvPath = String(
+        result.financials_csv ?? `${edinetOutputDir.replace(/[\\/]$/, "")}/financials.csv`,
+      );
+      onFinancialsCsvPathChange(csvPath);
+      setManualFinancialsOutputPath(csvPath);
+      return result;
+    });
+
+  const importFinancialsFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    void file.text().then((text) => setManualFinancialsCsv(text));
+  };
+
+  const loadSampleFinancials = () => setManualFinancialsCsv(SAMPLE_FINANCIALS_CSV);
+  const downloadManualFinancialsCsv = () =>
+    downloadTextFile("financials_manual.csv", manualFinancialsCsv);
+  const previewManualFinancials = () =>
+    financialsState.run(() =>
+      api<Json>("/api/financials/import", {
+        csv_text: manualFinancialsCsv,
+        save: false,
+      }),
+    );
+  const saveManualFinancials = () =>
+    financialsState.run(async () => {
+      const result = await api<Json>("/api/financials/import", {
+        csv_text: manualFinancialsCsv,
+        save: true,
+        output_path: manualFinancialsOutputPath,
+      });
+      const savedPath = String(result.saved_path ?? manualFinancialsOutputPath);
+      onFinancialsCsvPathChange(savedPath);
+      setManualFinancialsOutputPath(savedPath);
+      return result;
+    });
+  const compareCurrentFinancials = () =>
+    financialsState.run(() =>
+      api<Json>("/api/financials/import", {
+        path: financialsCsvPath,
+        save: false,
+      }),
+    );
+
+  const applyEdinetApiKey = () =>
+    edinetStatusState.run(() =>
+      api<Json>("/api/edinet/api-key", {
+        api_key: edinetApiKeyInput.trim() || undefined,
       }),
     );
 
@@ -3126,14 +3519,38 @@ function ScrapeTab() {
       )}
 
       <div className="edinet-ingest">
-        <h3>EDINET（公的API）から財務数値を取得</h3>
+        <div className="report-audit-head">
+          <div>
+            <h3>EDINET（公的API）から財務数値を取得</h3>
+            <p className="hint">
+              金融庁EDINETの公式開示（XBRL/CSV）から営業CF・自己資本比率・配当性向などの数値を取得し、RAGと財務CSVに反映します。
+            </p>
+          </div>
+          <span className={`badge ${edinetStatusState.data?.api_key_configured ? "safe" : "warn"}`}>
+            API KEY {edinetStatusState.data?.api_key_configured ? "configured" : "not detected"}
+          </span>
+        </div>
         <p className="hint">
-          金融庁EDINETの公式開示（XBRL/CSV）から営業CF・自己資本比率・配当性向などの数値を取得し、RAGに登録します。
-          通常は月曜6時に自動実行されますが、ここから任意のタイミングで実行できます（バックエンドにEDINET_API_KEYが必要）。
+          取得後はこの画面の財務CSVパスを自動で更新します。以後の保有分析・候補抽出・詳細・レポートは同じCSVを参照します。
         </p>
         <div className="form">
+          <Field label="EDINET API KEY（一時入力・保存しない）">
+            <input
+              type="password"
+              value={edinetApiKeyInput}
+              onChange={(e) => setEdinetApiKeyInput(e.target.value)}
+              placeholder="EDINET API KEY"
+              autoComplete="off"
+            />
+          </Field>
+          <button onClick={applyEdinetApiKey} disabled={edinetStatusState.loading}>
+            API KEYを反映
+          </button>
           <Field label="EDINET registry（YAML）">
             <input value={edinetRegistry} onChange={(e) => setEdinetRegistry(e.target.value)} />
+          </Field>
+          <Field label="出力ディレクトリ">
+            <input value={edinetOutputDir} onChange={(e) => setEdinetOutputDir(e.target.value)} />
           </Field>
           <Field label="遡る日数（提出日のスキャン範囲）">
             <input
@@ -3155,15 +3572,27 @@ function ScrapeTab() {
           </Field>
           <button
             className="primary"
-            onClick={runEdinetIngest}
+            onClick={() => runEdinetIngest()}
             disabled={edinetState.loading}
           >
             EDINETから取得 + RAG登録
           </button>
+          <button onClick={() => runEdinetIngest(7, 0)} disabled={edinetState.loading}>
+            最新7日を自動取得
+          </button>
+          <button onClick={() => runEdinetIngest(31, 1)} disabled={edinetState.loading}>
+            1年分をバックフィル
+          </button>
         </div>
+        <Status loading={edinetStatusState.loading} error={edinetStatusState.error} />
         <Status loading={edinetState.loading} error={edinetState.error} />
         {edinetState.data && (
           <div className="callout">
+            財務CSV:{" "}
+            <span className="mono">
+              {String(edinetState.data.financials_csv ?? financialsCsvPath)}
+            </span>
+            <br />
             取得件数: {String(edinetState.data.ingested_count)} / 対象{" "}
             {String(edinetState.data.targets_count)}社（スキャン日数{" "}
             {Array.isArray(edinetState.data.scanned_dates)
@@ -3192,6 +3621,71 @@ function ScrapeTab() {
               (edinetState.data.comparison as Json).companies.length > 0 && (
                 <EdinetComparisonTable
                   companies={(edinetState.data.comparison as Json).companies as Json[]}
+                />
+              )}
+          </div>
+        )}
+      </div>
+
+      <div className="edinet-ingest manual-financials-panel">
+        <div className="report-audit-head">
+          <div>
+            <h3>手動EDINET財務CSV</h3>
+            <p className="hint">
+              CSVを貼り付けるかファイルから読み込み、検証してから現在の財務CSVとして保存します。
+            </p>
+          </div>
+          <span className="badge">CSV</span>
+        </div>
+        <div className="form">
+          <Field label="保存先 financials.csv">
+            <input
+              value={manualFinancialsOutputPath}
+              onChange={(e) => setManualFinancialsOutputPath(e.target.value)}
+            />
+          </Field>
+          <button onClick={loadSampleFinancials}>サンプルCSVを読み込む</button>
+          <label className="button-like">
+            CSVファイルを読み込む
+            <input type="file" accept=".csv,text/csv" onChange={importFinancialsFile} />
+          </label>
+          <button onClick={downloadManualFinancialsCsv}>CSVをダウンロード</button>
+          <button onClick={previewManualFinancials} disabled={financialsState.loading}>
+            検証/プレビュー
+          </button>
+          <button
+            className="primary"
+            onClick={saveManualFinancials}
+            disabled={financialsState.loading || !manualFinancialsCsv.trim()}
+          >
+            保存して分析に反映
+          </button>
+          <button onClick={compareCurrentFinancials} disabled={financialsState.loading}>
+            現在の財務CSVを確認
+          </button>
+        </div>
+        <Field label="財務CSV">
+          <textarea
+            rows={9}
+            value={manualFinancialsCsv}
+            onChange={(e) => setManualFinancialsCsv(e.target.value)}
+          />
+        </Field>
+        <Status loading={financialsState.loading} error={financialsState.error} />
+        {financialsState.data && (
+          <div className="callout">
+            行数: {String(financialsState.data.count ?? 0)} / 会社数:{" "}
+            {String(financialsState.data.company_count ?? 0)}
+            {financialsState.data.saved_path ? (
+              <>
+                <br />
+                保存先: <span className="mono">{String(financialsState.data.saved_path)}</span>
+              </>
+            ) : null}
+            {financialsState.data.comparison &&
+              Array.isArray((financialsState.data.comparison as Json).companies) && (
+                <EdinetComparisonTable
+                  companies={(financialsState.data.comparison as Json).companies as Json[]}
                 />
               )}
           </div>
@@ -4023,10 +4517,8 @@ function OpsTab() {
 // Kept out of the MVP navigation. These legacy tools remain importable for
 // local experiments while the product surface stays investment-only and non-advisory.
 export const LEGACY_TOOL_TABS = {
-  answer: AnswerTab,
   scoring: ScoringTab,
   forecast: ForecastTab,
-  scrape: ScrapeTab,
   analysis: AnalysisTab,
   ops: OpsTab,
 } as const;

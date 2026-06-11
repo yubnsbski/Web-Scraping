@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, load_comparison
+from investment_assistant.investment.edinet import build_edinet_summary
 from investment_assistant.investment.models import DISCLAIMER, InvestmentHolding
 from investment_assistant.investment.provider_policy import ProviderPolicy, provider_policy
 
@@ -73,6 +74,12 @@ def analyze_portfolio(
             if market_value
             else 0.0,
         }
+        if company is not None:
+            row["edinet_summary"] = build_edinet_summary(
+                company,
+                financials_csv=financials_csv,
+                generated_at=generated_at,
+            )
         row_data_alerts = _holding_data_alerts(
             holding=holding,
             generated_at=generated_at_dt,
@@ -171,6 +178,8 @@ def analyze_portfolio(
         "asset_mix": _share_map(asset_mix, total_market),
         "tax_wrapper_mix": _share_map(tax_wrapper_mix, total_market),
         "nisa": nisa,
+        "edinet_covered_holdings": sum(1 for row in rows if row.get("edinet_summary")),
+        "edinet_source_ref": str(financials_csv),
         "data_quality": _data_quality_summary(data_alerts),
         "income_quality": _income_quality_summary(income_alerts),
     }

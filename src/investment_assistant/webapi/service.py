@@ -63,6 +63,37 @@ def _health(_: JsonDict) -> JsonDict:
     return {"status": "ok", "service": "investment-assistant", "auto_trading": False}
 
 
+def _edinet_status(_: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    _ensure_env_from_dotenv(API_KEY_ENV_VAR)
+    return {
+        "api_key_configured": bool(os.getenv(API_KEY_ENV_VAR, "").strip()),
+        "api_key_env_var": API_KEY_ENV_VAR,
+        "default_registry": "examples/source_registry_nikkei225_edinet.yaml",
+        "default_output_dir": "local_docs/edinet",
+        "default_financials_csv": DEFAULT_FINANCIALS_CSV,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _edinet_api_key_set(body: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    value = str(body.get("api_key") or "").strip()
+    if value:
+        os.environ[API_KEY_ENV_VAR] = value
+    configured = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
+    return {
+        "api_key_configured": configured,
+        "api_key_env_var": API_KEY_ENV_VAR,
+        "request_api_key_applied": bool(value),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def _budget(_: JsonDict) -> JsonDict:
     from dataclasses import asdict
 
@@ -409,6 +440,9 @@ def _fetch_job_auto(body: JsonDict) -> JsonDict:
 
 
 def _edinet_ingest(body: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    _ensure_env_from_dotenv(API_KEY_ENV_VAR)
     registry_path = str(
         body.get("registry_path") or "examples/source_registry_edinet_sample.yaml"
     )
@@ -607,6 +641,116 @@ def _portfolio_performance(body: JsonDict) -> JsonDict:
 def _financials_compare(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/financials_sample.csv")
     return compare_financials(load_financials(path))
+
+
+def _financials_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.financials.models import FINANCIAL_COLUMNS
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+
+    raw_csv_text = body.get("csv_text")
+    csv_text = raw_csv_text if isinstance(raw_csv_text, str) else ""
+    save = _as_bool(body.get("save"), False)
+    cleanup: Path | None = None
+    source = "path"
+    source_ref: str
+    normalized_csv: str
+
+    if csv_text.strip():
+        if len(csv_text) > _MAX_MANUAL_TEXT_CHARS:
+            raise ApiError(f"csv_text is too long: max {_MAX_MANUAL_TEXT_CHARS} characters")
+        normalized_csv = csv_text.strip() + "\n"
+        with tempfile.NamedTemporaryFile(
+            "w",
+            suffix=".csv",
+            delete=False,
+            encoding="utf-8",
+        ) as handle:
+            handle.write(normalized_csv)
+            source_ref = handle.name
+        cleanup = Path(source_ref)
+        source = "csv_text"
+    else:
+        source_ref = _require_str(body, "path")
+        normalized_csv = Path(source_ref).read_text(encoding="utf-8")
+
+    try:
+        points = load_financials(source_ref)
+    finally:
+        if cleanup is not None:
+            cleanup.unlink(missing_ok=True)
+
+    comparison = compare_financials(points)
+    saved_path: str | None = None
+    output_path = str(body.get("output_path") or DEFAULT_FINANCIALS_CSV)
+    if save:
+        target = reject_path_traversal(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(normalized_csv, encoding="utf-8")
+        saved_path = str(target)
+
+    companies = comparison.get("companies")
+    company_count = len(companies) if isinstance(companies, list) else 0
+    return {
+        "available": True,
+        "source": source,
+        "source_ref": None if source == "csv_text" else source_ref,
+        "saved": save,
+        "saved_path": saved_path,
+        "financials_csv": saved_path or (None if source == "csv_text" else source_ref),
+        "columns": list(FINANCIAL_COLUMNS),
+        "count": len(points),
+        "company_count": company_count,
+        "comparison": comparison,
+        "disclaimer": comparison.get("disclaimer"),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_securities(body: JsonDict) -> JsonDict:
+    path = str(
+        body.get("financials_csv")
+        or body.get("path")
+        or DEFAULT_FINANCIALS_CSV
+    )
+    query = str(body.get("query") or "").strip().lower()
+    limit = max(_as_int(body.get("limit"), 20), 1)
+    comparison = compare_financials(load_financials(path))
+    companies = comparison.get("companies")
+    rows = companies if isinstance(companies, list) else []
+    matches: list[dict[str, object]] = []
+    for company in rows:
+        if not isinstance(company, dict):
+            continue
+        ticker = str(company.get("ticker") or "")
+        name = str(company.get("name") or "")
+        haystack = f"{ticker} {name}".lower()
+        if query and query not in haystack:
+            continue
+        matches.append(
+            {
+                "ticker": ticker,
+                "code": ticker,
+                "name": name,
+                "latest_fiscal_year": company.get("latest_fiscal_year"),
+                "latest_equity_ratio": company.get("latest_equity_ratio"),
+                "latest_dividend_per_share": company.get("latest_dividend_per_share"),
+                "dividend_cut_years": company.get("dividend_cut_years"),
+                "operating_cf_trend": company.get("operating_cf_trend"),
+                "source_ref": path,
+            }
+        )
+        if len(matches) >= limit:
+            break
+    return {
+        "available": True,
+        "query": query,
+        "source_ref": path,
+        "count": len(matches),
+        "securities": matches,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _holdings_import(body: JsonDict) -> JsonDict:
@@ -1127,6 +1271,29 @@ def _real_api_decision(body: JsonDict) -> tuple[bool, str | None]:
     return False, "real API is not enabled"
 
 
+def _ensure_env_from_dotenv(key: str) -> bool:
+    if os.getenv(key, "").strip():
+        return True
+    for env_path in (Path(".env"), Path(".env.local")):
+        if not env_path.is_file():
+            continue
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                name, value = stripped.split("=", 1)
+                if name.strip() != key:
+                    continue
+                cleaned = value.strip().strip('"').strip("'")
+                if cleaned:
+                    os.environ[key] = cleaned
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def _require_str(body: JsonDict, key: str) -> str:
     value = body.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -1313,12 +1480,16 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/reports/investment-monthly/history/verify"): _investment_report_history_verify,
     ("POST", "/api/reports/investment-monthly/history/compare"): _investment_report_history_compare,
     ("POST", "/api/financials/compare"): _financials_compare,
+    ("POST", "/api/financials/import"): _financials_import,
+    ("POST", "/api/financials/securities"): _financials_securities,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
     ("POST", "/api/edinet/ingest"): _edinet_ingest,
     ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
+    ("GET", "/api/edinet/status"): _edinet_status,
+    ("POST", "/api/edinet/api-key"): _edinet_api_key_set,
     ("POST", "/api/jobs/status"): _job_status,
     ("POST", "/api/storage/prune"): _storage_prune,
     ("POST", "/api/knowledge/diff"): _knowledge_diff,

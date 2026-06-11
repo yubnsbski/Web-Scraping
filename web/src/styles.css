@@ -246,6 +246,29 @@ button:hover:not(:disabled),
   align-items: flex-end;
 }
 
+.financials-source-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 1.2fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.62);
+  padding: 10px 12px;
+}
+
+.financials-source-bar b,
+.financials-source-bar span {
+  display: block;
+}
+
+.financials-source-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .button-like {
   display: inline-flex;
   align-items: center;
@@ -447,6 +470,20 @@ button:disabled {
   gap: 12px;
 }
 
+.security-search {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(142, 161, 189, 0.18);
+  border-radius: 12px;
+  background: rgba(7, 11, 18, 0.28);
+}
+
+.manual-financials-panel textarea {
+  min-height: 220px;
+}
+
 .edinet-comparison {
   margin-top: 12px;
 }
@@ -572,6 +609,11 @@ details summary {
   .guide-grid,
   .workflow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .financials-source-bar,
+  .financials-source-actions {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1086,6 +1128,62 @@ textarea { min-height: 140px; }
   overflow-wrap: anywhere;
   color: var(--text);
   white-space: normal;
+}
+.candidate-metrics,
+.edinet-summary {
+  display: grid;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.edinet-summary {
+  padding: 10px 12px;
+  border: 1px solid rgba(142, 161, 189, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.edinet-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.edinet-summary dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.edinet-summary div {
+  min-width: 0;
+}
+
+.edinet-summary dt {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.edinet-summary dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.edinet-summary small {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.raw-metrics summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 .check-field { flex-direction: row !important; align-items: center; gap: 8px; flex: 0 0 auto; }
 .check-field input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; }

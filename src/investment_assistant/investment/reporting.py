@@ -55,6 +55,7 @@ def build_investment_monthly_report(
                 "note": "条件一致の比較候補であり、推奨ではありません。",
             }
         )
+        evidence.extend(_candidate_evidence_rows(item, generated_at))
     target = _mapping(target_result.get("target")) if target_result is not None else None
     target_summary = _mapping(target_result.get("summary")) if target_result is not None else None
     target_concentration = (
@@ -407,6 +408,56 @@ def _evidence_rows(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _candidate_evidence_rows(
+    candidate: Mapping[str, object],
+    generated_at: str,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    raw_rows = candidate.get("evidence")
+    if isinstance(raw_rows, list):
+        for index, row in enumerate(raw_rows):
+            if not isinstance(row, Mapping):
+                continue
+            source_type = row.get("source_type")
+            if source_type != "edinet_financials":
+                continue
+            code = str(candidate.get("code") or f"row{index}")
+            rows.append(
+                {
+                    "claim_key": str(
+                        row.get("claim_key") or f"candidate.{code}.edinet_financials"
+                    ),
+                    "source_type": "edinet_financials",
+                    "source_ref": row.get("source_ref"),
+                    "metric_key": row.get("metric_key") or "dividend/equity/operating_cf",
+                    "formula": row.get("formula")
+                    or "EDINET-derived financials CSV used in candidate screen",
+                    "last_updated": row.get("last_updated") or generated_at,
+                    "note": "候補抽出で参照したEDINET由来財務データです。推奨ではありません。",
+                }
+            )
+    summary = candidate.get("edinet_summary")
+    if isinstance(summary, Mapping):
+        code = str(candidate.get("code") or summary.get("ticker") or "")
+        rows.append(
+            {
+                "claim_key": f"candidate.{code}.edinet_summary",
+                "source_type": "edinet_financials",
+                "source_ref": summary.get("source_ref"),
+                "metric_key": "latest_fiscal_year/equity_ratio/dividend",
+                "formula": "latest EDINET financial row summarized for report evidence",
+                "last_updated": summary.get("last_updated") or generated_at,
+                "note": (
+                    f"FY{summary.get('latest_fiscal_year')}: "
+                    f"自己資本比率 {summary.get('latest_equity_ratio')}%, "
+                    f"1株配当 {summary.get('latest_dividend_per_share')}, "
+                    f"営業CF {summary.get('operating_cf_trend_label')}"
+                ),
+            }
+        )
+    return rows
 
 
 def _claim_keys(
