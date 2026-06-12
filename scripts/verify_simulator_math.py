@@ -171,7 +171,10 @@ def main() -> int:
         holdings = [
             {
                 "ticker": f"T{k}",
-                "price": rng.choice([500, 1000, 1500, 3000, 7000]),
+                # Include fractional prices and lot=1 to exercise cash_min's
+                # round-up-cost / round-down-budget guard and tax rounding.
+                "price": rng.choice([500, 1000.4, 1500, 3000.6, 7000]),
+                "lot": rng.choice([1, 100]),
                 "dividend_per_share": rng.choice([0, 10, 25, 40, 80]),
                 "nisa": rng.random() < 0.5,
             }
