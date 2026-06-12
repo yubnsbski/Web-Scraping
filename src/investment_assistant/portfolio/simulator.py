@@ -276,17 +276,22 @@ def _target_shares(
     smallest = min(lot_dividend[i] for i in eligible)
     cap = min(int(target / smallest) + len(prepared) + 1, 500_000)
     achieved = 0.0
-    rotation = 0
-    for _ in range(cap):
-        if achieved >= target:
-            break
-        if optimize in ("dividend_max", "balanced"):
-            pick = max(eligible, key=lambda i: (_lot_score(prepared[i], optimize, basis)))
-        else:
-            pick = eligible[rotation % len(eligible)]
-            rotation += 1
-        shares[pick] += prepared[pick].lot
-        achieved += lot_dividend[pick]
+    if optimize in ("dividend_max", "balanced"):
+        # Per-yen score is static, so the best holding is fixed — buy it
+        # repeatedly until the target is met (least budget to reach the goal).
+        best = max(eligible, key=lambda i: _lot_score(prepared[i], optimize, basis))
+        for _ in range(cap):
+            if achieved >= target:
+                break
+            shares[best] += prepared[best].lot
+            achieved += lot_dividend[best]
+    else:
+        for step in range(cap):
+            if achieved >= target:
+                break
+            pick = eligible[step % len(eligible)]  # round-robin for diversification
+            shares[pick] += prepared[pick].lot
+            achieved += lot_dividend[pick]
     return shares, achieved >= target
 
 
