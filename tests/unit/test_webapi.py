@@ -379,6 +379,73 @@ def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> No
     assert universe["call_real_api"] is False
 
 
+def test_jpx_listed_download_import_accepts_csv_path(tmp_path: Path) -> None:
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+        "2026-05-31,1305,ETF Sample,ETF・ETN,-\n"
+    )
+    source = tmp_path / "data_j.csv"
+    source.write_text(listed, encoding="utf-8")
+    output_path = tmp_path / "listed_issues.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/jpx-listed/download-import",
+        {"path": str(source), "output_path": str(output_path), "save": True},
+    )
+
+    assert status == 200
+    assert payload["downloaded"] is False
+    assert payload["converted"] is False
+    assert payload["imported"] is True
+    assert payload["count"] == 2
+    assert payload["prime_count"] == 1
+    assert output_path.is_file()
+
+
+def test_jpx_listed_download_import_converts_legacy_xls(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.investment import jpx_excel
+
+    source = tmp_path / "data_j.xls"
+    source.write_bytes(bytes.fromhex("d0cf11e0a1b11ae1"))
+    converted_text = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+    )
+    output_path = tmp_path / "listed_issues.csv"
+    converted_path = tmp_path / "converted.csv"
+
+    def fake_convert(xls_path: object, csv_path: object, *, timeout_seconds: int = 120) -> str:
+        assert Path(str(xls_path)) == source
+        _ = timeout_seconds
+        Path(str(csv_path)).write_text(converted_text, encoding="utf-8")
+        return str(csv_path)
+
+    monkeypatch.setattr(jpx_excel, "convert_legacy_xls_to_csv_with_excel", fake_convert)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/jpx-listed/download-import",
+        {
+            "path": str(source),
+            "converted_output_path": str(converted_path),
+            "output_path": str(output_path),
+            "save": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["converted"] is True
+    assert payload["converted_path"] == str(converted_path)
+    assert payload["count"] == 1
+    assert payload["prime_count"] == 1
+    assert output_path.is_file()
+
+
 
 def test_rag_stats_endpoint_reports_db_contents(tmp_path) -> None:
     db = tmp_path / "rag.sqlite"

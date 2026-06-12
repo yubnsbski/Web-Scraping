@@ -4250,11 +4250,18 @@ function ScrapeTab({
       }),
     );
   const downloadOfficialJpxListedData = () =>
-    jpxDownloadState.run(() =>
-      api<Json>("/api/market/jpx-listed/download", {
-        output_path: "local_docs/jpx/data_j.xls",
-      }),
-    );
+    jpxDownloadState.run(async () => {
+      const result = await api<Json>("/api/market/jpx-listed/download-import", {
+        download_output_path: "local_docs/jpx/data_j.xls",
+        converted_output_path: "local_docs/jpx/data_j_converted.csv",
+        output_path: jpxListedOutputPath,
+        save: true,
+      });
+      if (result.saved_path) {
+        setJpxListedOutputPath(String(result.saved_path));
+      }
+      return result;
+    });
 
   const applyEdinetApiKey = () =>
     edinetStatusState.run(() =>
@@ -4432,7 +4439,7 @@ function ScrapeTab({
             />
           </Field>
           <button onClick={downloadOfficialJpxListedData} disabled={jpxDownloadState.loading}>
-            JPX公式ファイルを取得
+            JPX公式データを取得して反映
           </button>
           <button onClick={loadJpxListedTemplate} disabled={jpxListedState.loading}>
             入力テンプレート
@@ -4461,6 +4468,20 @@ function ScrapeTab({
         {jpxDownloadState.data && (
           <div className="callout">
             取得結果: <span className="mono">{String(jpxDownloadState.data.saved_path ?? "-")}</span>
+            {jpxDownloadState.data.count ? (
+              <>
+                <br />
+                保存件数: {String(jpxDownloadState.data.count)} / 東証プライム:{" "}
+                {String(jpxDownloadState.data.prime_count ?? 0)}
+              </>
+            ) : null}
+            {jpxDownloadState.data.converted_path ? (
+              <>
+                <br />
+                変換CSV:{" "}
+                <span className="mono">{String(jpxDownloadState.data.converted_path)}</span>
+              </>
+            ) : null}
             <br />
             {String(jpxDownloadState.data.hint ?? "")}
           </div>

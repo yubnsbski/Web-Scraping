@@ -946,6 +946,112 @@ def _jpx_listed_download(body: JsonDict) -> JsonDict:
     }
 
 
+def _jpx_listed_download_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+    from investment_assistant.investment.jpx_excel import (
+        JpxExcelConversionError,
+        convert_legacy_xls_to_csv_with_excel,
+    )
+    from investment_assistant.investment.universe import (
+        DEFAULT_JPX_LISTED_ISSUES_PATH,
+        source_manifest,
+    )
+
+    raw_path = str(body.get("path") or "").strip()
+    output_path = str(body.get("output_path") or DEFAULT_JPX_LISTED_ISSUES_PATH)
+    converted_output_path = str(
+        body.get("converted_output_path") or "local_docs/jpx/data_j_converted.csv"
+    )
+    downloaded = False
+    download_result: JsonDict | None = None
+    source_path: Path
+
+    if raw_path:
+        source_path = reject_path_traversal(raw_path)
+    else:
+        download_result = _jpx_listed_download(
+            {
+                "url": body.get("url"),
+                "output_path": body.get("download_output_path") or "local_docs/jpx/data_j.xls",
+            }
+        )
+        if not download_result.get("downloaded"):
+            return {
+                "available": False,
+                "downloaded": False,
+                "converted": False,
+                "imported": False,
+                "download": download_result,
+                "sources": source_manifest(),
+                "hint": str(
+                    download_result.get("hint")
+                    or "JPX公式ファイルを取得できませんでした。"
+                ),
+                "auto_trading": False,
+                "call_real_api": False,
+            }
+        downloaded = True
+        source_path = reject_path_traversal(str(download_result.get("saved_path") or ""))
+
+    import_path = source_path
+    converted = False
+    conversion_error: str | None = None
+    if source_path.suffix.lower() == ".xls":
+        try:
+            import_path = reject_path_traversal(converted_output_path)
+            convert_legacy_xls_to_csv_with_excel(source_path, import_path)
+            converted = True
+        except JpxExcelConversionError as exc:
+            conversion_error = str(exc)
+            return {
+                "available": False,
+                "downloaded": downloaded,
+                "converted": False,
+                "imported": False,
+                "download": download_result,
+                "source_path": str(source_path),
+                "converted_path": str(import_path),
+                "conversion_error": conversion_error,
+                "sources": source_manifest(),
+                "hint": (
+                    "JPX公式ファイルは取得できましたが、Excel自動変換に失敗しました。"
+                    "Excel等でCSV/TSVへ変換してから手動取込してください。"
+                ),
+                "auto_trading": False,
+                "call_real_api": False,
+            }
+
+    imported = _jpx_listed_import(
+        {
+            "path": str(import_path),
+            "output_path": output_path,
+            "save": _as_bool(body.get("save"), True),
+        }
+    )
+    return {
+        "available": True,
+        "downloaded": downloaded,
+        "converted": converted,
+        "imported": True,
+        "download": download_result,
+        "source_path": str(source_path),
+        "converted_path": str(import_path) if converted else None,
+        "saved_path": imported.get("saved_path"),
+        "count": imported.get("count"),
+        "prime_count": imported.get("prime_count"),
+        "sample": imported.get("sample"),
+        "sources": imported.get("sources"),
+        "disclaimer": imported.get("disclaimer"),
+        "hint": (
+            "JPX公式ファイルを取得し、市場区分データへ反映しました。"
+            if downloaded
+            else "JPX市場区分データを反映しました。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def _market_prices(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import ensure_provider_allowed
     from investment_assistant.portfolio.prices import fetch_prices
@@ -1958,6 +2064,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/jpx-listed/template"): _jpx_listed_template,
     ("POST", "/api/market/jpx-listed/import"): _jpx_listed_import,
     ("POST", "/api/market/jpx-listed/download"): _jpx_listed_download,
+    ("POST", "/api/market/jpx-listed/download-import"): _jpx_listed_download_import,
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
