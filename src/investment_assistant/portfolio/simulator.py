@@ -96,7 +96,6 @@ class _Prepared:
     band: dict[str, float] | None
     lot: int
     safety: float
-    weight_hint: float
     shares_fixed: float
     amount_fixed: float
     nisa: bool
@@ -165,20 +164,10 @@ def simulate_portfolio(
     """
 
     budget = max(0.0, float(budget))
-    years = max(1, min(int(years), 50))
-    mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
-    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
-    basis = "latest" if dividend_basis == "latest" else "conservative"
-    by_ticker = _index_companies(load_comparison(financials_csv))
-
-    prepared = [_prepare_holding(h, by_ticker, lot_default) for h in holdings]
-    prepared = [h for h in prepared if h.price > 0]
+    mode, optimize, basis, years = _normalize(auto_weight, optimization, dividend_basis, years)
+    prepared = _prepare_universe(holdings, financials_csv, lot_default)
     if not prepared:
-        return {
-            "available": False,
-            "hint": "有効な銘柄（ticker と price>0）を1件以上入力してください。",
-            "disclaimer": DISCLAIMER,
-        }
+        return _unavailable()
 
     weights = _resolve_weights(prepared, mode)
     shares_list = _resolve_shares(prepared, weights, budget, mode, optimize, basis)
@@ -224,20 +213,10 @@ def plan_for_target_dividend(
     """
 
     target = max(0.0, float(target_annual_dividend))
-    years = max(1, min(int(years), 50))
-    mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
-    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
-    basis = "latest" if dividend_basis == "latest" else "conservative"
-    by_ticker = _index_companies(load_comparison(financials_csv))
-
-    prepared = [_prepare_holding(h, by_ticker, lot_default) for h in holdings]
-    prepared = [h for h in prepared if h.price > 0]
+    mode, optimize, basis, years = _normalize(auto_weight, optimization, dividend_basis, years)
+    prepared = _prepare_universe(holdings, financials_csv, lot_default)
     if not prepared:
-        return {
-            "available": False,
-            "hint": "有効な銘柄（ticker と price>0）を1件以上入力してください。",
-            "disclaimer": DISCLAIMER,
-        }
+        return _unavailable()
 
     shares_list, reachable = _target_shares(prepared, target, optimize, basis, net=net_target)
     invested = sum(shares * h.price for shares, h in zip(shares_list, prepared, strict=True))
@@ -391,6 +370,35 @@ def _build_result(
     }
 
 
+def _normalize(
+    auto_weight: str, optimization: str, dividend_basis: str, years: int
+) -> tuple[str, str, str, int]:
+    """Validate the strategy knobs shared by both simulator entry points."""
+
+    mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
+    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
+    basis = "latest" if dividend_basis == "latest" else "conservative"
+    return mode, optimize, basis, max(1, min(int(years), 50))
+
+
+def _prepare_universe(
+    holdings: list[dict[str, object]], financials_csv: str | Path, lot_default: int
+) -> list[_Prepared]:
+    """Load financials and build priced holdings, dropping any without a price."""
+
+    by_ticker = _index_companies(load_comparison(financials_csv))
+    prepared = [_prepare_holding(h, by_ticker, lot_default) for h in holdings]
+    return [h for h in prepared if h.price > 0]
+
+
+def _unavailable() -> dict[str, object]:
+    return {
+        "available": False,
+        "hint": "有効な銘柄（ticker と price>0）を1件以上入力してください。",
+        "disclaimer": DISCLAIMER,
+    }
+
+
 def _index_companies(comparison: dict[str, object] | None) -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
     if comparison:
@@ -428,7 +436,6 @@ def _prepare_holding(
         band=band,
         lot=lot,
         safety=estimate_safety(company),
-        weight_hint=_num(holding.get("weight")),
         shares_fixed=_num(holding.get("shares")),
         amount_fixed=_num(holding.get("amount")),
         nisa=bool(holding.get("nisa")),
