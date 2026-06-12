@@ -482,7 +482,7 @@ export function App() {
         ))}
       </section>
 
-      <nav className="tabs">
+      <nav className="tabs" aria-label="主要ナビゲーション">
         {TABS.map((t) => (
           <button
             key={t.id}
