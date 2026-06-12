@@ -39,6 +39,7 @@ def test_edinet_ingest_route_is_registered_and_routed(monkeypatch) -> None:
     from investment_assistant.webapi import service
 
     assert "POST /api/edinet/ingest" in available_routes()
+    assert "GET /api/edinet/status" in available_routes()
 
     captured: dict[str, object] = {}
 
@@ -56,6 +57,398 @@ def test_edinet_ingest_route_is_registered_and_routed(monkeypatch) -> None:
     assert status == 200
     assert payload["ingested_count"] == 0
     assert captured["days"] == 5
+
+
+def test_edinet_status_reports_api_key_configuration(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_EDINET_API_KEY_RUNTIME_SET", False)
+    monkeypatch.setenv("EDINET_API_KEY", "dummy-key")
+
+    status, payload = handle_api("GET", "/api/edinet/status")
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "process_env"
+    assert payload["default_financials_csv"] == "local_docs/edinet/financials.csv"
+    assert payload["auto_trading"] is False
+
+
+def test_edinet_api_key_can_be_set_for_runtime_without_echo(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_EDINET_API_KEY_RUNTIME_SET", False)
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/edinet/api-key",
+        {"api_key": "runtime-secret"},
+    )
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "runtime_input"
+    assert payload["request_api_key_applied"] is True
+    assert "runtime-secret" not in str(payload)
+
+
+def test_financials_refresh_with_edinet_key_updates_structured_csv(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setenv("EDINET_API_KEY", "dummy-key")
+    captured: dict[str, object] = {}
+
+    def fake_ingest(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "ingested_count": 1,
+            "targets_count": 225,
+            "financials_csv": str(tmp_path / "edinet" / "financials.csv"),
+            "results": [],
+        }
+
+    monkeypatch.setattr(service.cli, "run_edinet_ingest", fake_ingest)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/refresh",
+        {
+            "registry_path": "examples/source_registry_nikkei225_edinet.yaml",
+            "output_dir": str(tmp_path / "edinet"),
+            "days": 7,
+            "db_path": str(tmp_path / "rag.sqlite"),
+        },
+    )
+
+    assert status == 200
+    assert payload["mode"] == "edinet_api"
+    assert payload["api_key_configured"] is True
+    assert payload["financials_updated"] is True
+    assert payload["financials_csv"] == str(tmp_path / "edinet" / "financials.csv")
+    assert captured["days"] == 7
+    assert "dummy-key" not in str(payload)
+
+
+def test_financials_refresh_without_key_scrapes_only_official_pages(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    calls: list[bool] = []
+
+    def fake_run_fetch_job(*, path, dry_run: bool, preview_chars: int = 500):
+        _ = path, preview_chars
+        calls.append(dry_run)
+        return {
+            "results": [
+                {
+                    "name": "edinet_portal",
+                    "url": "https://disclosure2.edinet-fsa.go.jp/",
+                    "output_path": "local_docs/disclosure/edinet_portal.txt",
+                    "fetch": {
+                        "allowed_by_robots": True,
+                        "source": "dry_run" if dry_run else "network",
+                        "saved_path": None
+                        if dry_run
+                        else "local_docs/disclosure/edinet_portal.txt",
+                    },
+                }
+            ]
+        }
+
+    def fake_index_dir(*, path, db_path):
+        assert path == "local_docs"
+        assert db_path == str(tmp_path / "rag.sqlite")
+        return {"files_indexed": 1, "chunks_indexed": 2}
+
+    monkeypatch.setattr(service.cli, "run_fetch_job", fake_run_fetch_job)
+    monkeypatch.setattr(service.cli, "run_rag_index_dir", fake_index_dir)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/refresh",
+        {
+            "output_dir": str(tmp_path / "edinet"),
+            "db_path": str(tmp_path / "rag.sqlite"),
+        },
+    )
+
+    assert status == 200
+    assert calls == [True, False]
+    assert payload["mode"] == "disclosure_scrape_only"
+    assert payload["api_key_configured"] is False
+    assert payload["financials_updated"] is False
+    assert payload["financials_csv"] == str(tmp_path / "edinet" / "financials.csv")
+    assert payload["scrape"]["allowed_sources_count"] == 1
+    assert "EDINET API KEY" in payload["hint"]
+
+
+def test_edinet_status_reads_local_dotenv_without_exposing_key(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_EDINET_API_KEY_RUNTIME_SET", False)
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("EDINET_API_KEY=from-dotenv\n", encoding="utf-8")
+
+    status, payload = handle_api("GET", "/api/edinet/status")
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "dotenv"
+    assert "from-dotenv" not in str(payload)
+
+
+def test_financials_import_saves_manual_csv_and_searches_securities(
+    tmp_path: Path,
+) -> None:
+    csv_text = (
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2023,1000,45,40,stable\n"
+        "8306,MUFG,2024,1200,48,45,stable\n"
+        "7203,Toyota,2024,3000,55,60,stable\n"
+    )
+    output_path = tmp_path / "financials.csv"
+
+    status, imported = handle_api(
+        "POST",
+        "/api/financials/import",
+        {
+            "csv_text": csv_text,
+            "save": True,
+            "output_path": str(output_path),
+        },
+    )
+
+    assert status == 200
+    assert imported["saved_path"] == str(output_path)
+    assert imported["count"] == 3
+    assert imported["company_count"] == 2
+    assert imported["auto_trading"] is False
+    assert output_path.is_file()
+
+    status, searched = handle_api(
+        "POST",
+        "/api/financials/securities",
+        {"financials_csv": str(output_path), "query": "8306"},
+    )
+
+    assert status == 200
+    assert searched["count"] == 1
+    assert searched["securities"][0]["ticker"] == "8306"
+    assert searched["securities"][0]["name"] == "MUFG"
+
+
+def test_financials_status_reports_saved_data(tmp_path: Path) -> None:
+    csv_text = (
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2023,1000,45,40,stable\n"
+        "8306,MUFG,2024,1200,48,45,stable\n"
+        "7203,Toyota,2024,3000,55,60,stable\n"
+    )
+    output_path = tmp_path / "financials.csv"
+    output_path.write_text(csv_text, encoding="utf-8")
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/status",
+        {"path": str(output_path), "stale_after_days": 3650},
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["status"] == "fresh"
+    assert payload["path"] == str(output_path)
+    assert payload["point_count"] == 3
+    assert payload["company_count"] == 2
+    assert payload["latest_fiscal_year"] == 2024
+    assert payload["modified_at"]
+
+
+def test_financials_status_reports_missing_data(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-financials.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/status",
+        {"path": str(missing)},
+    )
+
+    assert status == 200
+    assert payload["available"] is False
+    assert payload["status"] == "missing"
+    assert payload["point_count"] == 0
+    assert payload["company_count"] == 0
+    assert "財務データ" in payload["hint"]
+
+
+def test_financials_securities_missing_csv_returns_empty_result(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-financials.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/securities",
+        {"financials_csv": str(missing), "query": "7203"},
+    )
+
+    assert status == 200
+    assert payload["available"] is False
+    assert payload["count"] == 0
+    assert payload["securities"] == []
+    assert payload["source_ref"] == str(missing)
+    assert "財務データ" in payload["hint"]
+
+
+def test_portfolio_universe_missing_csv_returns_empty_result(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-financials.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/portfolio/universe",
+        {"financials_csv": str(missing)},
+    )
+
+    assert status == 200
+    assert payload["available"] is False
+    assert payload["count"] == 0
+    assert payload["universe"] == []
+    assert payload["source_ref"] == str(missing)
+    assert "財務データ" in payload["hint"]
+
+
+def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> None:
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "7203,Toyota,2024,1000,55,60,stable\n"
+        "8306,MUFG,2024,1200,48,45,stable\n"
+        "9999,Standard Sample,2024,90,18,10,unstable\n",
+        encoding="utf-8",
+    )
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,7203,トヨタ自動車,プライム（内国株式）,輸送用機器\n"
+        "2026-05-31,8306,三菱ＵＦＪフィナンシャル・グループ,プライム（内国株式）,銀行業\n"
+        "2026-05-31,9999,サンプルスタンダード,スタンダード（内国株式）,サービス業\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+
+    status, imported = handle_api(
+        "POST",
+        "/api/market/jpx-listed/import",
+        {"csv_text": listed, "output_path": str(listed_path), "save": True},
+    )
+
+    assert status == 200
+    assert imported["count"] == 3
+    assert imported["prime_count"] == 2
+    assert listed_path.is_file()
+
+    status, universe = handle_api(
+        "POST",
+        "/api/market/universe",
+        {
+            "financials_csv": str(financials),
+            "jpx_listed_path": str(listed_path),
+            "scope": "prime",
+            "query": "",
+            "limit": 10,
+        },
+    )
+
+    assert status == 200
+    codes = {str(item["ticker"]) for item in universe["securities"]}
+    assert codes == {"7203", "8306"}
+    rows = {str(item["ticker"]): item for item in universe["securities"]}
+    assert rows["8306"]["is_prime"] is True
+    assert rows["8306"]["is_nikkei225"] is True
+    assert rows["8306"]["has_financials"] is True
+    assert rows["8306"]["market_segment"] == "プライム（国内株式）"
+    assert rows["8306"]["market_segment_raw"] == "プライム（内国株式）"
+    assert rows["8306"]["market_segment_label"] == "プライム（国内株式）"
+    assert universe["auto_trading"] is False
+    assert universe["call_real_api"] is False
+
+
+def test_jpx_listed_download_import_accepts_csv_path(tmp_path: Path) -> None:
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+        "2026-05-31,1305,ETF Sample,ETF・ETN,-\n"
+    )
+    source = tmp_path / "data_j.csv"
+    source.write_text(listed, encoding="utf-8")
+    output_path = tmp_path / "listed_issues.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/jpx-listed/download-import",
+        {"path": str(source), "output_path": str(output_path), "save": True},
+    )
+
+    assert status == 200
+    assert payload["downloaded"] is False
+    assert payload["converted"] is False
+    assert payload["imported"] is True
+    assert payload["count"] == 2
+    assert payload["prime_count"] == 1
+    assert payload["sample"][0]["market_segment"] == "プライム（国内株式）"
+    assert payload["sample"][0]["market_segment_raw"] == "プライム（内国株式）"
+    assert output_path.is_file()
+
+
+def test_jpx_listed_download_import_converts_legacy_xls(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.investment import jpx_excel
+
+    source = tmp_path / "data_j.xls"
+    source.write_bytes(bytes.fromhex("d0cf11e0a1b11ae1"))
+    converted_text = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+    )
+    output_path = tmp_path / "listed_issues.csv"
+    converted_path = tmp_path / "converted.csv"
+
+    def fake_convert(xls_path: object, csv_path: object, *, timeout_seconds: int = 120) -> str:
+        assert Path(str(xls_path)) == source
+        _ = timeout_seconds
+        Path(str(csv_path)).write_text(converted_text, encoding="utf-8")
+        return str(csv_path)
+
+    monkeypatch.setattr(jpx_excel, "convert_legacy_xls_to_csv_with_excel", fake_convert)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/jpx-listed/download-import",
+        {
+            "path": str(source),
+            "converted_output_path": str(converted_path),
+            "output_path": str(output_path),
+            "save": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["converted"] is True
+    assert payload["converted_path"] == str(converted_path)
+    assert payload["count"] == 1
+    assert payload["prime_count"] == 1
+    assert payload["sample"][0]["market_segment"] == "プライム（国内株式）"
+    assert payload["sample"][0]["market_segment_raw"] == "プライム（内国株式）"
+    assert output_path.is_file()
 
 
 
@@ -84,6 +477,22 @@ def test_rag_search_endpoint(tmp_path) -> None:
     assert status == 200
     assert payload["results"]
     assert "投資判断" in payload["results"][0]["text"]
+
+
+    assert payload["diagnostics"]["mode"] == "enhanced_hybrid"
+    assert payload["queries"]
+    assert payload["auto_trading"] is False
+
+
+def test_operator_catalog_endpoint_exposes_formulas() -> None:
+    status, payload = handle_api("GET", "/api/operators/catalog")
+
+    assert status == 200
+    assert payload["auto_trading"] is False
+    groups = {group["key"]: group for group in payload["groups"]}
+    assert "rag_search" in groups
+    assert "fund_scoring" in groups
+    assert groups["fund_scoring"]["formula"] == "sum(weight * normalized_score)"
 
 
 def test_rag_search_requires_query() -> None:
@@ -272,9 +681,12 @@ def test_available_routes_lists_endpoints() -> None:
     assert "GET /api/health" in routes
     assert "POST /api/rag/search" in routes
     assert "POST /api/rag/stats" in routes
+    assert "GET /api/operators/catalog" in routes
     assert "POST /api/manual-doc/save" in routes
     assert "POST /api/fetch-job/auto" in routes
     assert "POST /api/fetch-job/dry-run" in routes
+    assert "POST /api/financials/refresh" in routes
+    assert "POST /api/financials/refresh-async" in routes
 
 
 def test_sources_to_yaml_roundtrips_with_loader(tmp_path) -> None:
@@ -402,6 +814,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     )
     assert status == 200
     assert analysis["summary"]["market_value"] == 670000.0
+    assert analysis["summary"]["edinet_covered_holdings"] == 1
+    assert analysis["summary"]["edinet_source_ref"] == str(financials)
     assert analysis["summary"]["nisa"]["status"] == "ok"
     assert analysis["summary"]["nisa"]["alerts"] == []
     assert analysis["summary"]["data_quality"]["missing_timestamp_count"] == 2
@@ -441,6 +855,12 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert status == 200
     assert candidates["count"] >= 2
     assert candidates["auto_trading"] is False
+    stock_candidate = next(
+        item for item in candidates["results"] if item["asset_type"] == "stock"
+    )
+    assert stock_candidate["edinet_summary"]["source_ref"] == str(financials)
+    assert stock_candidate["edinet_summary"]["latest_dividend_per_share"] == 45.0
+    assert stock_candidate["evidence"][0]["source_ref"] == str(financials)
 
     status, detail = handle_api(
         "POST",
@@ -458,6 +878,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert detail["asset_type"] == "stock"
     assert detail["metrics"]
     assert detail["evidence"]
+    assert detail["edinet_summary"]["source_ref"] == str(financials)
+    assert detail["edinet_summary"]["latest_fiscal_year"] == 2024
     assert detail["auto_trading"] is False
 
     status, report = handle_api(
@@ -498,6 +920,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     }
     assert "portfolio.target.required_budget" in evidence_keys
     assert "portfolio.concentration.current" in evidence_keys
+    assert "candidate.8306.edinet_financials" in evidence_keys
+    assert "candidate.8306.edinet_summary" in evidence_keys
 
     status, audit = handle_api(
         "POST",

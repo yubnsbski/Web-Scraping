@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from investment_assistant.cli import run_rag_index_dir
 from investment_assistant.rag.chunker import chunk_text, load_document
-from investment_assistant.rag.search import build_answer_context, search_chunks
+from investment_assistant.rag.search import (
+    build_answer_context,
+    decompose_query,
+    enhanced_search,
+    search_chunks,
+)
 from investment_assistant.rag.store import RagStore
 
 
@@ -82,6 +87,59 @@ def test_search_chunks_scores_and_limits_results(tmp_path) -> None:
     assert len(results) == 1
     assert results[0].score > 0
     assert "投資判断" in results[0].text
+
+
+def test_decompose_query_keeps_original_and_separator_phrases() -> None:
+    variants = decompose_query("DOE, payout policy and dividend", max_queries=4)
+
+    assert variants[0] == "DOE, payout policy and dividend"
+    assert "DOE" in variants
+    assert any("payout" in variant for variant in variants)
+
+
+def test_enhanced_search_returns_rrf_diagnostics(tmp_path) -> None:
+    first = tmp_path / "first.md"
+    second = tmp_path / "second.md"
+    first.write_text(
+        "DOE policy and payout ratio are shown in the dividend policy.",
+        encoding="utf-8",
+    )
+    second.write_text(
+        "Capital allocation memo covers operating cash flow and dividends.",
+        encoding="utf-8",
+    )
+    store = RagStore(tmp_path / "rag.sqlite")
+    for path in (first, second):
+        document = load_document(path)
+        store.upsert_document(
+            document,
+            chunk_text(
+                source=document.source,
+                text=document.text,
+                content_hash=document.content_hash,
+                max_chars=120,
+                overlap_chars=0,
+            ),
+        )
+
+    payload = enhanced_search(
+        store,
+        query="DOE, payout ratio",
+        limit=2,
+        hybrid=False,
+        query_expansion=True,
+        max_queries=3,
+    )
+
+    results = payload["results"]
+    diagnostics = payload["diagnostics"]
+    assert isinstance(results, list)
+    assert results
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["mode"] == "enhanced_lexical"
+    assert diagnostics["query_count"] >= 2
+    assert diagnostics["candidate_count"] >= 1
+    assert results[0].metadata["ranking_method"] == "reciprocal_rank_fusion"
 
 
 def test_build_answer_context_formats_citations(tmp_path) -> None:

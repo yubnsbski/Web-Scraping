@@ -227,6 +227,16 @@ def test_candidate_screen_returns_condition_matches_not_recommendations(tmp_path
     codes = {str(item["code"]) for item in result["results"]}  # type: ignore[index]
     assert {"8306", "F001"} <= codes
     assert "9999" not in codes and "F999" not in codes
+    fund_candidate = next(
+        item
+        for item in result["results"]  # type: ignore[index]
+        if isinstance(item, dict) and item.get("code") == "F001"
+    )
+    assert fund_candidate["score"] == 0.943
+    assert fund_candidate["metrics"]["score_model"] == "fund_weighted_v1"
+    assert len(fund_candidate["score_breakdown"]) == 4
+    assert fund_candidate["evidence"][0]["claim_key"] == "candidate.F001.fund_profile_score"
+    assert result["fund_scoring_model"]["formula"] == "sum(weight * normalized_score)"
     assert result["auto_trading"] is False
     assert "買い推奨" not in str(result)
     assert "売り推奨" not in str(result)

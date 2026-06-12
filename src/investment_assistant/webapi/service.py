@@ -33,6 +33,7 @@ JsonDict = dict[str, Any]
 Handler = Callable[[JsonDict], JsonDict]
 _REAL_API_ENV = "INVESTMENT_ASSISTANT_WEB_REAL_API"
 _REAL_API_RUNTIME_ENABLED = False
+_EDINET_API_KEY_RUNTIME_SET = False
 
 
 class ApiError(Exception):
@@ -61,6 +62,50 @@ def handle_api(method: str, path: str, body: JsonDict | None = None) -> tuple[in
 
 def _health(_: JsonDict) -> JsonDict:
     return {"status": "ok", "service": "investment-assistant", "auto_trading": False}
+
+
+def _edinet_status(_: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    env_configured_before_dotenv = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
+    dotenv_loaded = _ensure_env_from_dotenv(API_KEY_ENV_VAR)
+    configured = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
+    return {
+        "api_key_configured": configured,
+        "api_key_env_var": API_KEY_ENV_VAR,
+        "api_key_source": _edinet_api_key_source(
+            configured=configured,
+            env_configured_before_dotenv=env_configured_before_dotenv,
+            dotenv_loaded=dotenv_loaded,
+        ),
+        "default_registry": "examples/source_registry_nikkei225_edinet.yaml",
+        "default_output_dir": "local_docs/edinet",
+        "default_financials_csv": DEFAULT_FINANCIALS_CSV,
+        "structured_refresh_requires_key": True,
+        "fallback_without_key": "official_disclosure_scrape_only",
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _edinet_api_key_set(body: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    global _EDINET_API_KEY_RUNTIME_SET
+
+    value = str(body.get("api_key") or "").strip()
+    if value:
+        os.environ[API_KEY_ENV_VAR] = value
+        _EDINET_API_KEY_RUNTIME_SET = True
+    configured = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
+    return {
+        "api_key_configured": configured,
+        "api_key_env_var": API_KEY_ENV_VAR,
+        "api_key_source": "runtime_input" if _EDINET_API_KEY_RUNTIME_SET else "missing",
+        "request_api_key_applied": bool(value),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _budget(_: JsonDict) -> JsonDict:
@@ -121,15 +166,61 @@ def _rag_stats(body: JsonDict) -> JsonDict:
 
 
 def _rag_search(body: JsonDict) -> JsonDict:
+    from dataclasses import asdict
+    from typing import cast
+
+    from investment_assistant.rag.search import SearchResult, enhanced_search
+    from investment_assistant.rag.store import RagStore
+
     query = _require_str(body, "query")
-    results = cli.run_rag_search(
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+    limit = _as_int(body.get("limit"), 5)
+    hybrid = _as_bool(body.get("hybrid"), True)
+    alpha = _as_float(body.get("alpha"), 0.5)
+    enhanced = _as_bool(body.get("enhanced"), True)
+    if not enhanced:
+        results = cli.run_rag_search(
+            query=query,
+            db_path=db_path,
+            limit=limit,
+            hybrid=hybrid,
+            alpha=alpha,
+        )
+        return {
+            "query": query,
+            "queries": [query],
+            "results": results,
+            "diagnostics": {
+                "mode": "legacy_hybrid" if hybrid else "legacy_lexical",
+                "query_count": 1,
+                "candidate_count": len(results),
+                "limit": limit,
+                "hybrid_alpha": alpha if hybrid else None,
+                "operators": [],
+                "non_advisory_boundary": (
+                    "検索結果は根拠候補の提示のみ。"
+                    "売買判断や自動売買には使わない。"
+                ),
+            },
+        }
+    payload = enhanced_search(
+        RagStore(db_path),
         query=query,
-        db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
-        limit=_as_int(body.get("limit"), 5),
-        hybrid=bool(body.get("hybrid", False)),
-        alpha=_as_float(body.get("alpha"), 0.5),
+        limit=limit,
+        hybrid=hybrid,
+        alpha=alpha,
+        query_expansion=_as_bool(body.get("query_expansion"), True),
+        max_queries=_as_int(body.get("max_queries"), 4),
+        rrf_k=_as_int(body.get("rrf_k"), 60),
+        max_per_source=_as_int(body.get("max_per_source"), 3),
     )
-    return {"query": query, "results": results}
+    search_results = cast(list[SearchResult], payload["results"])
+    return {
+        **payload,
+        "results": [asdict(result) for result in search_results],
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _rag_answer_context(body: JsonDict) -> JsonDict:
@@ -407,8 +498,105 @@ def _fetch_job_auto(body: JsonDict) -> JsonDict:
     }
 
 
+def _financials_refresh(body: JsonDict) -> JsonDict:
+    """Refresh financial data through the safest available official path.
+
+    Structured financial metrics come from EDINET API CSV/XBRL, because the
+    report and screening engine need deterministic, auditable values. When the
+    EDINET API key is not configured, we still run the official disclosure-page
+    scraping path for RAG grounding, but we intentionally do not claim that the
+    structured ``financials.csv`` was updated.
+    """
+
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    _ensure_env_from_dotenv(API_KEY_ENV_VAR)
+    registry_path = str(
+        body.get("registry_path") or "examples/source_registry_nikkei225_edinet.yaml"
+    )
+    output_dir = str(body.get("output_dir") or "local_docs/edinet")
+    financials_csv = str(Path(output_dir) / "financials.csv")
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+    index_after_fetch = _as_bool(body.get("index_after_fetch"), True)
+
+    if os.getenv(API_KEY_ENV_VAR, "").strip():
+        result = _edinet_ingest(
+            {
+                **body,
+                "registry_path": registry_path,
+                "output_dir": output_dir,
+                "db_path": db_path,
+                "index_after_fetch": index_after_fetch,
+            }
+        )
+        result["mode"] = "edinet_api"
+        result["api_key_configured"] = True
+        result["financials_updated"] = bool(result.get("financials_csv"))
+        result["financials_csv"] = str(result.get("financials_csv") or financials_csv)
+        result["official_sources"] = [
+            {
+                "label": "EDINET API v2",
+                "url": "https://disclosure2.edinet-fsa.go.jp/",
+                "purpose": "有価証券報告書等の公式CSV/XBRL取得",
+            }
+        ]
+        result["hint"] = (
+            "EDINET公式APIのCSV/XBRLから財務データを更新しました。"
+            "候補抽出、詳細、レポートはこのCSVを参照します。"
+        )
+        return result
+
+    scrape_result = _fetch_job_auto(
+        {
+            "sources": _default_disclosure_sources(),
+            "db_path": db_path,
+            "index_path": "local_docs",
+            "index_after_fetch": index_after_fetch,
+        }
+    )
+    return {
+        "mode": "disclosure_scrape_only",
+        "api_key_configured": False,
+        "financials_updated": False,
+        "financials_csv": financials_csv,
+        "scrape": scrape_result,
+        "official_sources": [
+            {
+                "label": "EDINET 閲覧サイト",
+                "url": "https://disclosure2.edinet-fsa.go.jp/",
+                "purpose": "開示ページの確認とRAG根拠取得",
+            },
+            {
+                "label": "TDnet",
+                "url": "https://www.release.tdnet.info/inbs/I_main_00.html",
+                "purpose": "適時開示ページの確認とRAG根拠取得",
+            },
+            {
+                "label": "JPX 東証上場銘柄一覧",
+                "url": "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html",
+                "purpose": "市場区分と銘柄名の確認",
+            },
+        ],
+        "hint": (
+            "EDINET API KEYがバックエンドに未設定のため、構造化された財務CSVは更新していません。"
+            "公式ページの取得とRAG登録だけを実行しました。"
+            "財務数値の更新はAPI KEY設定後に再実行してください。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_refresh_async(body: JsonDict) -> JsonDict:
+    job_id = JOBS.start("financials-refresh", lambda: _financials_refresh(body))
+    return {"job_id": job_id, "status": "running", "kind": "financials-refresh"}
+
+
 
 def _edinet_ingest(body: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    _ensure_env_from_dotenv(API_KEY_ENV_VAR)
     registry_path = str(
         body.get("registry_path") or "examples/source_registry_edinet_sample.yaml"
     )
@@ -428,6 +616,12 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
         index_after=_as_bool(body.get("index_after_fetch"), True),
         max_periods=max_periods if max_periods and max_periods > 0 else None,
     )
+
+
+def _operators_catalog(_: JsonDict) -> JsonDict:
+    from investment_assistant.investment.operators import operator_catalog
+
+    return operator_catalog()
 
 
 def _edinet_ingest_async(body: JsonDict) -> JsonDict:
@@ -549,6 +743,7 @@ def _portfolio_target(body: JsonDict) -> JsonDict:
 
 
 def _portfolio_universe(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.universe import build_market_universe
     from investment_assistant.portfolio.simulator import build_universe
 
     raw_prices = body.get("prices")
@@ -557,10 +752,311 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
         if isinstance(raw_prices, dict)
         else None
     )
-    universe = build_universe(
-        str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV), prices=prices
+    financials_csv = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
+    if not Path(financials_csv).is_file():
+        return {
+            "available": False,
+            "universe": [],
+            "count": 0,
+            "source_ref": financials_csv,
+            "hint": (
+                "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
+                "サンプルデータに切り替えてください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    try:
+        universe = build_universe(financials_csv, prices=prices)
+    except FileNotFoundError:
+        return {
+            "available": False,
+            "universe": [],
+            "count": 0,
+            "source_ref": financials_csv,
+            "hint": (
+                "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
+                "サンプルデータに切り替えてください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    scope = str(body.get("scope") or "financials")
+    market = build_market_universe(
+        financials_csv=financials_csv,
+        jpx_listed_path=str(body.get("jpx_listed_path") or "local_docs/jpx/listed_issues.csv"),
+        query="",
+        scope="all",
+        limit=10000,
     )
-    return {"universe": universe, "count": len(universe)}
+    raw_market_rows = market.get("securities")
+    market_rows = {
+        str(row.get("ticker") or row.get("code") or ""): row
+        for row in (raw_market_rows if isinstance(raw_market_rows, list) else [])
+        if isinstance(row, dict)
+    }
+    enriched: list[dict[str, object]] = []
+    for row in universe:
+        ticker = str(row.get("ticker") or "")
+        meta = market_rows.get(ticker, {})
+        market_segment = (
+            meta.get("market_segment_label")
+            or meta.get("market_segment")
+            or "未取込"
+        )
+        enriched_row = {
+            **row,
+            "market_segment": market_segment,
+            "market_segment_raw": meta.get("market_segment_raw", ""),
+            "market_segment_label": market_segment,
+            "sector": meta.get("sector", ""),
+            "is_prime": bool(meta.get("is_prime")),
+            "is_nikkei225": bool(meta.get("is_nikkei225")),
+            "has_financials": True,
+        }
+        if _market_scope_matches(enriched_row, scope):
+            enriched.append(enriched_row)
+    return {
+        "available": True,
+        "universe": enriched,
+        "count": len(enriched),
+        "scope": scope,
+        "source_ref": financials_csv,
+        "market_sources": market.get("sources"),
+        "jpx_listed_available": market.get("jpx_listed_available"),
+        "hint": market.get("hint"),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _market_universe(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.universe import build_market_universe
+
+    return build_market_universe(
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        jpx_listed_path=str(body.get("jpx_listed_path") or "local_docs/jpx/listed_issues.csv"),
+        nikkei225_registry=str(
+            body.get("nikkei225_registry") or "examples/source_registry_nikkei225_edinet.yaml"
+        ),
+        query=str(body.get("query") or ""),
+        scope=str(body.get("scope") or body.get("universe") or "prime"),
+        limit=max(_as_int(body.get("limit"), 50), 1),
+    )
+
+
+def _jpx_listed_template(_: JsonDict) -> JsonDict:
+    from investment_assistant.investment.universe import jpx_listed_issue_template
+
+    return jpx_listed_issue_template()
+
+
+def _jpx_listed_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+    from investment_assistant.investment.universe import (
+        DEFAULT_JPX_LISTED_ISSUES_PATH,
+        parse_jpx_listed_issues_text,
+        source_manifest,
+        write_jpx_listed_issues,
+    )
+
+    text = str(body.get("csv_text") or body.get("text") or "")
+    source_ref = "screen_input"
+    path_value = str(body.get("path") or "").strip()
+    if not text.strip() and path_value:
+        path = Path(path_value)
+        if path.suffix.lower() == ".xls":
+            raise ApiError(
+                "JPX公式ファイルは旧Excel形式です。Excel等でCSV/TSVに変換してから取り込んでください。"
+            )
+        text = path.read_text(encoding="utf-8")
+        source_ref = str(path)
+    if not text.strip():
+        raise ApiError("JPX上場銘柄一覧データを貼り付けるか、CSV/TSV path を指定してください。")
+
+    issues = parse_jpx_listed_issues_text(text, source_ref=source_ref)
+    output_path = str(body.get("output_path") or DEFAULT_JPX_LISTED_ISSUES_PATH)
+    saved_path: str | None = None
+    if _as_bool(body.get("save"), True):
+        target = reject_path_traversal(output_path)
+        saved_path = write_jpx_listed_issues(issues, target)
+    prime_count = sum(1 for issue in issues if issue.is_prime)
+    return {
+        "available": True,
+        "count": len(issues),
+        "prime_count": prime_count,
+        "saved": saved_path is not None,
+        "saved_path": saved_path,
+        "sample": [issue.to_dict() for issue in issues[:20]],
+        "sources": source_manifest(),
+        "disclaimer": "市場区分は銘柄選択補助です。投資助言や売買推奨ではありません。",
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _jpx_listed_download(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import SafeFetcher, reject_path_traversal
+    from investment_assistant.investment.universe import (
+        JPX_LISTED_ISSUES_FILE_URL,
+        JPX_LISTED_ISSUES_PAGE_URL,
+        source_manifest,
+    )
+
+    url = str(body.get("url") or JPX_LISTED_ISSUES_FILE_URL)
+    output_path = str(body.get("output_path") or "local_docs/jpx/data_j.xls")
+    fetcher = SafeFetcher(timeout_seconds=30.0)
+    decision = fetcher.robots.can_fetch(url)
+    if not decision.allowed:
+        return {
+            "available": False,
+            "downloaded": False,
+            "source_url": url,
+            "robots_url": decision.robots_url,
+            "reason": decision.reason,
+            "hint": "robots.txtで許可されていないため自動取得しません。",
+            "sources": source_manifest(),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    response = fetcher.transport.get(
+        url,
+        timeout_seconds=30.0,
+        user_agent=fetcher.user_agent,
+    )
+    if response.status_code >= 400:
+        raise ApiError(f"JPXファイル取得に失敗しました: status={response.status_code}")
+    target = reject_path_traversal(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(response.body)
+    is_legacy_xls = response.body.startswith(bytes.fromhex("d0cf11e0a1b11ae1"))
+    return {
+        "available": True,
+        "downloaded": True,
+        "saved_path": str(target),
+        "bytes": len(response.body),
+        "status_code": response.status_code,
+        "source_url": url,
+        "source_page_url": JPX_LISTED_ISSUES_PAGE_URL,
+        "robots_url": decision.robots_url,
+        "parse_supported": not is_legacy_xls,
+        "file_format": "legacy_xls" if is_legacy_xls else "text_or_unknown",
+        "hint": (
+            "公式ファイルを取得しました。旧Excel形式のため、Excel等でCSV/TSVに変換して"
+            "市場区分データとして保存してください。"
+            if is_legacy_xls
+            else "取得ファイルを市場区分データとして取り込めます。"
+        ),
+        "sources": source_manifest(),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _jpx_listed_download_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+    from investment_assistant.investment.jpx_excel import (
+        JpxExcelConversionError,
+        convert_legacy_xls_to_csv_with_excel,
+    )
+    from investment_assistant.investment.universe import (
+        DEFAULT_JPX_LISTED_ISSUES_PATH,
+        source_manifest,
+    )
+
+    raw_path = str(body.get("path") or "").strip()
+    output_path = str(body.get("output_path") or DEFAULT_JPX_LISTED_ISSUES_PATH)
+    converted_output_path = str(
+        body.get("converted_output_path") or "local_docs/jpx/data_j_converted.csv"
+    )
+    downloaded = False
+    download_result: JsonDict | None = None
+    source_path: Path
+
+    if raw_path:
+        source_path = reject_path_traversal(raw_path)
+    else:
+        download_result = _jpx_listed_download(
+            {
+                "url": body.get("url"),
+                "output_path": body.get("download_output_path") or "local_docs/jpx/data_j.xls",
+            }
+        )
+        if not download_result.get("downloaded"):
+            return {
+                "available": False,
+                "downloaded": False,
+                "converted": False,
+                "imported": False,
+                "download": download_result,
+                "sources": source_manifest(),
+                "hint": str(
+                    download_result.get("hint")
+                    or "JPX公式ファイルを取得できませんでした。"
+                ),
+                "auto_trading": False,
+                "call_real_api": False,
+            }
+        downloaded = True
+        source_path = reject_path_traversal(str(download_result.get("saved_path") or ""))
+
+    import_path = source_path
+    converted = False
+    conversion_error: str | None = None
+    if source_path.suffix.lower() == ".xls":
+        try:
+            import_path = reject_path_traversal(converted_output_path)
+            convert_legacy_xls_to_csv_with_excel(source_path, import_path)
+            converted = True
+        except JpxExcelConversionError as exc:
+            conversion_error = str(exc)
+            return {
+                "available": False,
+                "downloaded": downloaded,
+                "converted": False,
+                "imported": False,
+                "download": download_result,
+                "source_path": str(source_path),
+                "converted_path": str(import_path),
+                "conversion_error": conversion_error,
+                "sources": source_manifest(),
+                "hint": (
+                    "JPX公式ファイルは取得できましたが、Excel自動変換に失敗しました。"
+                    "Excel等でCSV/TSVへ変換してから手動取込してください。"
+                ),
+                "auto_trading": False,
+                "call_real_api": False,
+            }
+
+    imported = _jpx_listed_import(
+        {
+            "path": str(import_path),
+            "output_path": output_path,
+            "save": _as_bool(body.get("save"), True),
+        }
+    )
+    return {
+        "available": True,
+        "downloaded": downloaded,
+        "converted": converted,
+        "imported": True,
+        "download": download_result,
+        "source_path": str(source_path),
+        "converted_path": str(import_path) if converted else None,
+        "saved_path": imported.get("saved_path"),
+        "count": imported.get("count"),
+        "prime_count": imported.get("prime_count"),
+        "sample": imported.get("sample"),
+        "sources": imported.get("sources"),
+        "disclaimer": imported.get("disclaimer"),
+        "hint": (
+            "JPX公式ファイルを取得し、市場区分データへ反映しました。"
+            if downloaded
+            else "JPX市場区分データを反映しました。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _market_prices(body: JsonDict) -> JsonDict:
@@ -607,6 +1103,200 @@ def _portfolio_performance(body: JsonDict) -> JsonDict:
 def _financials_compare(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/financials_sample.csv")
     return compare_financials(load_financials(path))
+
+
+def _financials_status(body: JsonDict) -> JsonDict:
+    path = Path(str(body.get("path") or body.get("financials_csv") or DEFAULT_FINANCIALS_CSV))
+    stale_after_days = max(_as_int(body.get("stale_after_days"), 7), 1)
+    if not path.is_file():
+        return {
+            "available": False,
+            "status": "missing",
+            "path": str(path),
+            "point_count": 0,
+            "company_count": 0,
+            "latest_fiscal_year": None,
+            "modified_at": None,
+            "age_days": None,
+            "stale_after_days": stale_after_days,
+            "hint": (
+                "財務データがまだありません。"
+                "DataタブでEDINET取得または手動保存を行ってください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    try:
+        points = load_financials(path)
+        comparison = compare_financials(points)
+    except (ValueError, OSError) as exc:
+        return {
+            "available": False,
+            "status": "invalid",
+            "path": str(path),
+            "point_count": 0,
+            "company_count": 0,
+            "latest_fiscal_year": None,
+            "modified_at": None,
+            "age_days": None,
+            "stale_after_days": stale_after_days,
+            "hint": f"財務データを読み込めません: {type(exc).__name__}: {exc}",
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    stat = path.stat()
+    modified_at = datetime.fromtimestamp(stat.st_mtime, UTC)
+    age_days = (datetime.now(UTC) - modified_at).total_seconds() / 86400
+    companies = comparison.get("companies")
+    rows = companies if isinstance(companies, list) else []
+    latest_years = [
+        _as_int(row.get("latest_fiscal_year"), 0)
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    is_stale = age_days > stale_after_days
+    return {
+        "available": True,
+        "status": "stale" if is_stale else "fresh",
+        "path": str(path),
+        "point_count": len(points),
+        "company_count": len(rows),
+        "latest_fiscal_year": max(latest_years) if latest_years else None,
+        "modified_at": modified_at.isoformat(),
+        "age_days": round(age_days, 2),
+        "stale_after_days": stale_after_days,
+        "hint": (
+            "更新推奨です。Dataタブで最新7日取得またはバックフィルを実行してください。"
+            if is_stale
+            else "財務データは利用可能です。必要に応じてDataタブから更新できます。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.financials.models import FINANCIAL_COLUMNS
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+
+    raw_csv_text = body.get("csv_text")
+    csv_text = raw_csv_text if isinstance(raw_csv_text, str) else ""
+    save = _as_bool(body.get("save"), False)
+    cleanup: Path | None = None
+    source = "path"
+    source_ref: str
+    normalized_csv: str
+
+    if csv_text.strip():
+        if len(csv_text) > _MAX_MANUAL_TEXT_CHARS:
+            raise ApiError(f"csv_text is too long: max {_MAX_MANUAL_TEXT_CHARS} characters")
+        normalized_csv = csv_text.strip() + "\n"
+        with tempfile.NamedTemporaryFile(
+            "w",
+            suffix=".csv",
+            delete=False,
+            encoding="utf-8",
+        ) as handle:
+            handle.write(normalized_csv)
+            source_ref = handle.name
+        cleanup = Path(source_ref)
+        source = "csv_text"
+    else:
+        source_ref = _require_str(body, "path")
+        normalized_csv = Path(source_ref).read_text(encoding="utf-8")
+
+    try:
+        points = load_financials(source_ref)
+    finally:
+        if cleanup is not None:
+            cleanup.unlink(missing_ok=True)
+
+    comparison = compare_financials(points)
+    saved_path: str | None = None
+    output_path = str(body.get("output_path") or DEFAULT_FINANCIALS_CSV)
+    if save:
+        target = reject_path_traversal(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(normalized_csv, encoding="utf-8")
+        saved_path = str(target)
+
+    companies = comparison.get("companies")
+    company_count = len(companies) if isinstance(companies, list) else 0
+    return {
+        "available": True,
+        "source": source,
+        "source_ref": None if source == "csv_text" else source_ref,
+        "saved": save,
+        "saved_path": saved_path,
+        "financials_csv": saved_path or (None if source == "csv_text" else source_ref),
+        "columns": list(FINANCIAL_COLUMNS),
+        "count": len(points),
+        "company_count": company_count,
+        "comparison": comparison,
+        "disclaimer": comparison.get("disclaimer"),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_securities(body: JsonDict) -> JsonDict:
+    path = str(
+        body.get("financials_csv")
+        or body.get("path")
+        or DEFAULT_FINANCIALS_CSV
+    )
+    query = str(body.get("query") or "").strip().lower()
+    limit = max(_as_int(body.get("limit"), 20), 1)
+    if not Path(path).is_file():
+        return {
+            "available": False,
+            "query": query,
+            "source_ref": path,
+            "count": 0,
+            "securities": [],
+            "hint": (
+                "財務データが見つかりません。DataタブでEDINET取得/手動保存を行うか、"
+                "上部の財務データをサンプルデータに切り替えてください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    comparison = compare_financials(load_financials(path))
+    companies = comparison.get("companies")
+    rows = companies if isinstance(companies, list) else []
+    matches: list[dict[str, object]] = []
+    for company in rows:
+        if not isinstance(company, dict):
+            continue
+        ticker = str(company.get("ticker") or "")
+        name = str(company.get("name") or "")
+        haystack = f"{ticker} {name}".lower()
+        if query and query not in haystack:
+            continue
+        matches.append(
+            {
+                "ticker": ticker,
+                "code": ticker,
+                "name": name,
+                "latest_fiscal_year": company.get("latest_fiscal_year"),
+                "latest_equity_ratio": company.get("latest_equity_ratio"),
+                "latest_dividend_per_share": company.get("latest_dividend_per_share"),
+                "dividend_cut_years": company.get("dividend_cut_years"),
+                "operating_cf_trend": company.get("operating_cf_trend"),
+                "source_ref": path,
+            }
+        )
+        if len(matches) >= limit:
+            break
+    return {
+        "available": True,
+        "query": query,
+        "source_ref": path,
+        "count": len(matches),
+        "securities": matches,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _holdings_import(body: JsonDict) -> JsonDict:
@@ -1127,6 +1817,46 @@ def _real_api_decision(body: JsonDict) -> tuple[bool, str | None]:
     return False, "real API is not enabled"
 
 
+def _ensure_env_from_dotenv(key: str) -> bool:
+    if os.getenv(key, "").strip():
+        return True
+    for env_path in (Path(".env"), Path(".env.local")):
+        if not env_path.is_file():
+            continue
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                name, value = stripped.split("=", 1)
+                if name.strip() != key:
+                    continue
+                cleaned = value.strip().strip('"').strip("'")
+                if cleaned:
+                    os.environ[key] = cleaned
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _edinet_api_key_source(
+    *,
+    configured: bool,
+    env_configured_before_dotenv: bool,
+    dotenv_loaded: bool,
+) -> str:
+    if not configured:
+        return "missing"
+    if _EDINET_API_KEY_RUNTIME_SET:
+        return "runtime_input"
+    if env_configured_before_dotenv:
+        return "process_env"
+    if dotenv_loaded:
+        return "dotenv"
+    return "unknown"
+
+
 def _require_str(body: JsonDict, key: str) -> str:
     value = body.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -1142,6 +1872,38 @@ def _require_sources(body: JsonDict) -> list[Any]:
         if not isinstance(source, dict):
             raise ApiError("each source must be an object")
     return sources
+
+
+def _default_disclosure_sources() -> list[JsonDict]:
+    return [
+        {
+            "name": "edinet_portal",
+            "url": "https://disclosure2.edinet-fsa.go.jp/",
+            "output_path": "local_docs/disclosure/edinet_portal.txt",
+            "query_hint": "EDINET 有価証券報告書 半期報告書 四半期報告書 財務諸表",
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": 500,
+        },
+        {
+            "name": "tdnet_portal",
+            "url": "https://www.release.tdnet.info/inbs/I_main_00.html",
+            "output_path": "local_docs/disclosure/tdnet_portal.txt",
+            "query_hint": "TDnet 適時開示 決算短信 配当 予想 修正",
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": 500,
+        },
+        {
+            "name": "jpx_listed_issues",
+            "url": "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html",
+            "output_path": "local_docs/disclosure/jpx_listed_issues.txt",
+            "query_hint": "JPX 東証上場銘柄一覧 プライム スタンダード グロース",
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": 500,
+        },
+    ]
 
 
 def _run_fetch_job_sources(sources: list[Any], *, dry_run: bool) -> JsonDict:
@@ -1197,6 +1959,17 @@ def _as_bool(value: object, default: bool = False) -> bool:
         if lowered in {"0", "false", "no", "n", "off"}:
             return False
     return default
+
+
+def _market_scope_matches(row: JsonDict, scope: str) -> bool:
+    normalized = scope.strip().lower()
+    if normalized in {"prime", "tse_prime", "tosho_prime"}:
+        return bool(row.get("is_prime"))
+    if normalized in {"nikkei225", "nikkei_225", "n225"}:
+        return bool(row.get("is_nikkei225"))
+    if normalized in {"financials", "edinet", "financials_available"}:
+        return bool(row.get("has_financials"))
+    return True
 
 
 def _as_int(value: object, default: int) -> int:
@@ -1281,6 +2054,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/rag/search"): _rag_search,
     ("POST", "/api/rag/answer-context"): _rag_answer_context,
     ("POST", "/api/rag/answer"): _rag_answer,
+    ("GET", "/api/operators/catalog"): _operators_catalog,
+    ("POST", "/api/operators/catalog"): _operators_catalog,
     ("POST", "/api/orchestrate"): _orchestrate,
     ("POST", "/api/rag/index-dir"): _rag_index_dir,
     ("POST", "/api/manual-doc/save"): _manual_doc_save,
@@ -1292,6 +2067,11 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/simulate"): _portfolio_simulate,
     ("POST", "/api/portfolio/target"): _portfolio_target,
     ("POST", "/api/portfolio/universe"): _portfolio_universe,
+    ("POST", "/api/market/universe"): _market_universe,
+    ("POST", "/api/market/jpx-listed/template"): _jpx_listed_template,
+    ("POST", "/api/market/jpx-listed/import"): _jpx_listed_import,
+    ("POST", "/api/market/jpx-listed/download"): _jpx_listed_download,
+    ("POST", "/api/market/jpx-listed/download-import"): _jpx_listed_download_import,
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
@@ -1313,12 +2093,20 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/reports/investment-monthly/history/verify"): _investment_report_history_verify,
     ("POST", "/api/reports/investment-monthly/history/compare"): _investment_report_history_compare,
     ("POST", "/api/financials/compare"): _financials_compare,
+    ("GET", "/api/financials/status"): _financials_status,
+    ("POST", "/api/financials/status"): _financials_status,
+    ("POST", "/api/financials/import"): _financials_import,
+    ("POST", "/api/financials/refresh"): _financials_refresh,
+    ("POST", "/api/financials/refresh-async"): _financials_refresh_async,
+    ("POST", "/api/financials/securities"): _financials_securities,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
     ("POST", "/api/edinet/ingest"): _edinet_ingest,
     ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
+    ("GET", "/api/edinet/status"): _edinet_status,
+    ("POST", "/api/edinet/api-key"): _edinet_api_key_set,
     ("POST", "/api/jobs/status"): _job_status,
     ("POST", "/api/storage/prune"): _storage_prune,
     ("POST", "/api/knowledge/diff"): _knowledge_diff,
