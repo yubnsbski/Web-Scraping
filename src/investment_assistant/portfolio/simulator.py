@@ -468,6 +468,14 @@ def _resolve_shares(
     if optimize != "none":
         return _optimize_shares(prepared, budget, optimize, basis)
     # Default: split the budget by weight and floor each holding to whole lots.
+    return _weighted_floor_shares(prepared, weights, budget)
+
+
+def _weighted_floor_shares(
+    prepared: list[_Prepared], weights: list[float], budget: float
+) -> list[int]:
+    """Split ``budget`` by ``weights`` and floor each holding to whole lots."""
+
     shares: list[int] = []
     for holding, weight in zip(prepared, weights, strict=True):
         lot_cost = holding.price * holding.lot
@@ -499,6 +507,12 @@ def _optimize_shares(
     shares = [0 for _ in prepared]
     remaining = budget
     scores = [_lot_score(h, optimize, basis) for h in prepared]
+    if max(scores, default=0.0) <= 0.0:
+        # No holding has a positive (conservative) dividend to maximise — e.g.
+        # every band lower clamped to 0. Deploy the budget evenly instead of
+        # returning an empty portfolio.
+        equal = [1.0 / len(prepared) for _ in prepared] if prepared else []
+        return _weighted_floor_shares(prepared, equal, budget)
     while True:
         affordable = [
             i for i, cost in enumerate(lot_costs) if 0 < cost <= remaining and scores[i] > 0
@@ -519,10 +533,14 @@ def _cash_min_shares(
     Lots cost ``price × lot`` (whole yen here), so the table is reduced by the
     gcd of the costs and budget before filling; above a cell cap we fall back to a
     largest-fit-then-fill greedy so an adversarial budget can't blow up runtime.
+
+    Costs are rounded *up* and the budget *down* so the integer knapsack can
+    never select a combination whose real (possibly fractional) cost exceeds the
+    budget — i.e. ``cash_left`` stays non-negative even with fractional prices.
     """
 
-    costs = [int(round(c)) for c in lot_costs]
-    budget_int = int(budget)
+    costs = [math.ceil(c) for c in lot_costs]
+    budget_int = math.floor(budget)
     positive = [c for c in costs if c > 0]
     if not positive or budget_int < min(positive):
         return [0 for _ in prepared]
