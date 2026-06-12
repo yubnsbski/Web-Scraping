@@ -52,6 +52,11 @@ class ListedIssue:
 
     def to_dict(self) -> dict[str, object]:
         payload = asdict(self)
+        raw_segment = self.market_segment
+        display_segment = display_market_segment(raw_segment)
+        payload["market_segment_raw"] = raw_segment
+        payload["market_segment"] = display_segment
+        payload["market_segment_label"] = display_segment
         payload["is_prime"] = self.is_prime
         return payload
 
@@ -87,9 +92,9 @@ def source_manifest() -> dict[str, object]:
 def jpx_listed_issue_template() -> dict[str, object]:
     csv_text = (
         "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
-        "2026-05-31,7203,トヨタ自動車,プライム（内国株式）,輸送用機器\n"
-        "2026-05-31,8306,三菱ＵＦＪフィナンシャル・グループ,プライム（内国株式）,銀行業\n"
-        "2026-05-31,9999,サンプルスタンダード,スタンダード（内国株式）,サービス業\n"
+        "2026-05-31,7203,トヨタ自動車,プライム（国内株式）,輸送用機器\n"
+        "2026-05-31,8306,三菱ＵＦＪフィナンシャル・グループ,プライム（国内株式）,銀行業\n"
+        "2026-05-31,9999,サンプルスタンダード,スタンダード（国内株式）,サービス業\n"
     )
     return {
         "kind": "jpx_listed_issues",
@@ -323,12 +328,14 @@ def _universe_row(
         or str(nikkei_issue.get("name") or "").strip()
     )
     market_segment = listed_issue.market_segment if listed_issue else ""
+    display_segment = display_market_segment(market_segment)
     return {
         "ticker": code,
         "code": code,
         "name": name,
-        "market_segment": market_segment or "未取込",
-        "market_segment_label": display_market_segment(market_segment),
+        "market_segment": display_segment,
+        "market_segment_raw": market_segment,
+        "market_segment_label": display_segment,
         "sector": listed_issue.sector if listed_issue else "",
         "is_prime": listed_issue.is_prime if listed_issue else False,
         "is_nikkei225": code in nikkei,
@@ -361,7 +368,7 @@ def _matches_query(row: dict[str, object], query: str) -> bool:
         return True
     haystack = " ".join(
         str(row.get(key) or "")
-        for key in ("ticker", "name", "market_segment", "sector")
+        for key in ("ticker", "name", "market_segment", "market_segment_raw", "sector")
     ).lower()
     return needle in haystack
 

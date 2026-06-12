@@ -373,7 +373,8 @@ def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> No
     assert rows["8306"]["is_prime"] is True
     assert rows["8306"]["is_nikkei225"] is True
     assert rows["8306"]["has_financials"] is True
-    assert rows["8306"]["market_segment"] == "プライム（内国株式）"
+    assert rows["8306"]["market_segment"] == "プライム（国内株式）"
+    assert rows["8306"]["market_segment_raw"] == "プライム（内国株式）"
     assert rows["8306"]["market_segment_label"] == "プライム（国内株式）"
     assert universe["auto_trading"] is False
     assert universe["call_real_api"] is False
@@ -401,6 +402,8 @@ def test_jpx_listed_download_import_accepts_csv_path(tmp_path: Path) -> None:
     assert payload["imported"] is True
     assert payload["count"] == 2
     assert payload["prime_count"] == 1
+    assert payload["sample"][0]["market_segment"] == "プライム（国内株式）"
+    assert payload["sample"][0]["market_segment_raw"] == "プライム（内国株式）"
     assert output_path.is_file()
 
 
@@ -443,6 +446,8 @@ def test_jpx_listed_download_import_converts_legacy_xls(
     assert payload["converted_path"] == str(converted_path)
     assert payload["count"] == 1
     assert payload["prime_count"] == 1
+    assert payload["sample"][0]["market_segment"] == "プライム（国内株式）"
+    assert payload["sample"][0]["market_segment_raw"] == "プライム（内国株式）"
     assert output_path.is_file()
 
 

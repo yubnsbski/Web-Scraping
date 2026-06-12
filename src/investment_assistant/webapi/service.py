@@ -799,9 +799,16 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
     for row in universe:
         ticker = str(row.get("ticker") or "")
         meta = market_rows.get(ticker, {})
+        market_segment = (
+            meta.get("market_segment_label")
+            or meta.get("market_segment")
+            or "未取込"
+        )
         enriched_row = {
             **row,
-            "market_segment": meta.get("market_segment", "未取込"),
+            "market_segment": market_segment,
+            "market_segment_raw": meta.get("market_segment_raw", ""),
+            "market_segment_label": market_segment,
             "sector": meta.get("sector", ""),
             "is_prime": bool(meta.get("is_prime")),
             "is_nikkei225": bool(meta.get("is_nikkei225")),
