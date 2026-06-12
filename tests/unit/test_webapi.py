@@ -60,17 +60,24 @@ def test_edinet_ingest_route_is_registered_and_routed(monkeypatch) -> None:
 
 
 def test_edinet_status_reports_api_key_configuration(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_EDINET_API_KEY_RUNTIME_SET", False)
     monkeypatch.setenv("EDINET_API_KEY", "dummy-key")
 
     status, payload = handle_api("GET", "/api/edinet/status")
 
     assert status == 200
     assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "process_env"
     assert payload["default_financials_csv"] == "local_docs/edinet/financials.csv"
     assert payload["auto_trading"] is False
 
 
 def test_edinet_api_key_can_be_set_for_runtime_without_echo(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_EDINET_API_KEY_RUNTIME_SET", False)
     monkeypatch.delenv("EDINET_API_KEY", raising=False)
 
     status, payload = handle_api(
@@ -81,6 +88,7 @@ def test_edinet_api_key_can_be_set_for_runtime_without_echo(monkeypatch) -> None
 
     assert status == 200
     assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "runtime_input"
     assert payload["request_api_key_applied"] is True
     assert "runtime-secret" not in str(payload)
 
@@ -186,6 +194,9 @@ def test_edinet_status_reads_local_dotenv_without_exposing_key(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_EDINET_API_KEY_RUNTIME_SET", False)
     monkeypatch.delenv("EDINET_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text("EDINET_API_KEY=from-dotenv\n", encoding="utf-8")
@@ -194,6 +205,7 @@ def test_edinet_status_reads_local_dotenv_without_exposing_key(
 
     assert status == 200
     assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "dotenv"
     assert "from-dotenv" not in str(payload)
 
 

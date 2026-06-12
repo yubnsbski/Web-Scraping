@@ -812,6 +812,32 @@ function Status(props: { loading: boolean; error: string | null }) {
   return null;
 }
 
+function edinetApiKeySourceLabel(value: unknown): string {
+  switch (String(value ?? "")) {
+    case "runtime_input":
+      return "画面入力";
+    case "dotenv":
+      return ".env";
+    case "process_env":
+      return "環境変数";
+    case "missing":
+      return "未設定";
+    default:
+      return "確認中";
+  }
+}
+
+function refreshModeLabel(value: unknown): string {
+  switch (String(value ?? "")) {
+    case "edinet_api":
+      return "財務CSV更新";
+    case "disclosure_scrape_only":
+      return "公式ページ取得のみ";
+    default:
+      return "更新結果";
+  }
+}
+
 function makeCandidatePresetId(): string {
   const cryptoValue = globalThis.crypto;
   if (typeof cryptoValue?.randomUUID === "function") return cryptoValue.randomUUID();
@@ -4145,7 +4171,7 @@ function ScrapeTab({
           }),
         );
       }
-      const result = await runJob("/api/edinet/ingest-async", {
+      const result = await runJob("/api/financials/refresh-async", {
         registry_path: edinetRegistry,
         days,
         years: years > 0 ? years : undefined,
@@ -4156,9 +4182,12 @@ function ScrapeTab({
       const csvPath = String(
         result.financials_csv ?? `${edinetOutputDir.replace(/[\\/]$/, "")}/financials.csv`,
       );
-      onFinancialsCsvPathChange(csvPath);
-      onFinancialsDataUpdated();
-      setManualFinancialsOutputPath(csvPath);
+      if (result.financials_updated !== false) {
+        onFinancialsCsvPathChange(csvPath);
+        onFinancialsDataUpdated();
+        setManualFinancialsOutputPath(csvPath);
+      }
+      await edinetStatusState.run(() => api<Json>("/api/edinet/status"));
       return result;
     });
 
@@ -4465,6 +4494,19 @@ function ScrapeTab({
         <p className="hint">
           取得後はこの画面の財務データパスを自動で更新します。以後の保有分析・候補抽出・詳細・レポートは同じデータを参照します。
         </p>
+        {edinetStatusState.data && (
+          <div className="callout">
+            <b>更新状態</b>
+            <p className="hint">
+              APIキー:{" "}
+              {edinetStatusState.data.api_key_configured ? "設定済み" : "未設定"} / 読み込み元:{" "}
+              {edinetApiKeySourceLabel(edinetStatusState.data.api_key_source)}
+            </p>
+            <p className="hint">
+              財務CSVの自動更新にはEDINET APIキーが必要です。未設定の場合は、EDINET/JPXの公式ページをRAG用に取得します。
+            </p>
+          </div>
+        )}
         <div className="form">
           <Field label="EDINET API KEY（一時入力・保存しない）">
             <input
@@ -4515,22 +4557,46 @@ function ScrapeTab({
           <button onClick={() => runEdinetIngest(31, 1)} disabled={edinetState.loading}>
             1年分をバックフィル
           </button>
+          <button
+            onClick={() => void edinetStatusState.run(() => api<Json>("/api/edinet/status"))}
+            disabled={edinetStatusState.loading}
+          >
+            キー状態を再確認
+          </button>
         </div>
         <Status loading={edinetStatusState.loading} error={edinetStatusState.error} />
         <Status loading={edinetState.loading} error={edinetState.error} />
         {edinetState.data && (
           <div className="callout">
-            財務データ:{" "}
-            <span className="mono">
-              {String(edinetState.data.financials_csv ?? financialsCsvPath)}
-            </span>
-            <br />
-            取得件数: {String(edinetState.data.ingested_count)} / 対象{" "}
-            {String(edinetState.data.targets_count)}社（スキャン日数{" "}
-            {Array.isArray(edinetState.data.scanned_dates)
-              ? edinetState.data.scanned_dates.length
-              : 0}
-            ）
+            <b>{refreshModeLabel(edinetState.data.mode)}</b>
+            <p className="hint">{String(edinetState.data.hint ?? "")}</p>
+            {edinetState.data.financials_updated === false ? (
+              <p>
+                財務CSV: <span className="mono">未更新</span> / 取得許可:{" "}
+                {String((edinetState.data.scrape as Json | undefined)?.allowed_sources_count ?? 0)}
+                件 / ブロック:{" "}
+                {String(
+                  Array.isArray((edinetState.data.scrape as Json | undefined)?.blocked_results)
+                    ? ((edinetState.data.scrape as Json).blocked_results as Json[]).length
+                    : 0,
+                )}
+                件
+              </p>
+            ) : (
+              <p>
+                財務データ:{" "}
+                <span className="mono">
+                  {String(edinetState.data.financials_csv ?? financialsCsvPath)}
+                </span>
+                <br />
+                取得件数: {String(edinetState.data.ingested_count)} / 対象{" "}
+                {String(edinetState.data.targets_count)}社（スキャン日数{" "}
+                {Array.isArray(edinetState.data.scanned_dates)
+                  ? edinetState.data.scanned_dates.length
+                  : 0}
+                ）
+              </p>
+            )}
             {Array.isArray(edinetState.data.results) && edinetState.data.results.length > 0 && (
               <ul className="source-list">
                 {edinetState.data.results.map((r: Json, i: number) => (

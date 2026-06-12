@@ -33,6 +33,7 @@ JsonDict = dict[str, Any]
 Handler = Callable[[JsonDict], JsonDict]
 _REAL_API_ENV = "INVESTMENT_ASSISTANT_WEB_REAL_API"
 _REAL_API_RUNTIME_ENABLED = False
+_EDINET_API_KEY_RUNTIME_SET = False
 
 
 class ApiError(Exception):
@@ -66,13 +67,22 @@ def _health(_: JsonDict) -> JsonDict:
 def _edinet_status(_: JsonDict) -> JsonDict:
     from investment_assistant.edinet.client import API_KEY_ENV_VAR
 
-    _ensure_env_from_dotenv(API_KEY_ENV_VAR)
+    env_configured_before_dotenv = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
+    dotenv_loaded = _ensure_env_from_dotenv(API_KEY_ENV_VAR)
+    configured = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
     return {
-        "api_key_configured": bool(os.getenv(API_KEY_ENV_VAR, "").strip()),
+        "api_key_configured": configured,
         "api_key_env_var": API_KEY_ENV_VAR,
+        "api_key_source": _edinet_api_key_source(
+            configured=configured,
+            env_configured_before_dotenv=env_configured_before_dotenv,
+            dotenv_loaded=dotenv_loaded,
+        ),
         "default_registry": "examples/source_registry_nikkei225_edinet.yaml",
         "default_output_dir": "local_docs/edinet",
         "default_financials_csv": DEFAULT_FINANCIALS_CSV,
+        "structured_refresh_requires_key": True,
+        "fallback_without_key": "official_disclosure_scrape_only",
         "auto_trading": False,
         "call_real_api": False,
     }
@@ -81,13 +91,17 @@ def _edinet_status(_: JsonDict) -> JsonDict:
 def _edinet_api_key_set(body: JsonDict) -> JsonDict:
     from investment_assistant.edinet.client import API_KEY_ENV_VAR
 
+    global _EDINET_API_KEY_RUNTIME_SET
+
     value = str(body.get("api_key") or "").strip()
     if value:
         os.environ[API_KEY_ENV_VAR] = value
+        _EDINET_API_KEY_RUNTIME_SET = True
     configured = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
     return {
         "api_key_configured": configured,
         "api_key_env_var": API_KEY_ENV_VAR,
+        "api_key_source": "runtime_input" if _EDINET_API_KEY_RUNTIME_SET else "missing",
         "request_api_key_applied": bool(value),
         "auto_trading": False,
         "call_real_api": False,
@@ -1711,6 +1725,23 @@ def _ensure_env_from_dotenv(key: str) -> bool:
         except OSError:
             continue
     return False
+
+
+def _edinet_api_key_source(
+    *,
+    configured: bool,
+    env_configured_before_dotenv: bool,
+    dotenv_loaded: bool,
+) -> str:
+    if not configured:
+        return "missing"
+    if _EDINET_API_KEY_RUNTIME_SET:
+        return "runtime_input"
+    if env_configured_before_dotenv:
+        return "process_env"
+    if dotenv_loaded:
+        return "dotenv"
+    return "unknown"
 
 
 def _require_str(body: JsonDict, key: str) -> str:
