@@ -152,15 +152,61 @@ def _rag_stats(body: JsonDict) -> JsonDict:
 
 
 def _rag_search(body: JsonDict) -> JsonDict:
+    from dataclasses import asdict
+    from typing import cast
+
+    from investment_assistant.rag.search import SearchResult, enhanced_search
+    from investment_assistant.rag.store import RagStore
+
     query = _require_str(body, "query")
-    results = cli.run_rag_search(
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+    limit = _as_int(body.get("limit"), 5)
+    hybrid = _as_bool(body.get("hybrid"), True)
+    alpha = _as_float(body.get("alpha"), 0.5)
+    enhanced = _as_bool(body.get("enhanced"), True)
+    if not enhanced:
+        results = cli.run_rag_search(
+            query=query,
+            db_path=db_path,
+            limit=limit,
+            hybrid=hybrid,
+            alpha=alpha,
+        )
+        return {
+            "query": query,
+            "queries": [query],
+            "results": results,
+            "diagnostics": {
+                "mode": "legacy_hybrid" if hybrid else "legacy_lexical",
+                "query_count": 1,
+                "candidate_count": len(results),
+                "limit": limit,
+                "hybrid_alpha": alpha if hybrid else None,
+                "operators": [],
+                "non_advisory_boundary": (
+                    "検索結果は根拠候補の提示のみ。"
+                    "売買判断や自動売買には使わない。"
+                ),
+            },
+        }
+    payload = enhanced_search(
+        RagStore(db_path),
         query=query,
-        db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
-        limit=_as_int(body.get("limit"), 5),
-        hybrid=bool(body.get("hybrid", False)),
-        alpha=_as_float(body.get("alpha"), 0.5),
+        limit=limit,
+        hybrid=hybrid,
+        alpha=alpha,
+        query_expansion=_as_bool(body.get("query_expansion"), True),
+        max_queries=_as_int(body.get("max_queries"), 4),
+        rrf_k=_as_int(body.get("rrf_k"), 60),
+        max_per_source=_as_int(body.get("max_per_source"), 3),
     )
-    return {"query": query, "results": results}
+    search_results = cast(list[SearchResult], payload["results"])
+    return {
+        **payload,
+        "results": [asdict(result) for result in search_results],
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _rag_answer_context(body: JsonDict) -> JsonDict:
@@ -462,6 +508,12 @@ def _edinet_ingest(body: JsonDict) -> JsonDict:
         index_after=_as_bool(body.get("index_after_fetch"), True),
         max_periods=max_periods if max_periods and max_periods > 0 else None,
     )
+
+
+def _operators_catalog(_: JsonDict) -> JsonDict:
+    from investment_assistant.investment.operators import operator_catalog
+
+    return operator_catalog()
 
 
 def _edinet_ingest_async(body: JsonDict) -> JsonDict:
@@ -1732,6 +1784,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/rag/search"): _rag_search,
     ("POST", "/api/rag/answer-context"): _rag_answer_context,
     ("POST", "/api/rag/answer"): _rag_answer,
+    ("GET", "/api/operators/catalog"): _operators_catalog,
+    ("POST", "/api/operators/catalog"): _operators_catalog,
     ("POST", "/api/orchestrate"): _orchestrate,
     ("POST", "/api/rag/index-dir"): _rag_index_dir,
     ("POST", "/api/manual-doc/save"): _manual_doc_save,

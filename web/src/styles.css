@@ -1401,6 +1401,75 @@ textarea { min-height: 140px; }
 }
 .source-list .cite-link, .source-list .mono { display: inline-block; margin-bottom: 4px; }
 
+.operator-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.operator-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.operator-card h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.operator-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.operator-card code {
+  white-space: normal;
+  word-break: break-word;
+  color: var(--accent);
+}
+
+.operator-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operator-card li {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operator-card li b {
+  color: var(--text);
+}
+
+.operator-weights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.operator-weights span {
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* --- Dividend simulator --------------------------------------------- */
 .chart-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }
 .chart-legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }

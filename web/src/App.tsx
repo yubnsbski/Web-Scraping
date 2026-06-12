@@ -1450,26 +1450,102 @@ function ResultText({ text, limit = 220 }: { text: unknown; limit?: number }) {
   );
 }
 
-function SearchTab() {
-  const [query, setQuery] = useState("配当 方針 DOE 配当性向");
+function OperatorCatalog({ data }: { data?: Json | null }) {
+  const groups: Json[] = Array.isArray(data?.groups) ? data.groups : [];
+  if (!groups.length) return null;
+  return (
+    <div className="subpanel operator-catalog">
+      <div className="section-head">
+        <div>
+          <h3>演算子カタログ</h3>
+          <p className="hint">
+            数値計算、候補抽出、RAG検索がどの式で動くかをレビューできるように固定表示します。
+          </p>
+        </div>
+        <span className="badge">非助言 / 自動売買なし</span>
+      </div>
+      <div className="operator-grid">
+        {groups.map((group) => {
+          const operators: Json[] = Array.isArray(group.operators) ? group.operators : [];
+          const weights: Json[] = Array.isArray(group.weights) ? group.weights : [];
+          return (
+            <article className="operator-card" key={String(group.key)}>
+              <h4>{String(group.label ?? group.key)}</h4>
+              <p>{String(group.purpose ?? "")}</p>
+              {group.formula && <code>{String(group.formula)}</code>}
+              {weights.length > 0 && (
+                <div className="operator-weights">
+                  {weights.map((weight) => (
+                    <span key={String(weight.key)}>
+                      {String(weight.label ?? weight.key)} {Number(weight.weight ?? 0).toFixed(2)}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <ul>
+                {operators.slice(0, 5).map((operator) => (
+                  <li key={String(operator.key)}>
+                    <b>{String(operator.label ?? operator.key)}</b>
+                    <span>{String(operator.formula ?? "")}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          );
+        })}
+      </div>
+      <p className="hint">{String(data?.non_advisory_boundary ?? "")}</p>
+    </div>
+  );
+}
+
+function SearchTabEnhanced() {
+  const [query, setQuery] = useState("配当方針 DOE 配当性向");
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
   const [limit, setLimit] = useState(5);
   const [hybrid, setHybrid] = useState(true);
+  const [enhanced, setEnhanced] = useState(true);
+  const [queryExpansion, setQueryExpansion] = useState(true);
+  const [maxPerSource, setMaxPerSource] = useState(3);
   const [alpha, setAlpha] = useState(0.5);
   const { loading, error, data, run } = useAsync<Json>();
+  const operators = useAsync<Json>();
 
   const search = () =>
-    run(() => api<Json>("/api/rag/search", { query, db_path: dbPath, limit, hybrid, alpha }));
+    run(() =>
+      api<Json>("/api/rag/search", {
+        query,
+        db_path: dbPath,
+        limit,
+        hybrid,
+        alpha,
+        enhanced,
+        query_expansion: queryExpansion,
+        max_per_source: maxPerSource,
+      }),
+    );
+
+  useEffect(() => {
+    operators.run(() => api<Json>("/api/operators/catalog"));
+  }, []);
 
   const results: Json[] = data?.results ?? [];
+  const queries: string[] = Array.isArray(data?.queries) ? data.queries.map(String) : [];
+  const diagnostics = data?.diagnostics ?? null;
+  const diagnosticOperators: Json[] = Array.isArray(diagnostics?.operators)
+    ? diagnostics.operators
+    : [];
   return (
     <section className="tool-section">
       <div className="section-head">
         <div>
           <p className="eyebrow">Evidence</p>
-          <h2>根拠検索</h2>
+          <h2>根拠検索と演算子の可視化</h2>
+          <p className="hint">
+            RAGは根拠候補の検索だけを担当します。数値計算と候補抽出は決定論エンジンで処理します。
+          </p>
         </div>
-        <span className="badge">出典 / 引用</span>
+        <span className="badge">出典 / 計算式 / 免責</span>
       </div>
 
       <div className="form">
@@ -1482,22 +1558,44 @@ function SearchTab() {
         <Field label="件数">
           <input
             type="number"
+            min={1}
             value={limit}
             onChange={(e) => setLimit(Number(e.target.value))}
+          />
+        </Field>
+        <Field label="拡張検索">
+          <input type="checkbox" checked={enhanced} onChange={(e) => setEnhanced(e.target.checked)} />
+        </Field>
+        <Field label="クエリ分解">
+          <input
+            type="checkbox"
+            checked={queryExpansion}
+            onChange={(e) => setQueryExpansion(e.target.checked)}
+            disabled={!enhanced}
           />
         </Field>
         <Field label="ハイブリッド">
           <input type="checkbox" checked={hybrid} onChange={(e) => setHybrid(e.target.checked)} />
         </Field>
-        <Field label={`alpha(意味重み)=${alpha}`}>
+        <Field label={`alpha(意味検索の重み)=${alpha}`}>
           <input
             type="range"
             min={0}
-            max={5}
+            max={1}
             step={0.1}
             value={alpha}
             onChange={(e) => setAlpha(Number(e.target.value))}
             disabled={!hybrid}
+          />
+        </Field>
+        <Field label="出典ごとの上限">
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={maxPerSource}
+            onChange={(e) => setMaxPerSource(Number(e.target.value))}
+            disabled={!enhanced}
           />
         </Field>
         <button className="primary" onClick={search} disabled={loading}>
@@ -1505,6 +1603,47 @@ function SearchTab() {
         </button>
       </div>
       <Status loading={loading} error={error} />
+      {diagnostics && (
+        <div className="subpanel rag-diagnostics">
+          <div className="section-head">
+            <div>
+              <h3>検索診断</h3>
+              <p className="hint">
+                mode: <span className="mono">{String(diagnostics.mode ?? "")}</span> / candidates:{" "}
+                <span className="mono">{String(diagnostics.candidate_count ?? 0)}</span>
+              </p>
+            </div>
+            <span className="badge">RRF k={String(diagnostics.rrf_k ?? "-")}</span>
+          </div>
+          {queries.length > 0 && (
+            <div className="chips">
+              {queries.map((item) => (
+                <span className="badge" key={item}>{item}</span>
+              ))}
+            </div>
+          )}
+          {diagnosticOperators.length > 0 && (
+            <table className="grid compact-grid">
+              <thead>
+                <tr>
+                  <th>演算子</th>
+                  <th>式</th>
+                  <th>目的</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diagnosticOperators.map((operator) => (
+                  <tr key={String(operator.key)}>
+                    <td>{String(operator.label ?? operator.key)}</td>
+                    <td className="mono">{String(operator.formula ?? "")}</td>
+                    <td>{String(operator.purpose ?? "")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
       {results.length > 0 && (
         <table className="grid">
           <thead>
@@ -1527,8 +1666,14 @@ function SearchTab() {
           </tbody>
         </table>
       )}
+      <Status loading={operators.loading} error={operators.error} />
+      <OperatorCatalog data={operators.data} />
     </section>
   );
+}
+
+function SearchTab() {
+  return <SearchTabEnhanced />;
 }
 
 // --- Investment-only MVP --------------------------------------------------

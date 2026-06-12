@@ -296,6 +296,22 @@ def test_rag_search_endpoint(tmp_path) -> None:
     assert "投資判断" in payload["results"][0]["text"]
 
 
+    assert payload["diagnostics"]["mode"] == "enhanced_hybrid"
+    assert payload["queries"]
+    assert payload["auto_trading"] is False
+
+
+def test_operator_catalog_endpoint_exposes_formulas() -> None:
+    status, payload = handle_api("GET", "/api/operators/catalog")
+
+    assert status == 200
+    assert payload["auto_trading"] is False
+    groups = {group["key"]: group for group in payload["groups"]}
+    assert "rag_search" in groups
+    assert "fund_scoring" in groups
+    assert groups["fund_scoring"]["formula"] == "sum(weight * normalized_score)"
+
+
 def test_rag_search_requires_query() -> None:
     status, payload = handle_api("POST", "/api/rag/search", {})
     assert status == 400
@@ -482,6 +498,7 @@ def test_available_routes_lists_endpoints() -> None:
     assert "GET /api/health" in routes
     assert "POST /api/rag/search" in routes
     assert "POST /api/rag/stats" in routes
+    assert "GET /api/operators/catalog" in routes
     assert "POST /api/manual-doc/save" in routes
     assert "POST /api/fetch-job/auto" in routes
     assert "POST /api/fetch-job/dry-run" in routes
