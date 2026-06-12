@@ -137,6 +137,30 @@ def test_nikkei225_generator_has_no_duplicate_tickers() -> None:
     assert len(tickers) == len(set(tickers))
 
 
+def test_dividend_edinet_run_set_is_valid() -> None:
+    # The turnkey dividend run set must keep parsing into usable targets.
+    example = _REPO_ROOT / "examples" / "source_registry_dividend_edinet.yaml"
+    targets = {t.ticker: t for t in build_edinet_targets_from_registry(example)}
+    assert len(targets) == 12
+    assert {"8306", "9432", "2914", "8058", "7203"} <= set(targets)
+    assert targets["8306"].doc_types == ("120", "140")
+
+
+def test_dividend_ir_run_set_is_valid() -> None:
+    from investment_assistant.crawler.registry import build_crawl_targets_from_registry
+
+    example = _REPO_ROOT / "examples" / "source_registry_dividend_ir.yaml"
+    targets = build_crawl_targets_from_registry(example)
+    assert len(targets) == 6
+    for source in targets:
+        url = str(source["url"])
+        # Each crawl is locked to its own domain + a same-origin prefix.
+        assert str(source["url_prefix"]).startswith("https://")
+        assert str(source["allowed_domains"]) in url
+        assert url.startswith(str(source["url_prefix"]))
+
+
+
 
 def test_registry_accepts_doc_type_codes_alias(tmp_path):
     path = tmp_path / "registry.yaml"

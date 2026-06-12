@@ -1,0 +1,124 @@
+# Dividend-focused EDINET run set (official filings → financials.csv).
+#
+# A curated set of well-known, liquid Japanese dividend payers. EDINET resolves
+# each entry by its securities code, so only ticker / company / provider are
+# needed — no URLs to verify. Numbers (営業CF / 自己資本比率 / １株配当 / 配当性向)
+# come from official 有価証券報告書 (doc_type 120) and 四半期報告書 (140), which is
+# what the dividend simulator's financials.csv consumes.
+#
+# Run (needs a free EDINET v2 Subscription-Key):
+#   export EDINET_API_KEY=...        # https://api.edinet-fsa.go.jp (Subscription-Key)
+#   investment-assistant edinet-ingest \
+#     --registry examples/source_registry_dividend_edinet.yaml \
+#     --years 3 --output-dir local_docs/edinet
+#
+# Output: local_docs/edinet/financials.csv (+ per-filing RAG text), auto-indexed
+# into the RAG store unless --no-index is passed.
+sources:
+  - name: "8306_MUFG_edinet"
+    ticker: "8306"
+    company: "三菱UFJフィナンシャル・グループ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "8316_SMFG_edinet"
+    ticker: "8316"
+    company: "三井住友フィナンシャルグループ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "8411_Mizuho_edinet"
+    ticker: "8411"
+    company: "みずほフィナンシャルグループ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "9432_NTT_edinet"
+    ticker: "9432"
+    company: "日本電信電話"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "9433_KDDI_edinet"
+    ticker: "9433"
+    company: "ＫＤＤＩ"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "8058_Mitsubishi_edinet"
+    ticker: "8058"
+    company: "三菱商事"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "8001_Itochu_edinet"
+    ticker: "8001"
+    company: "伊藤忠商事"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "2914_JT_edinet"
+    ticker: "2914"
+    company: "日本たばこ産業"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "7203_Toyota_edinet"
+    ticker: "7203"
+    company: "トヨタ自動車"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "5108_Bridgestone_edinet"
+    ticker: "5108"
+    company: "ブリヂストン"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "4502_Takeda_edinet"
+    ticker: "4502"
+    company: "武田薬品工業"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"
+
+  - name: "9434_SoftBank_edinet"
+    ticker: "9434"
+    company: "ソフトバンク"
+    source_type: "public_api"
+    provider: "edinet"
+    method: "api"
+    allowed: true
+    doc_types: "120 140"

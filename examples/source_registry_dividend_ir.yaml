@@ -1,0 +1,93 @@
+# Dividend-focused IR crawl run set (qualitative text → RAG store).
+#
+# Companion to source_registry_dividend_edinet.yaml: EDINET gives the numbers,
+# these IR crawls give the words (配当方針 / 株主還元 / 中期経営計画). The crawler is
+# locked to allowed_domains + url_prefix, follows robots.txt, and stops at
+# max_depth / max_pages — so a stale URL is harmless (it simply yields no pages).
+#
+# IMPORTANT: verify each `url` / `url_prefix` against the company's current IR
+# site before a live run; corporate IR paths change over time.
+#
+# Run:
+#   investment-assistant crawl \
+#     --path examples/source_registry_dividend_ir.yaml \
+#     --output-dir local_docs/crawl
+#   # (auto-indexes into the RAG store unless --no-index)
+sources:
+  - name: "8306_MUFG_ir_crawl"
+    ticker: "8306"
+    company: "三菱UFJフィナンシャル・グループ"
+    source_type: "issuer_ir"
+    method: "crawl"
+    allowed: true
+    url: "https://www.mufg.jp/ir/"
+    allowed_domains: "www.mufg.jp"
+    url_prefix: "https://www.mufg.jp/ir/"
+    crawl_mode: "targeted"
+    max_depth: 2
+    max_pages: 20
+
+  - name: "9432_NTT_ir_crawl"
+    ticker: "9432"
+    company: "日本電信電話"
+    source_type: "issuer_ir"
+    method: "crawl"
+    allowed: true
+    url: "https://group.ntt/jp/ir/"
+    allowed_domains: "group.ntt"
+    url_prefix: "https://group.ntt/jp/ir/"
+    crawl_mode: "targeted"
+    max_depth: 2
+    max_pages: 20
+
+  - name: "9433_KDDI_ir_crawl"
+    ticker: "9433"
+    company: "ＫＤＤＩ"
+    source_type: "issuer_ir"
+    method: "crawl"
+    allowed: true
+    url: "https://www.kddi.com/corporate/ir/"
+    allowed_domains: "www.kddi.com"
+    url_prefix: "https://www.kddi.com/corporate/ir/"
+    crawl_mode: "targeted"
+    max_depth: 2
+    max_pages: 20
+
+  - name: "7203_Toyota_ir_crawl"
+    ticker: "7203"
+    company: "トヨタ自動車"
+    source_type: "issuer_ir"
+    method: "crawl"
+    allowed: true
+    url: "https://global.toyota/jp/ir/"
+    allowed_domains: "global.toyota"
+    url_prefix: "https://global.toyota/jp/ir/"
+    crawl_mode: "targeted"
+    max_depth: 2
+    max_pages: 20
+
+  - name: "8058_Mitsubishi_ir_crawl"
+    ticker: "8058"
+    company: "三菱商事"
+    source_type: "issuer_ir"
+    method: "crawl"
+    allowed: true
+    url: "https://www.mitsubishicorp.com/jp/ja/ir/"
+    allowed_domains: "www.mitsubishicorp.com"
+    url_prefix: "https://www.mitsubishicorp.com/jp/ja/ir/"
+    crawl_mode: "targeted"
+    max_depth: 2
+    max_pages: 20
+
+  - name: "8316_SMFG_ir_crawl"
+    ticker: "8316"
+    company: "三井住友フィナンシャルグループ"
+    source_type: "issuer_ir"
+    method: "crawl"
+    allowed: true
+    url: "https://www.smfg.co.jp/investor/"
+    allowed_domains: "www.smfg.co.jp"
+    url_prefix: "https://www.smfg.co.jp/investor/"
+    crawl_mode: "targeted"
+    max_depth: 2
+    max_pages: 20
