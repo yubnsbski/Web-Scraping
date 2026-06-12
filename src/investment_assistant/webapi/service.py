@@ -484,6 +484,100 @@ def _fetch_job_auto(body: JsonDict) -> JsonDict:
     }
 
 
+def _financials_refresh(body: JsonDict) -> JsonDict:
+    """Refresh financial data through the safest available official path.
+
+    Structured financial metrics come from EDINET API CSV/XBRL, because the
+    report and screening engine need deterministic, auditable values. When the
+    EDINET API key is not configured, we still run the official disclosure-page
+    scraping path for RAG grounding, but we intentionally do not claim that the
+    structured ``financials.csv`` was updated.
+    """
+
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    _ensure_env_from_dotenv(API_KEY_ENV_VAR)
+    registry_path = str(
+        body.get("registry_path") or "examples/source_registry_nikkei225_edinet.yaml"
+    )
+    output_dir = str(body.get("output_dir") or "local_docs/edinet")
+    financials_csv = str(Path(output_dir) / "financials.csv")
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+    index_after_fetch = _as_bool(body.get("index_after_fetch"), True)
+
+    if os.getenv(API_KEY_ENV_VAR, "").strip():
+        result = _edinet_ingest(
+            {
+                **body,
+                "registry_path": registry_path,
+                "output_dir": output_dir,
+                "db_path": db_path,
+                "index_after_fetch": index_after_fetch,
+            }
+        )
+        result["mode"] = "edinet_api"
+        result["api_key_configured"] = True
+        result["financials_updated"] = bool(result.get("financials_csv"))
+        result["financials_csv"] = str(result.get("financials_csv") or financials_csv)
+        result["official_sources"] = [
+            {
+                "label": "EDINET API v2",
+                "url": "https://disclosure2.edinet-fsa.go.jp/",
+                "purpose": "有価証券報告書等の公式CSV/XBRL取得",
+            }
+        ]
+        result["hint"] = (
+            "EDINET公式APIのCSV/XBRLから財務データを更新しました。"
+            "候補抽出、詳細、レポートはこのCSVを参照します。"
+        )
+        return result
+
+    scrape_result = _fetch_job_auto(
+        {
+            "sources": _default_disclosure_sources(),
+            "db_path": db_path,
+            "index_path": "local_docs",
+            "index_after_fetch": index_after_fetch,
+        }
+    )
+    return {
+        "mode": "disclosure_scrape_only",
+        "api_key_configured": False,
+        "financials_updated": False,
+        "financials_csv": financials_csv,
+        "scrape": scrape_result,
+        "official_sources": [
+            {
+                "label": "EDINET 閲覧サイト",
+                "url": "https://disclosure2.edinet-fsa.go.jp/",
+                "purpose": "開示ページの確認とRAG根拠取得",
+            },
+            {
+                "label": "TDnet",
+                "url": "https://www.release.tdnet.info/inbs/I_main_00.html",
+                "purpose": "適時開示ページの確認とRAG根拠取得",
+            },
+            {
+                "label": "JPX 東証上場銘柄一覧",
+                "url": "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html",
+                "purpose": "市場区分と銘柄名の確認",
+            },
+        ],
+        "hint": (
+            "EDINET API KEYがバックエンドに未設定のため、構造化された財務CSVは更新していません。"
+            "公式ページの取得とRAG登録だけを実行しました。"
+            "財務数値の更新はAPI KEY設定後に再実行してください。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_refresh_async(body: JsonDict) -> JsonDict:
+    job_id = JOBS.start("financials-refresh", lambda: _financials_refresh(body))
+    return {"job_id": job_id, "status": "running", "kind": "financials-refresh"}
+
+
 
 def _edinet_ingest(body: JsonDict) -> JsonDict:
     from investment_assistant.edinet.client import API_KEY_ENV_VAR
@@ -1636,6 +1730,38 @@ def _require_sources(body: JsonDict) -> list[Any]:
     return sources
 
 
+def _default_disclosure_sources() -> list[JsonDict]:
+    return [
+        {
+            "name": "edinet_portal",
+            "url": "https://disclosure2.edinet-fsa.go.jp/",
+            "output_path": "local_docs/disclosure/edinet_portal.txt",
+            "query_hint": "EDINET 有価証券報告書 半期報告書 四半期報告書 財務諸表",
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": 500,
+        },
+        {
+            "name": "tdnet_portal",
+            "url": "https://www.release.tdnet.info/inbs/I_main_00.html",
+            "output_path": "local_docs/disclosure/tdnet_portal.txt",
+            "query_hint": "TDnet 適時開示 決算短信 配当 予想 修正",
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": 500,
+        },
+        {
+            "name": "jpx_listed_issues",
+            "url": "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html",
+            "output_path": "local_docs/disclosure/jpx_listed_issues.txt",
+            "query_hint": "JPX 東証上場銘柄一覧 プライム スタンダード グロース",
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": 500,
+        },
+    ]
+
+
 def _run_fetch_job_sources(sources: list[Any], *, dry_run: bool) -> JsonDict:
     yaml_text = _sources_to_yaml(sources)
     with tempfile.NamedTemporaryFile(
@@ -1825,6 +1951,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/financials/status"): _financials_status,
     ("POST", "/api/financials/status"): _financials_status,
     ("POST", "/api/financials/import"): _financials_import,
+    ("POST", "/api/financials/refresh"): _financials_refresh,
+    ("POST", "/api/financials/refresh-async"): _financials_refresh_async,
     ("POST", "/api/financials/securities"): _financials_securities,
     ("POST", "/api/cache/maintenance"): _cache_maintenance,
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),

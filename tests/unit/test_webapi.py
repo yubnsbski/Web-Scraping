@@ -85,6 +85,103 @@ def test_edinet_api_key_can_be_set_for_runtime_without_echo(monkeypatch) -> None
     assert "runtime-secret" not in str(payload)
 
 
+def test_financials_refresh_with_edinet_key_updates_structured_csv(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setenv("EDINET_API_KEY", "dummy-key")
+    captured: dict[str, object] = {}
+
+    def fake_ingest(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "ingested_count": 1,
+            "targets_count": 225,
+            "financials_csv": str(tmp_path / "edinet" / "financials.csv"),
+            "results": [],
+        }
+
+    monkeypatch.setattr(service.cli, "run_edinet_ingest", fake_ingest)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/refresh",
+        {
+            "registry_path": "examples/source_registry_nikkei225_edinet.yaml",
+            "output_dir": str(tmp_path / "edinet"),
+            "days": 7,
+            "db_path": str(tmp_path / "rag.sqlite"),
+        },
+    )
+
+    assert status == 200
+    assert payload["mode"] == "edinet_api"
+    assert payload["api_key_configured"] is True
+    assert payload["financials_updated"] is True
+    assert payload["financials_csv"] == str(tmp_path / "edinet" / "financials.csv")
+    assert captured["days"] == 7
+    assert "dummy-key" not in str(payload)
+
+
+def test_financials_refresh_without_key_scrapes_only_official_pages(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    calls: list[bool] = []
+
+    def fake_run_fetch_job(*, path, dry_run: bool, preview_chars: int = 500):
+        _ = path, preview_chars
+        calls.append(dry_run)
+        return {
+            "results": [
+                {
+                    "name": "edinet_portal",
+                    "url": "https://disclosure2.edinet-fsa.go.jp/",
+                    "output_path": "local_docs/disclosure/edinet_portal.txt",
+                    "fetch": {
+                        "allowed_by_robots": True,
+                        "source": "dry_run" if dry_run else "network",
+                        "saved_path": None
+                        if dry_run
+                        else "local_docs/disclosure/edinet_portal.txt",
+                    },
+                }
+            ]
+        }
+
+    def fake_index_dir(*, path, db_path):
+        assert path == "local_docs"
+        assert db_path == str(tmp_path / "rag.sqlite")
+        return {"files_indexed": 1, "chunks_indexed": 2}
+
+    monkeypatch.setattr(service.cli, "run_fetch_job", fake_run_fetch_job)
+    monkeypatch.setattr(service.cli, "run_rag_index_dir", fake_index_dir)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/refresh",
+        {
+            "output_dir": str(tmp_path / "edinet"),
+            "db_path": str(tmp_path / "rag.sqlite"),
+        },
+    )
+
+    assert status == 200
+    assert calls == [True, False]
+    assert payload["mode"] == "disclosure_scrape_only"
+    assert payload["api_key_configured"] is False
+    assert payload["financials_updated"] is False
+    assert payload["financials_csv"] == str(tmp_path / "edinet" / "financials.csv")
+    assert payload["scrape"]["allowed_sources_count"] == 1
+    assert "EDINET API KEY" in payload["hint"]
+
+
 def test_edinet_status_reads_local_dotenv_without_exposing_key(
     tmp_path: Path,
     monkeypatch,
@@ -264,6 +361,8 @@ def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> No
     assert rows["8306"]["is_prime"] is True
     assert rows["8306"]["is_nikkei225"] is True
     assert rows["8306"]["has_financials"] is True
+    assert rows["8306"]["market_segment"] == "プライム（内国株式）"
+    assert rows["8306"]["market_segment_label"] == "プライム（国内株式）"
     assert universe["auto_trading"] is False
     assert universe["call_real_api"] is False
 
@@ -502,6 +601,8 @@ def test_available_routes_lists_endpoints() -> None:
     assert "POST /api/manual-doc/save" in routes
     assert "POST /api/fetch-job/auto" in routes
     assert "POST /api/fetch-job/dry-run" in routes
+    assert "POST /api/financials/refresh" in routes
+    assert "POST /api/financials/refresh-async" in routes
 
 
 def test_sources_to_yaml_roundtrips_with_loader(tmp_path) -> None:

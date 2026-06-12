@@ -155,10 +155,10 @@ export function DashboardTab() {
     <section className="tool-section">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Dashboard</p>
+          <p className="eyebrow">概要</p>
           <h2>運用実績</h2>
         </div>
-        <span className="badge">Portfolio CSV</span>
+        <span className="badge">CSV集計</span>
       </div>
 
       <p className="hint">

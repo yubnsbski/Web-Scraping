@@ -255,6 +255,15 @@ def is_prime_segment(value: object) -> bool:
     return "プライム" in text or "prime" in text
 
 
+def display_market_segment(value: object) -> str:
+    """Return a user-facing market segment label without mutating source data."""
+
+    text = str(value or "").strip()
+    if not text:
+        return "未取込"
+    return text.replace("内国株式", "国内株式")
+
+
 def _detect_delimiter(text: str) -> str:
     first = text.splitlines()[0] if text.splitlines() else ""
     if "\t" in first:
@@ -319,6 +328,7 @@ def _universe_row(
         "code": code,
         "name": name,
         "market_segment": market_segment or "未取込",
+        "market_segment_label": display_market_segment(market_segment),
         "sector": listed_issue.sector if listed_issue else "",
         "is_prime": listed_issue.is_prime if listed_issue else False,
         "is_nikkei225": code in nikkei,
