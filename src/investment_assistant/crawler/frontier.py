@@ -20,9 +20,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from investment_assistant.crawler.extract import (
+    ScoredLink,
     assess_page,
     extract_body_text,
     extract_links,
+    link_kind,
     rank_links,
 )
 from investment_assistant.crawler.policy import CrawlPolicy
@@ -61,6 +63,7 @@ class CrawlReport:
     start_url: str
     fetched: int = 0
     target_pages: list[CrawledPage] = field(default_factory=list)
+    documents: list[dict[str, object]] = field(default_factory=list)
     skipped: list[dict[str, object]] = field(default_factory=list)
     stop_reason: str | None = None
 
@@ -78,6 +81,7 @@ class CrawlReport:
                 }
                 for page in self.target_pages
             ],
+            "documents": self.documents,
             "skipped": self.skipped,
             "stop_reason": self.stop_reason,
         }
@@ -142,6 +146,7 @@ def crawl(
             depth=depth,
             queue=queue,
             enqueued=enqueued,
+            report=report,
             max_links_per_page=max_links_per_page,
             min_link_score=min_link_score,
         )
@@ -158,6 +163,7 @@ def _enqueue_promising_links(
     depth: int,
     queue: deque[tuple[str, int]],
     enqueued: set[str],
+    report: CrawlReport,
     max_links_per_page: int,
     min_link_score: float,
 ) -> None:
@@ -167,9 +173,25 @@ def _enqueue_promising_links(
             break
         if scored.score <= min_link_score:
             break  # ranked desc, so nothing below is promising either
+        kind = link_kind(scored.url)
+        if kind == "asset":
+            continue  # never descend into css/js/images/fonts
+        if kind == "document":
+            _record_document(report, scored)
+            continue  # PDFs etc. are terminal — surfaced, not crawled as HTML
         decision = policy.evaluate_url(scored.url, depth=depth + 1)
         if not decision.allowed or decision.url in enqueued:
             continue
         enqueued.add(decision.url)
         queue.append((decision.url, depth + 1))
         added += 1
+
+
+def _record_document(report: CrawlReport, scored: ScoredLink) -> None:
+    """Record a promising non-HTML document link once (dedup by URL)."""
+
+    if any(doc.get("url") == scored.url for doc in report.documents):
+        return
+    report.documents.append(
+        {"url": scored.url, "anchor_text": scored.anchor_text, "score": scored.score}
+    )

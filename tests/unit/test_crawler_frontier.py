@@ -101,3 +101,33 @@ def test_crawl_records_blocked_fetch() -> None:
     report = crawl(_policy(), start_url="https://www.mufg.jp/ir/", fetch=fetch)  # type: ignore[arg-type]
     assert report.target_pages == []
     assert report.skipped and report.skipped[0]["reason"] == "fetch_blocked_or_empty"
+
+
+def test_crawl_surfaces_pdf_documents_and_skips_assets() -> None:
+    # The TOC links to a dividend HTML page, a PDF 決算短信 (document), and a CSS
+    # asset. Only the HTML page is fetched; the PDF is surfaced; the CSS dropped.
+    pages = {
+        "https://www.mufg.jp/ir/": (
+            '<a href="/ir/dividend/">配当方針</a>'
+            '<a href="/ir/kessan_tanshin.pdf">2024年3月期 決算短信</a>'
+            '<a href="/ir/style.css">配当 stylesheet</a>'
+        ),
+        "https://www.mufg.jp/ir/dividend/": _DIVIDEND_HTML,
+    }
+    fetched: list[str] = []
+
+    def fetch(url: str) -> FetchedPage:
+        fetched.append(url)
+        return FetchedPage(url=url, allowed=True, html=pages.get(url, ""))
+
+    report = crawl(_policy(), start_url="https://www.mufg.jp/ir/", fetch=fetch)  # type: ignore[arg-type]
+
+    # The CSS asset and the PDF are never fetched as HTML pages.
+    assert "https://www.mufg.jp/ir/style.css" not in fetched
+    assert "https://www.mufg.jp/ir/kessan_tanshin.pdf" not in fetched
+    # The PDF is surfaced as a discovered document instead.
+    doc_urls = [d["url"] for d in report.documents]
+    assert "https://www.mufg.jp/ir/kessan_tanshin.pdf" in doc_urls
+    assert report.documents[0]["anchor_text"] == "2024年3月期 決算短信"
+    # The HTML dividend page is still crawled and kept.
+    assert any(p.url == "https://www.mufg.jp/ir/dividend/" for p in report.target_pages)

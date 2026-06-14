@@ -3,9 +3,21 @@ from __future__ import annotations
 from investment_assistant.crawler.extract import (
     assess_page,
     extract_links,
+    link_kind,
     rank_links,
     score_link,
 )
+
+
+def test_link_kind_classifies_pages_documents_and_assets() -> None:
+    assert link_kind("https://www.mufg.jp/ir/dividend/") == "page"
+    assert link_kind("https://www.mufg.jp/ir/index.html") == "page"
+    assert link_kind("https://www.mufg.jp/ir/kessan_tanshin.PDF") == "document"
+    assert link_kind("https://www.mufg.jp/ir/data.xlsx") == "document"
+    assert link_kind("https://www.mufg.jp/assets/app.js") == "asset"
+    assert link_kind("https://www.mufg.jp/img/logo.png") == "asset"
+    # A query string after a page path does not flip the classification.
+    assert link_kind("https://www.mufg.jp/ir/list?year=2024") == "page"
 
 _IR_TOC_HTML = """
 <!doctype html>
