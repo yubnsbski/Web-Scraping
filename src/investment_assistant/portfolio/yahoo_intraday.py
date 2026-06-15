@@ -20,8 +20,8 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 
-from investment_assistant.ingestion.fetcher import SafeFetcher
 from investment_assistant.observability import get_logger
+from investment_assistant.portfolio._market_common import default_fetch, render_csv
 
 _logger = get_logger("portfolio.yahoo_intraday")
 
@@ -116,10 +116,6 @@ def parse_yahoo_intraday(html: str) -> list[IntradayTick]:
     return ticks
 
 
-def _default_fetch(url: str) -> str:
-    return SafeFetcher().fetch_document(url).html
-
-
 def fetch_yahoo_intraday(
     tickers: Iterable[str],
     *,
@@ -130,7 +126,7 @@ def fetch_yahoo_intraday(
     A single failing ticker is recorded in ``notes`` and never aborts the batch.
     """
 
-    fetcher = fetch or _default_fetch
+    fetcher = fetch or default_fetch
     series: dict[str, list[dict[str, object]]] = {}
     counts: dict[str, int] = {}
     notes: dict[str, str] = {}
@@ -158,13 +154,7 @@ def fetch_yahoo_intraday(
     }
 
 
-def _csv_cell(value: object) -> str:
-    return "" if value is None else str(value)
-
-
 def intraday_csv_text(ticks: Iterable[dict[str, object]]) -> str:
     """Render intraday tick dicts as CSV text with a fixed header."""
 
-    lines = [",".join(_INTRADAY_FIELDS)]
-    lines.extend(",".join(_csv_cell(t.get(field)) for field in _INTRADAY_FIELDS) for t in ticks)
-    return "\n".join(lines) + "\n"
+    return render_csv(_INTRADAY_FIELDS, ticks)
