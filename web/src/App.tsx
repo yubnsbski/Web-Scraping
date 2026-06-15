@@ -4068,6 +4068,8 @@ function ScrapeTab({
   const [edinetYears, setEdinetYears] = useState(0);
   const [edinetOutputDir, setEdinetOutputDir] = useState("local_docs/edinet");
   const [edinetApiKeyInput, setEdinetApiKeyInput] = useState("");
+  const [jquantsApiKeyInput, setJquantsApiKeyInput] = useState("");
+  const [jquantsContractAcknowledged, setJquantsContractAcknowledged] = useState(false);
   const [allDomesticRegistryPath, setAllDomesticRegistryPath] = useState(
     "local_docs/edinet/source_registry_all_domestic_edinet.yaml",
   );
@@ -4089,6 +4091,7 @@ function ScrapeTab({
   const manualState = useAsync<Json>();
   const edinetState = useAsync<Json>();
   const edinetStatusState = useAsync<Json>();
+  const jquantsStatusState = useAsync<Json>();
   const financialsState = useAsync<Json>();
   const jpxListedState = useAsync<Json>();
   const jpxDownloadState = useAsync<Json>();
@@ -4101,6 +4104,7 @@ function ScrapeTab({
 
   useEffect(() => {
     void edinetStatusState.run(() => api<Json>("/api/edinet/status"));
+    void jquantsStatusState.run(() => api<Json>("/api/jquants/status"));
   }, []);
 
   function currentSource() {
@@ -4347,6 +4351,14 @@ function ScrapeTab({
       }),
     );
 
+  const applyJquantsApiKey = () =>
+    jquantsStatusState.run(() =>
+      api<Json>("/api/jquants/api-key", {
+        api_key: jquantsApiKeyInput.trim() || undefined,
+        contract_acknowledged: jquantsContractAcknowledged,
+      }),
+    );
+
   const saveManual = () =>
     manualState.run(() =>
       api<Json>("/api/manual-doc/save", {
@@ -4359,6 +4371,7 @@ function ScrapeTab({
 
   const dryResults: Json[] = sourceState.data?.dry_run?.results ?? [];
   const results: Json[] = sourceState.data?.run?.results ?? sourceState.data?.results ?? [];
+  const jquantsPolicy = jquantsStatusState.data?.provider_policy as Json | undefined;
   return (
     <section className="tool-section">
       <div className="section-head">
@@ -4618,6 +4631,92 @@ function ScrapeTab({
                 保存先: <span className="mono">{String(jpxListedState.data.saved_path)}</span>
               </>
             ) : null}
+          </div>
+        )}
+      </div>
+
+      <div className="edinet-ingest">
+        <div className="report-audit-head">
+          <div>
+            <h3>J-Quants（契約API）</h3>
+            <p className="hint">
+              取得済みのAPI KEY / Refresh Tokenを、この実行中のバックエンドへ一時反映します。
+              入力値は画面表示・Git・CSVには保存しません。
+            </p>
+          </div>
+          <span className={`badge ${jquantsStatusState.data?.api_key_configured ? "safe" : "warn"}`}>
+            KEY {jquantsStatusState.data?.api_key_configured ? "設定済み" : "未設定"}
+          </span>
+        </div>
+        <div className="callout">
+          <b>使い方</b>
+          <p className="hint">
+            契約・利用条件上この端末での利用が許可されている場合だけチェックしてください。
+            チェック後はprovider policy上のJ-Quantsが本番モードでも利用可能になります。
+          </p>
+        </div>
+        <div className="form">
+          <Field label="J-Quants API KEY / Refresh Token（一時入力・保存しない）">
+            <input
+              type="password"
+              value={jquantsApiKeyInput}
+              onChange={(e) => setJquantsApiKeyInput(e.target.value)}
+              placeholder="J-Quants API KEY / Refresh Token"
+              autoComplete="off"
+            />
+          </Field>
+          <label className="field check-field jquants-contract-field">
+            <span>契約・利用条件の確認</span>
+            <span className="check-row">
+              <input
+                type="checkbox"
+                checked={jquantsContractAcknowledged}
+                onChange={(e) => setJquantsContractAcknowledged(e.target.checked)}
+              />
+              <span>この端末での利用・商用利用・再配布範囲が契約上許可されている</span>
+            </span>
+          </label>
+          <button onClick={applyJquantsApiKey} disabled={jquantsStatusState.loading}>
+            J-Quants KEYを反映
+          </button>
+          <button
+            onClick={() => void jquantsStatusState.run(() => api<Json>("/api/jquants/status"))}
+            disabled={jquantsStatusState.loading}
+          >
+            状態確認
+          </button>
+        </div>
+        <Status loading={jquantsStatusState.loading} error={jquantsStatusState.error} />
+        {jquantsStatusState.data && (
+          <div className="callout">
+            KEY: {jquantsStatusState.data.api_key_configured ? "設定済み" : "未設定"} / 反映元:{" "}
+            {edinetApiKeySourceLabel(jquantsStatusState.data.api_key_source)} / 契約確認:{" "}
+            {jquantsStatusState.data.contract_acknowledged ? "済み" : "未確認"}
+            <br />
+            provider: <span className="mono">jquants</span> / production:{" "}
+            {jquantsStatusState.data.production_allowed ? "allowed" : "blocked"}
+            {jquantsPolicy?.license_note ? (
+              <>
+                <br />
+                {String(jquantsPolicy.license_note)}
+              </>
+            ) : null}
+          </div>
+        )}
+        {Array.isArray(jquantsStatusState.data?.capabilities) && (
+          <div className="operator-grid">
+            {(jquantsStatusState.data.capabilities as Json[]).map((item) => (
+              <article className="operator-card" key={String(item.key)}>
+                <div>
+                  <b>{String(item.label)}</b>
+                  <span className={`badge ${item.status === "implemented" ? "safe" : ""}`}>
+                    {item.status === "implemented" ? "接続済み" : "次に接続"}
+                  </span>
+                </div>
+                <p className="mono">{String(item.endpoint)}</p>
+                <small>{String(item.use)}</small>
+              </article>
+            ))}
           </div>
         )}
       </div>
@@ -5405,6 +5504,8 @@ function SimulateTab({
   const [universeMeta, setUniverseMeta] = useState<Json | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pick, setPick] = useState("");
+  const [priceProvider, setPriceProvider] = useState("jquants");
+  const [priceResult, setPriceResult] = useState<Json | null>(null);
   const [busy, setBusy] = useState(false);
   const { loading, error, data, run } = useAsync<Json>();
 
@@ -5466,19 +5567,26 @@ function SimulateTab({
     setHoldings(holdings.map((h, idx) => (idx === i ? { ...h, ...p } : h)));
   const removeAt = (i: number) => setHoldings(holdings.filter((_, idx) => idx !== i));
 
-  const fetchPrices = async (tickers: string[]): Promise<Record<string, number | null>> => {
-    const r = await api<Json>("/api/market/prices", { tickers });
-    return (r.prices ?? {}) as Record<string, number | null>;
+  const fetchPrices = async (tickers: string[]): Promise<Json> => {
+    return api<Json>("/api/market/prices", {
+      tickers,
+      provider_id: priceProvider,
+      runtime_mode: priceProvider === "jquants" ? "production" : "development",
+      lookback_days: 14,
+    });
   };
 
   const updatePrices = async () => {
     if (holdings.length === 0) return;
     setBusy(true);
+    setPriceResult(null);
     try {
-      const pm = await fetchPrices(holdings.map((h) => h.ticker));
+      const result = await fetchPrices(holdings.map((h) => h.ticker));
+      const pm = (result.prices ?? {}) as Record<string, number | null>;
       setHoldings((hs) => hs.map((h) => (pm[h.ticker] != null ? { ...h, price: Number(pm[h.ticker]) } : h)));
-    } catch {
-      /* leave prices as-is */
+      setPriceResult(result);
+    } catch (e) {
+      setPriceResult({ error: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
     }
@@ -5598,6 +5706,12 @@ function SimulateTab({
             ))}
           </select>
         </Field>
+        <Field label="価格取得元">
+          <select value={priceProvider} onChange={(event) => setPriceProvider(event.target.value)}>
+            <option value="jquants">J-Quants（契約API）</option>
+            <option value="stooq_public_csv">公開CSV（開発用）</option>
+          </select>
+        </Field>
         <button onClick={addHolding} disabled={!pick}>
           ＋ 追加（手動）
         </button>
@@ -5605,6 +5719,14 @@ function SimulateTab({
           市場価格を更新
         </button>
       </div>
+      {priceResult?.error ? (
+        <p className="status error">価格取得エラー: {String(priceResult.error)}</p>
+      ) : priceResult ? (
+        <p className="callout">
+          価格取得元: <span className="mono">{String(priceResult.provider_id ?? priceProvider)}</span> /{" "}
+          {priceResult.as_of ? `基準日 ${Object.values(priceResult.as_of as Json).join(", ")}` : "基準日未取得"}
+        </p>
+      ) : null}
 
       {universe.length === 0 && (
         <p className="hint">

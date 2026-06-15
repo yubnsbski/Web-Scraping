@@ -1423,6 +1423,23 @@ textarea { min-height: 140px; }
 }
 .check-field { flex-direction: row !important; align-items: center; gap: 8px; flex: 0 0 auto; }
 .check-field input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; }
+.jquants-contract-field {
+  flex: 1 1 320px;
+  flex-direction: column !important;
+  align-items: flex-start;
+}
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.check-row span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
 
 .score-bar {
   height: 6px;

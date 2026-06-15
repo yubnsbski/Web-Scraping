@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 from investment_assistant.rag.chunker import chunk_text, load_document
@@ -92,6 +93,70 @@ def test_edinet_api_key_can_be_set_for_runtime_without_echo(monkeypatch) -> None
     assert payload["api_key_source"] == "runtime_input"
     assert payload["request_api_key_applied"] is True
     assert "runtime-secret" not in str(payload)
+
+
+def test_jquants_status_reports_runtime_key_without_echo(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_JQUANTS_API_KEY_RUNTIME_SET", False)
+    monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
+    monkeypatch.delenv("JQUANTS_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("JQUANTS_API_KEY", raising=False)
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", raising=False)
+
+    status, missing = handle_api("GET", "/api/jquants/status")
+
+    assert status == 200
+    assert missing["api_key_configured"] is False
+    assert missing["production_allowed"] is False
+    assert "GET /api/jquants/status" in available_routes()
+
+    status, payload = handle_api(
+        "POST",
+        "/api/jquants/api-key",
+        {"api_key": "unit-test-jquants-token"},
+    )
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "runtime_input"
+    assert payload["contract_acknowledged"] is False
+    assert payload["production_allowed"] is False
+    assert "unit-test-jquants-token" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_jquants_contract_ack_unlocks_provider_policy(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.setattr(service, "_JQUANTS_API_KEY_RUNTIME_SET", False)
+    monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
+    monkeypatch.delenv("JQUANTS_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("JQUANTS_API_KEY", raising=False)
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", raising=False)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/jquants/api-key",
+        {
+            "refresh_token": "unit-test-jquants-token",
+            "contract_acknowledged": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["contract_acknowledged"] is True
+    assert payload["production_allowed"] is True
+    assert "unit-test-jquants-token" not in json.dumps(payload, ensure_ascii=False)
+
+    status, ledger = handle_api(
+        "POST",
+        "/api/providers/policy",
+        {"runtime_mode": "production", "provider_ids": ["jquants"]},
+    )
+
+    assert status == 200
+    assert ledger["providers"][0]["runtime_decision"] == "allowed"
 
 
 def test_financials_refresh_with_edinet_key_updates_structured_csv(
@@ -1836,6 +1901,50 @@ def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     )
     assert status == 400
     assert "not allowed in production" in payload["error"]
+
+
+def test_market_prices_uses_jquants_provider_when_contracted(monkeypatch) -> None:
+    from investment_assistant.jquants.client import JQuantsClient
+
+    monkeypatch.setenv("JQUANTS_API_KEY", "unit-key")
+    monkeypatch.setenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", "jquants")
+
+    def fake_prices(
+        self: JQuantsClient,
+        tickers: list[str],
+        *,
+        date: str | None = None,
+        lookback_days: int = 14,
+    ) -> dict[str, object]:
+        assert tickers == ["8306"]
+        assert date is None
+        assert lookback_days == 5
+        return {
+            "prices": {"8306": 1234.0},
+            "as_of": {"8306": "2026-06-15"},
+            "provider_id": "jquants",
+            "auto_trading": False,
+            "call_real_api": True,
+        }
+
+    monkeypatch.setattr(JQuantsClient, "fetch_latest_prices", fake_prices)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices",
+        {
+            "tickers": ["8306"],
+            "provider_id": "jquants",
+            "runtime_mode": "production",
+            "lookback_days": 5,
+        },
+    )
+
+    assert status == 200
+    assert payload["prices"] == {"8306": 1234.0}
+    assert payload["provider_id"] == "jquants"
+    assert payload["provider_policy"]["production_allowed"] is True
+    assert payload["auto_trading"] is False
 
 
 def test_market_current_yields_import_saves_current_dividend_overlay(tmp_path: Path) -> None:

@@ -36,6 +36,48 @@ Handler = Callable[[JsonDict], JsonDict]
 _REAL_API_ENV = "INVESTMENT_ASSISTANT_WEB_REAL_API"
 _REAL_API_RUNTIME_ENABLED = False
 _EDINET_API_KEY_RUNTIME_SET = False
+_JQUANTS_API_KEY_ENV_VAR = "JQUANTS_API_KEY"
+_JQUANTS_REFRESH_TOKEN_ENV_VAR = "JQUANTS_REFRESH_TOKEN"
+_JQUANTS_PROVIDER_ID = "jquants"
+_JQUANTS_API_KEY_RUNTIME_SET = False
+_JQUANTS_CONTRACT_RUNTIME_ACK = False
+_JQUANTS_CAPABILITIES: tuple[JsonDict, ...] = (
+    {
+        "key": "equities_master",
+        "label": "上場銘柄マスター",
+        "endpoint": "/v2/equities/master",
+        "status": "planned",
+        "use": "銘柄名・市場区分・業種などの銘柄検索をJ-Quantsへ差し替え可能",
+    },
+    {
+        "key": "equities_bars_daily",
+        "label": "株価四本値・出来高",
+        "endpoint": "/v2/equities/bars/daily",
+        "status": "implemented",
+        "use": "シミュレーションと保有分析の現在価格補完に利用",
+    },
+    {
+        "key": "financial_summary",
+        "label": "決算短信サマリー/財務情報",
+        "endpoint": "/v2/fins/*",
+        "status": "planned",
+        "use": "EDINET財務の補完・速報値・配当情報の比較に利用",
+    },
+    {
+        "key": "dividends",
+        "label": "配当金データ",
+        "endpoint": "/v2/fins/*",
+        "status": "planned",
+        "use": "配当/分配金見込みと利回り検算に利用",
+    },
+    {
+        "key": "market_activity",
+        "label": "信用残・空売り・投資部門別",
+        "endpoint": "/v2/markets/*",
+        "status": "planned",
+        "use": "需給リスクや市場参加者動向の参考指標に利用",
+    },
+)
 
 
 class ApiError(Exception):
@@ -108,6 +150,69 @@ def _edinet_api_key_set(body: JsonDict) -> JsonDict:
         "auto_trading": False,
         "call_real_api": False,
     }
+
+
+def _jquants_status(_: JsonDict) -> JsonDict:
+    from investment_assistant.investment.provider_policy import provider_policy
+
+    env_configured_before_dotenv = bool(
+        os.getenv(_JQUANTS_REFRESH_TOKEN_ENV_VAR, "").strip()
+        or os.getenv(_JQUANTS_API_KEY_ENV_VAR, "").strip()
+    )
+    dotenv_loaded = _ensure_env_from_dotenv(
+        _JQUANTS_REFRESH_TOKEN_ENV_VAR
+    ) or _ensure_env_from_dotenv(_JQUANTS_API_KEY_ENV_VAR)
+    configured = bool(
+        os.getenv(_JQUANTS_REFRESH_TOKEN_ENV_VAR, "").strip()
+        or os.getenv(_JQUANTS_API_KEY_ENV_VAR, "").strip()
+    )
+    policy = provider_policy(_JQUANTS_PROVIDER_ID, runtime_mode="production")
+    return {
+        "api_key_configured": configured,
+        "api_key_env_var": _JQUANTS_REFRESH_TOKEN_ENV_VAR,
+        "legacy_api_key_env_var": _JQUANTS_API_KEY_ENV_VAR,
+        "api_key_source": _jquants_api_key_source(
+            configured=configured,
+            env_configured_before_dotenv=env_configured_before_dotenv,
+            dotenv_loaded=dotenv_loaded,
+        ),
+        "contract_acknowledged": _JQUANTS_CONTRACT_RUNTIME_ACK
+        or _is_runtime_contracted_provider(_JQUANTS_PROVIDER_ID),
+        "provider_policy": policy.to_dict(),
+        "production_allowed": policy.production_allowed,
+        "auth_method": "v2_api_key_header",
+        "auth_header": "x-api-key",
+        "capabilities": list(_JQUANTS_CAPABILITIES),
+        "official_docs": {
+            "usage": "https://jpx-jquants.com/en/help/usage",
+            "quickstart": "https://jpx-jquants.com/en/spec/quickstart",
+            "daily_bars": "https://jpx-jquants.com/en/spec/eq-bars-daily",
+            "listed_master": "https://jpx-jquants.com/en/spec/eq-master",
+            "data_update": "https://jpx-jquants.com/en/spec/data-update",
+        },
+        "request_api_key_applied": False,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _jquants_api_key_set(body: JsonDict) -> JsonDict:
+    global _JQUANTS_API_KEY_RUNTIME_SET, _JQUANTS_CONTRACT_RUNTIME_ACK
+
+    value = str(body.get("api_key") or body.get("refresh_token") or "").strip()
+    if value:
+        os.environ[_JQUANTS_REFRESH_TOKEN_ENV_VAR] = value
+        os.environ[_JQUANTS_API_KEY_ENV_VAR] = value
+        _JQUANTS_API_KEY_RUNTIME_SET = True
+    if _as_bool(body.get("contract_acknowledged"), False):
+        _mark_runtime_contracted_provider(_JQUANTS_PROVIDER_ID)
+        _JQUANTS_CONTRACT_RUNTIME_ACK = True
+    status = _jquants_status({})
+    status["request_api_key_applied"] = bool(value)
+    status["request_contract_acknowledged"] = _as_bool(
+        body.get("contract_acknowledged"), False
+    )
+    return status
 
 
 def _budget(_: JsonDict) -> JsonDict:
@@ -1951,6 +2056,7 @@ def _edinet_targets_registry_yaml(
 
 def _market_prices(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import ensure_provider_allowed
+    from investment_assistant.jquants.client import JQuantsApiError, JQuantsClient
     from investment_assistant.portfolio.prices import fetch_prices
 
     raw = body.get("tickers")
@@ -1965,7 +2071,20 @@ def _market_prices(body: JsonDict) -> JsonDict:
         policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
     except ValueError as exc:
         raise ApiError(str(exc), status=400) from exc
-    result = fetch_prices(tickers)
+    if provider_id.strip().lower() == _JQUANTS_PROVIDER_ID:
+        try:
+            result = JQuantsClient().fetch_latest_prices(
+                tickers,
+                date=str(body.get("date") or "").strip() or None,
+                lookback_days=_as_int(body.get("lookback_days"), 14),
+            )
+        except JQuantsApiError as exc:
+            raise ApiError(str(exc), status=400) from exc
+    else:
+        result = fetch_prices(tickers)
+        result["provider_id"] = provider_id
+        result["auto_trading"] = False
+        result["call_real_api"] = provider_id.strip().lower() != "user_csv"
     result["provider_policy"] = policy.to_dict()
     return result
 
@@ -2849,6 +2968,43 @@ def _edinet_api_key_source(
     return "unknown"
 
 
+def _jquants_api_key_source(
+    *,
+    configured: bool,
+    env_configured_before_dotenv: bool,
+    dotenv_loaded: bool,
+) -> str:
+    if not configured:
+        return "missing"
+    if _JQUANTS_API_KEY_RUNTIME_SET:
+        return "runtime_input"
+    if env_configured_before_dotenv:
+        return "process_env"
+    if dotenv_loaded:
+        return "dotenv"
+    return "unknown"
+
+
+def _is_runtime_contracted_provider(provider_id: str) -> bool:
+    from investment_assistant.investment.provider_policy import CONTRACTED_PROVIDERS_ENV
+
+    normalized = provider_id.strip().lower()
+    raw = os.getenv(CONTRACTED_PROVIDERS_ENV, "")
+    return normalized in {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _mark_runtime_contracted_provider(provider_id: str) -> None:
+    from investment_assistant.investment.provider_policy import CONTRACTED_PROVIDERS_ENV
+
+    normalized = provider_id.strip().lower()
+    if not normalized:
+        return
+    raw = os.getenv(CONTRACTED_PROVIDERS_ENV, "")
+    providers = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    providers.add(normalized)
+    os.environ[CONTRACTED_PROVIDERS_ENV] = ",".join(sorted(providers))
+
+
 def _require_str(body: JsonDict, key: str) -> str:
     value = body.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -3122,6 +3278,9 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
     ("GET", "/api/edinet/status"): _edinet_status,
     ("POST", "/api/edinet/api-key"): _edinet_api_key_set,
+    ("GET", "/api/jquants/status"): _jquants_status,
+    ("POST", "/api/jquants/status"): _jquants_status,
+    ("POST", "/api/jquants/api-key"): _jquants_api_key_set,
     ("POST", "/api/jobs/status"): _job_status,
     ("POST", "/api/storage/prune"): _storage_prune,
     ("POST", "/api/knowledge/diff"): _knowledge_diff,
