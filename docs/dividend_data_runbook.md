@@ -104,6 +104,26 @@ export MARKET_PRICE_PROVIDER=yfinance   # or stooq_public_csv
 Personal-use, on-demand quotes only — respect each source's terms; production use
 of a market-data provider needs the provider marked as contracted.
 
+### OHLCV history and intraday (Yahoo Finance)
+
+Scrape daily OHLCV bars, or today's minute-bars, for explicit tickers or every
+ticker in a registry (`--max 0` = all). One `<ticker>.csv` is written per ticker.
+
+```bash
+# Daily OHLCV (Yahoo v8 chart JSON)
+investment-assistant market-ohlcv --tickers 8306,7203 --range 1mo --output-dir local_docs/ohlcv
+investment-assistant market-ohlcv --registry examples/source_registry_nikkei225_edinet.yaml \
+  --max 0 --output-dir local_docs/ohlcv
+
+# Today's minute-bars (finance.yahoo.co.jp __PRELOADED_STATE__)
+investment-assistant market-intraday --tickers 2914,8306 --output-dir local_docs/intraday
+```
+
+The intraday series is only available for the current trading day (the page
+resets next day), so pull it after the session the same day. Personal use only —
+no redistribution or sale; fetches honor robots.txt and rate limits, so do not
+use this to poll for real-time data.
+
 ## Customising the universe
 
 - **More tickers:** copy a block in `source_registry_dividend_edinet.yaml`,

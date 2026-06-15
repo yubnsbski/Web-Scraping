@@ -488,6 +488,112 @@ def _save_crawl_pages(report: CrawlReport, folder: Path) -> list[str]:
     return saved
 
 
+def run_market_ohlcv(
+    *,
+    tickers: list[str] | None = None,
+    registry_path: str | Path | None = None,
+    max_count: int = 0,
+    range_: str = "1mo",
+    interval: str = "1d",
+    output_dir: str | Path | None = None,
+    fetch: Callable[[str], str] | None = None,
+) -> dict[str, object]:
+    """Scrape daily OHLCV from Yahoo Finance for explicit tickers or a registry.
+
+    Tickers come from ``tickers`` and/or every eligible entry in ``registry_path``
+    (e.g. a Nikkei 225 / JPX EDINET registry). ``max_count`` caps the universe
+    (``0`` = all). With ``output_dir`` set, one ``<ticker>.csv`` is written per
+    ticker and the bulky inline series is omitted from the return value.
+    """
+
+    from investment_assistant.portfolio.ohlcv import fetch_ohlcv, ohlcv_csv_text
+
+    resolved = _resolve_ohlcv_tickers(tickers, registry_path)
+    if max_count and max_count > 0:
+        resolved = resolved[:max_count]
+
+    result = fetch_ohlcv(resolved, range_=range_, interval=interval, fetch=fetch)
+    result["tickers_count"] = len(resolved)
+
+    if output_dir is not None:
+        base = reject_path_traversal(output_dir)
+        base.mkdir(parents=True, exist_ok=True)
+        series = result.pop("ohlcv")
+        saved: list[str] = []
+        if isinstance(series, dict):
+            for ticker, bars in series.items():
+                path = base / f"{ticker}.csv"
+                path.write_text(ohlcv_csv_text(bars), encoding="utf-8")
+                saved.append(str(path))
+        result["output_dir"] = str(base)
+        result["saved_paths"] = saved
+    return result
+
+
+def _resolve_ohlcv_tickers(
+    tickers: list[str] | None, registry_path: str | Path | None
+) -> list[str]:
+    """Expand explicit tickers plus any registry entries into a de-duplicated list."""
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for raw in tickers or []:
+        ticker = str(raw).strip()
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            resolved.append(ticker)
+    if registry_path is not None:
+        for target in build_edinet_targets_from_registry(registry_path):
+            ticker = str(target.ticker).strip()
+            if ticker and ticker not in seen:
+                seen.add(ticker)
+                resolved.append(ticker)
+    return resolved
+
+
+def run_yahoo_intraday(
+    *,
+    tickers: list[str] | None = None,
+    registry_path: str | Path | None = None,
+    max_count: int = 0,
+    output_dir: str | Path | None = None,
+    fetch: Callable[[str], str] | None = None,
+) -> dict[str, object]:
+    """Scrape today's minute-bar series from Yahoo Finance Japan.
+
+    Same universe expansion as :func:`run_market_ohlcv` (explicit ``tickers``
+    and/or a registry, capped by ``max_count`` where ``0`` = all). With
+    ``output_dir`` set, one ``<ticker>.csv`` is written per ticker and the inline
+    series is omitted from the return value.
+    """
+
+    from investment_assistant.portfolio.yahoo_intraday import (
+        fetch_yahoo_intraday,
+        intraday_csv_text,
+    )
+
+    resolved = _resolve_ohlcv_tickers(tickers, registry_path)
+    if max_count and max_count > 0:
+        resolved = resolved[:max_count]
+
+    result = fetch_yahoo_intraday(resolved, fetch=fetch)
+    result["tickers_count"] = len(resolved)
+
+    if output_dir is not None:
+        base = reject_path_traversal(output_dir)
+        base.mkdir(parents=True, exist_ok=True)
+        series = result.pop("intraday")
+        saved: list[str] = []
+        if isinstance(series, dict):
+            for ticker, ticks in series.items():
+                path = base / f"{ticker}.csv"
+                path.write_text(intraday_csv_text(ticks), encoding="utf-8")
+                saved.append(str(path))
+        result["output_dir"] = str(base)
+        result["saved_paths"] = saved
+    return result
+
+
 def run_edinet_ingest(
     *,
     registry_path: str | Path = "examples/source_registry_edinet_sample.yaml",
@@ -1299,6 +1405,25 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers.add_parser("demo", help="Run the offline end-to-end pipeline demo")
 
+    ohlcv_parser = subparsers.add_parser(
+        "market-ohlcv", help="Scrape daily OHLCV from Yahoo Finance (tickers or registry)"
+    )
+    ohlcv_parser.add_argument("--tickers", help="Comma-separated tickers, e.g. 8306,7203")
+    ohlcv_parser.add_argument("--registry", help="Source registry to expand into tickers")
+    ohlcv_parser.add_argument("--max", type=int, default=0, help="Cap the universe (0=all)")
+    ohlcv_parser.add_argument("--range", default="1mo")
+    ohlcv_parser.add_argument("--interval", default="1d")
+    ohlcv_parser.add_argument("--output-dir", help="Write one <ticker>.csv per ticker here")
+
+    intraday_parser = subparsers.add_parser(
+        "market-intraday",
+        help="Scrape today's minute-bar prices from Yahoo Finance Japan",
+    )
+    intraday_parser.add_argument("--tickers", help="Comma-separated tickers, e.g. 8306,7203")
+    intraday_parser.add_argument("--registry", help="Source registry to expand into tickers")
+    intraday_parser.add_argument("--max", type=int, default=0, help="Cap the universe (0=all)")
+    intraday_parser.add_argument("--output-dir", help="Write one <ticker>.csv per ticker here")
+
     gemini_live_parser = subparsers.add_parser("gemini-live")
     gemini_live_parser.add_argument("--prompt", required=True)
     gemini_live_parser.add_argument("--task-type", default="rag_answer")
@@ -1495,6 +1620,24 @@ def _dispatch(args: argparse.Namespace) -> object | None:
         from investment_assistant.demo import run_offline_demo
 
         return run_offline_demo()
+    if command == "market-ohlcv":
+        cli_tickers = [t.strip() for t in str(args.tickers or "").split(",") if t.strip()]
+        return run_market_ohlcv(
+            tickers=cli_tickers or None,
+            registry_path=args.registry,
+            max_count=int(args.max),
+            range_=args.range,
+            interval=args.interval,
+            output_dir=args.output_dir,
+        )
+    if command == "market-intraday":
+        intraday_tickers = [t.strip() for t in str(args.tickers or "").split(",") if t.strip()]
+        return run_yahoo_intraday(
+            tickers=intraday_tickers or None,
+            registry_path=args.registry,
+            max_count=int(args.max),
+            output_dir=args.output_dir,
+        )
     if command == "gemini-live":
         if not args.call_real_api:
             print("Refusing to call Gemini API without --call-real-api.")
