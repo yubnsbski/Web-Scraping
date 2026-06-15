@@ -249,6 +249,32 @@ def test_financials_import_saves_manual_csv_and_searches_securities(
     assert searched["securities"][0]["name"] == "MUFG"
 
 
+def test_financials_import_corrects_dividend_unit_jump_before_saving(
+    tmp_path: Path,
+) -> None:
+    csv_text = (
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2024,1200,48,41,stable\n"
+        "8306,MUFG,2025,1300,49,4100,stable\n"
+    )
+    output_path = tmp_path / "financials.csv"
+
+    status, imported = handle_api(
+        "POST",
+        "/api/financials/import",
+        {"csv_text": csv_text, "save": True, "output_path": str(output_path)},
+    )
+
+    assert status == 200
+    quality = imported["dividend_quality"]
+    assert isinstance(quality, dict)
+    assert quality["status"] == "corrected"
+    assert quality["corrected_count"] == 1
+    assert "4100" not in output_path.read_text(encoding="utf-8")
+    company = imported["comparison"]["companies"][0]  # type: ignore[index]
+    assert company["dividend_series"] == [41.0, 41.0]
+
+
 def test_financials_status_reports_saved_data(tmp_path: Path) -> None:
     csv_text = (
         "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
@@ -378,6 +404,78 @@ def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> No
     assert rows["8306"]["market_segment_label"] == "プライム（国内株式）"
     assert universe["auto_trading"] is False
     assert universe["call_real_api"] is False
+
+
+def test_market_universe_includes_prime_non_nikkei_without_financials(tmp_path: Path) -> None:
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,7203,トヨタ自動車,プライム（内国株式）,輸送用機器\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+    listed_path.write_text(listed, encoding="utf-8")
+    nikkei_registry = tmp_path / "nikkei.yaml"
+    nikkei_registry.write_text(
+        "sources:\n"
+        '  - name: "7203"\n'
+        '    ticker: "7203"\n'
+        '    company: "Toyota"\n'
+        '    source_type: "public_api"\n'
+        '    provider: "edinet"\n'
+        "    allowed: true\n",
+        encoding="utf-8",
+    )
+
+    status, universe = handle_api(
+        "POST",
+        "/api/market/universe",
+        {
+            "financials_csv": str(tmp_path / "missing.csv"),
+            "jpx_listed_path": str(listed_path),
+            "nikkei225_registry": str(nikkei_registry),
+            "scope": "prime",
+            "limit": 10,
+        },
+    )
+
+    assert status == 200
+    rows = {str(item["ticker"]): item for item in universe["securities"]}
+    assert {"7203", "8001"} <= set(rows)
+    assert rows["8001"]["is_prime"] is True
+    assert rows["8001"]["is_nikkei225"] is False
+    assert rows["8001"]["has_financials"] is False
+    assert rows["8001"]["market_segment"] == "プライム（国内株式）"
+
+
+def test_financials_securities_can_search_jpx_prime_rows_without_financials(
+    tmp_path: Path,
+) -> None:
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+    listed_path.write_text(listed, encoding="utf-8")
+    empty_registry = tmp_path / "nikkei.yaml"
+    empty_registry.write_text("sources: []\n", encoding="utf-8")
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/securities",
+        {
+            "financials_csv": str(tmp_path / "missing.csv"),
+            "jpx_listed_path": str(listed_path),
+            "nikkei225_registry": str(empty_registry),
+            "query": "8001",
+            "scope": "prime",
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["market_universe_used"] is True
+    assert payload["securities"][0]["ticker"] == "8001"
+    assert payload["securities"][0]["has_financials"] is False
 
 
 def test_jpx_listed_download_import_accepts_csv_path(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from investment_assistant.financials.dividend_quality import normalize_dividend_points
 from investment_assistant.financials.loader import compare_financials, load_financials
 
 DEFAULT_FINANCIALS_CSV = "local_docs/edinet/financials.csv"
@@ -33,7 +34,8 @@ def load_comparison(csv_path: str | Path = DEFAULT_FINANCIALS_CSV) -> dict[str, 
     if not path.is_file():
         return None
     try:
-        return compare_financials(load_financials(path))
+        points, _ = normalize_dividend_points(load_financials(path))
+        return compare_financials(points)
     except (ValueError, OSError):
         return None
 

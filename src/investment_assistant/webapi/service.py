@@ -1102,7 +1102,12 @@ def _portfolio_performance(body: JsonDict) -> JsonDict:
 
 def _financials_compare(body: JsonDict) -> JsonDict:
     path = str(body.get("path") or "examples/financials_sample.csv")
-    return compare_financials(load_financials(path))
+    from investment_assistant.financials.dividend_quality import normalize_dividend_points
+
+    points, dividend_quality = normalize_dividend_points(load_financials(path))
+    result = compare_financials(points)
+    result["dividend_quality"] = dividend_quality
+    return result
 
 
 def _financials_status(body: JsonDict) -> JsonDict:
@@ -1127,7 +1132,9 @@ def _financials_status(body: JsonDict) -> JsonDict:
             "call_real_api": False,
         }
     try:
-        points = load_financials(path)
+        from investment_assistant.financials.dividend_quality import normalize_dividend_points
+
+        points, dividend_quality = normalize_dividend_points(load_financials(path))
         comparison = compare_financials(points)
     except (ValueError, OSError) as exc:
         return {
@@ -1170,12 +1177,17 @@ def _financials_status(body: JsonDict) -> JsonDict:
             if is_stale
             else "財務データは利用可能です。必要に応じてDataタブから更新できます。"
         ),
+        "dividend_quality": dividend_quality,
         "auto_trading": False,
         "call_real_api": False,
     }
 
 
 def _financials_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.financials.dividend_quality import (
+        financial_points_to_csv_text,
+        normalize_dividend_points,
+    )
     from investment_assistant.financials.models import FINANCIAL_COLUMNS
     from investment_assistant.ingestion.fetcher import reject_path_traversal
 
@@ -1211,6 +1223,8 @@ def _financials_import(body: JsonDict) -> JsonDict:
         if cleanup is not None:
             cleanup.unlink(missing_ok=True)
 
+    points, dividend_quality = normalize_dividend_points(points)
+    normalized_csv = financial_points_to_csv_text(points)
     comparison = compare_financials(points)
     saved_path: str | None = None
     output_path = str(body.get("output_path") or DEFAULT_FINANCIALS_CSV)
@@ -1233,6 +1247,7 @@ def _financials_import(body: JsonDict) -> JsonDict:
         "count": len(points),
         "company_count": company_count,
         "comparison": comparison,
+        "dividend_quality": dividend_quality,
         "disclaimer": comparison.get("disclaimer"),
         "auto_trading": False,
         "call_real_api": False,
@@ -1240,6 +1255,9 @@ def _financials_import(body: JsonDict) -> JsonDict:
 
 
 def _financials_securities(body: JsonDict) -> JsonDict:
+    from investment_assistant.financials.dividend_quality import normalize_dividend_points
+    from investment_assistant.investment.universe import build_market_universe
+
     path = str(
         body.get("financials_csv")
         or body.get("path")
@@ -1247,6 +1265,33 @@ def _financials_securities(body: JsonDict) -> JsonDict:
     )
     query = str(body.get("query") or "").strip().lower()
     limit = max(_as_int(body.get("limit"), 20), 1)
+    if _as_bool(body.get("include_market_universe"), False) or body.get("jpx_listed_path"):
+        universe = build_market_universe(
+            financials_csv=path,
+            jpx_listed_path=str(body.get("jpx_listed_path") or "local_docs/jpx/listed_issues.csv"),
+            nikkei225_registry=str(
+                body.get("nikkei225_registry")
+                or "examples/source_registry_nikkei225_edinet.yaml"
+            ),
+            query=query,
+            scope=str(body.get("scope") or "prime"),
+            limit=limit,
+        )
+        rows = universe.get("securities")
+        securities = rows if isinstance(rows, list) else []
+        if securities:
+            return {
+                "available": True,
+                "query": query,
+                "source_ref": path,
+                "count": len(securities),
+                "securities": securities,
+                "market_universe_used": True,
+                "jpx_listed_available": universe.get("jpx_listed_available"),
+                "hint": universe.get("hint"),
+                "auto_trading": False,
+                "call_real_api": False,
+            }
     if not Path(path).is_file():
         return {
             "available": False,
@@ -1261,7 +1306,8 @@ def _financials_securities(body: JsonDict) -> JsonDict:
             "auto_trading": False,
             "call_real_api": False,
         }
-    comparison = compare_financials(load_financials(path))
+    points, dividend_quality = normalize_dividend_points(load_financials(path))
+    comparison = compare_financials(points)
     companies = comparison.get("companies")
     rows = companies if isinstance(companies, list) else []
     matches: list[dict[str, object]] = []
@@ -1294,6 +1340,7 @@ def _financials_securities(body: JsonDict) -> JsonDict:
         "source_ref": path,
         "count": len(matches),
         "securities": matches,
+        "dividend_quality": dividend_quality,
         "auto_trading": False,
         "call_real_api": False,
     }

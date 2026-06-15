@@ -345,6 +345,60 @@ def test_ingest_corrects_split_unadjusted_dividend_from_summary(tmp_path: Path) 
     assert nintendo["dividend_trend"] == "increasing"
 
 
+def test_ingest_corrects_obvious_dividend_unit_jump_without_summary(tmp_path: Path) -> None:
+    client = _FakeEdinetClient(
+        {
+            "2026-06-08": [
+                {
+                    "docID": "S100Y25",
+                    "secCode": "83060",
+                    "filerName": "三菱UFJ",
+                    "docTypeCode": "120",
+                    "docDescription": "有価証券報告書",
+                    "periodEnd": "2025-03-31",
+                    "submitDateTime": "2025-06-21 09:00",
+                    "csvFlag": "1",
+                },
+                {
+                    "docID": "S100Y24",
+                    "secCode": "83060",
+                    "filerName": "三菱UFJ",
+                    "docTypeCode": "120",
+                    "docDescription": "有価証券報告書",
+                    "periodEnd": "2024-03-31",
+                    "submitDateTime": "2024-06-21 09:00",
+                    "csvFlag": "1",
+                },
+            ],
+        },
+        archives={
+            "S100Y25": _csv_zip(dps="4100.0"),
+            "S100Y24": _csv_zip(dps="41.0"),
+        },
+    )
+    target = EdinetTarget(
+        name="8306", ticker="8306", company="MUFG", doc_types=("120",), max_periods=2
+    )
+
+    result = ingest_targets(
+        client=client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=tmp_path / "edinet",
+    )
+
+    comparison = result["comparison"]
+    assert isinstance(comparison, dict)
+    companies = comparison["companies"]
+    assert isinstance(companies, list)
+    mufg = companies[0]
+    assert mufg["dividend_series"] == [41.0, 41.0]
+    quality = result["dividend_quality"]
+    assert isinstance(quality, dict)
+    assert quality["status"] == "corrected"
+    assert quality["corrected_count"] == 1
+
+
 def test_financials_csv_is_durable_across_runs_after_pruning(tmp_path: Path) -> None:
     # The dividend record must survive retention pruning of the bulky filing
     # files: financials.csv accumulates history independently.

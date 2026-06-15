@@ -4635,6 +4635,7 @@ function ScrapeTab({
             {edinetState.data.index ? (
               <p className="hint">RAG登録完了: {JSON.stringify(edinetState.data.index)}</p>
             ) : null}
+            <DividendQualityPanel quality={edinetState.data.dividend_quality as Json | undefined} />
             {edinetState.data.comparison &&
               Array.isArray((edinetState.data.comparison as Json).companies) &&
               (edinetState.data.comparison as Json).companies.length > 0 && (
@@ -4701,6 +4702,7 @@ function ScrapeTab({
                 保存先: <span className="mono">{String(financialsState.data.saved_path)}</span>
               </>
             ) : null}
+            <DividendQualityPanel quality={financialsState.data.dividend_quality as Json | undefined} />
             {financialsState.data.comparison &&
               Array.isArray((financialsState.data.comparison as Json).companies) && (
                 <EdinetComparisonTable
@@ -4777,6 +4779,59 @@ function trendOrSingle(
     return `${fmt(latest)}（1期のみ）`;
   }
   return "データ不足";
+}
+
+function DividendQualityPanel(props: { quality?: Json | null }) {
+  const quality = props.quality;
+  if (!quality) return null;
+  const checks = Array.isArray(quality.checks) ? (quality.checks as Json[]) : [];
+  return (
+    <div className="edinet-comparison">
+      <h4>配当値チェック</h4>
+      <dl className="mini-stats">
+        <div>
+          <dt>状態</dt>
+          <dd>{String(quality.status ?? "ok")}</dd>
+        </div>
+        <div>
+          <dt>補正</dt>
+          <dd>{String(quality.corrected_count ?? 0)}</dd>
+        </div>
+        <div>
+          <dt>警告</dt>
+          <dd>{String(quality.warning_count ?? 0)}</dd>
+        </div>
+      </dl>
+      {checks.length > 0 && (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>銘柄</th>
+              <th>年度</th>
+              <th>元値</th>
+              <th>確認後</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            {checks.slice(0, 8).map((check, index) => (
+              <tr key={`${String(check.ticker)}-${String(check.fiscal_year)}-${index}`}>
+                <td className="mono">{String(check.ticker ?? "-")}</td>
+                <td className="mono">{String(check.fiscal_year ?? "-")}</td>
+                <td className="mono">{formatCompactNumber(check.original_value)}</td>
+                <td className="mono">{formatCompactNumber(check.checked_value)}</td>
+                <td>{String(check.code ?? check.message ?? "-")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="hint">
+        1株配当が過年度比で10倍/100倍に見える場合、取り込み時に単位を補正します。
+        高すぎる利回りは警告として残します。
+      </p>
+    </div>
+  );
 }
 
 function EdinetComparisonTable(props: { companies: Json[] }) {

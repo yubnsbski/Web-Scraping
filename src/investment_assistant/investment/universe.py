@@ -16,6 +16,7 @@ from pathlib import Path
 
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.financials import compare_financials, load_financials
+from investment_assistant.financials.dividend_quality import normalize_dividend_points
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
 
 DEFAULT_NIKKEI225_REGISTRY = "examples/source_registry_nikkei225_edinet.yaml"
@@ -297,7 +298,8 @@ def _financials_index(path: str | Path) -> dict[str, dict[str, object]]:
     if not csv_path.is_file():
         return {}
     try:
-        comparison = compare_financials(load_financials(csv_path))
+        points, _ = normalize_dividend_points(load_financials(csv_path))
+        comparison = compare_financials(points)
     except (OSError, ValueError):
         return {}
     companies = comparison.get("companies")

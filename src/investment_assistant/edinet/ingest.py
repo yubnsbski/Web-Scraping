@@ -43,6 +43,7 @@ from investment_assistant.edinet.models import (
 )
 from investment_assistant.edinet.registry import EdinetTarget
 from investment_assistant.financials import compare_financials, load_financials
+from investment_assistant.financials.dividend_quality import normalize_dividend_points
 from investment_assistant.financials.models import FinancialPoint
 from investment_assistant.ingestion.fetcher import reject_path_traversal
 from investment_assistant.observability import get_logger
@@ -159,6 +160,7 @@ def ingest_targets(
     # the (tiny) dividend record. This run's points win on overlap.
     csv_path = base_dir / FINANCIALS_CSV_NAME
     merged = dedupe_points([*deduped, *_load_existing_points(csv_path)])
+    merged, dividend_quality = normalize_dividend_points(merged)
     summary: dict[str, object] = {
         "output_dir": str(base_dir),
         "scanned_dates": scanned_dates,
@@ -168,6 +170,7 @@ def ingest_targets(
         "cached_count": cached,
         "financial_points": len(deduped),
         "financial_points_total": len(merged),
+        "dividend_quality": dividend_quality,
         "results": results,
     }
     if merged:
