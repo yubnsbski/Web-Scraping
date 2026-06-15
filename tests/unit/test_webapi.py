@@ -224,6 +224,48 @@ def test_prime_registry_generates_edinet_targets_from_jpx_listed(tmp_path: Path)
     assert targets[0].company == "トヨタ自動車"
 
 
+def test_listed_registry_generates_domestic_stock_targets_from_jpx_listed(
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+    from investment_assistant.investment.universe import ListedIssue, write_jpx_listed_issues
+
+    listed_path = tmp_path / "listed_issues.csv"
+    write_jpx_listed_issues(
+        [
+            ListedIssue("7203", "トヨタ自動車", "プライム（内国株式）", "輸送用機器"),
+            ListedIssue("9999", "標準サンプル", "スタンダード（内国株式）", "サービス業"),
+            ListedIssue("4478", "成長サンプル", "グロース（国内株式）", "情報・通信業"),
+            ListedIssue("1306", "ETFサンプル", "ETF・ETN", "ETF"),
+            ListedIssue("8951", "REITサンプル", "REIT・ベンチャーファンド", "REIT"),
+            ListedIssue("9998", "外国株サンプル", "プライム（外国株式）", "小売業"),
+        ],
+        listed_path,
+    )
+    registry_path = tmp_path / "source_registry_all_domestic_edinet.yaml"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/listed-registry",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(registry_path),
+            "max_targets": 0,
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["scope"] == "domestic_stocks"
+    assert payload["count"] == 3
+    assert payload["eligible_count"] == 3
+    assert payload["scope_total_count"] == 3
+    assert payload["total_prime_count"] == 2
+    assert registry_path.is_file()
+    targets = build_edinet_targets_from_registry(registry_path)
+    assert [target.ticker for target in targets] == ["4478", "7203", "9999"]
+
+
 def test_prime_refresh_generates_registry_and_delegates_to_financials_refresh(
     monkeypatch,
     tmp_path: Path,
@@ -267,6 +309,57 @@ def test_prime_refresh_generates_registry_and_delegates_to_financials_refresh(
     assert captured["registry_path"] == str(registry_path)
     assert registry_path.is_file()
     assert payload["prime_registry"]["count"] == 1
+
+
+def test_listed_refresh_generates_registry_and_delegates_to_financials_refresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.investment.universe import ListedIssue, write_jpx_listed_issues
+    from investment_assistant.webapi import service
+
+    listed_path = tmp_path / "listed_issues.csv"
+    write_jpx_listed_issues(
+        [
+            ListedIssue("7203", "トヨタ自動車", "プライム（内国株式）", "輸送用機器"),
+            ListedIssue("9999", "標準サンプル", "スタンダード（内国株式）", "サービス業"),
+            ListedIssue("1306", "ETFサンプル", "ETF・ETN", "ETF"),
+        ],
+        listed_path,
+    )
+    registry_path = tmp_path / "all_domestic.yaml"
+    captured: dict[str, object] = {}
+
+    def fake_refresh(body: dict[str, object]) -> dict[str, object]:
+        captured.update(body)
+        return {
+            "mode": "edinet_api",
+            "financials_updated": True,
+            "financials_csv": str(tmp_path / "edinet" / "financials.csv"),
+            "ingested_count": 2,
+            "targets_count": 2,
+        }
+
+    monkeypatch.setattr(service, "_financials_refresh", fake_refresh)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/listed-refresh",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(registry_path),
+            "output_dir": str(tmp_path / "edinet"),
+            "days": 7,
+            "max_targets": 0,
+        },
+    )
+
+    assert status == 200
+    assert payload["financials_updated"] is True
+    assert captured["registry_path"] == str(registry_path)
+    assert registry_path.is_file()
+    assert payload["jpx_registry"]["count"] == 2
+    assert payload["jpx_registry"]["scope"] == "domestic_stocks"
 
 
 def test_edinet_status_reads_local_dotenv_without_exposing_key(

@@ -1109,6 +1109,28 @@ def _jpx_listed_download_import(body: JsonDict) -> JsonDict:
 
 
 def _financials_prime_registry(body: JsonDict) -> JsonDict:
+    return _financials_jpx_registry(
+        {
+            **body,
+            "scope": "prime",
+            "registry_path": body.get("registry_path")
+            or "local_docs/edinet/source_registry_tse_prime_edinet.yaml",
+        }
+    )
+
+
+def _financials_listed_registry(body: JsonDict) -> JsonDict:
+    return _financials_jpx_registry(
+        {
+            **body,
+            "scope": body.get("scope") or "domestic_stocks",
+            "registry_path": body.get("registry_path")
+            or "local_docs/edinet/source_registry_all_domestic_edinet.yaml",
+        }
+    )
+
+
+def _financials_jpx_registry(body: JsonDict) -> JsonDict:
     from investment_assistant.ingestion.fetcher import reject_path_traversal
     from investment_assistant.investment.universe import (
         DEFAULT_JPX_LISTED_ISSUES_PATH,
@@ -1118,11 +1140,19 @@ def _financials_prime_registry(body: JsonDict) -> JsonDict:
 
     jpx_listed_path = str(body.get("jpx_listed_path") or DEFAULT_JPX_LISTED_ISSUES_PATH)
     output_path = str(
-        body.get("registry_path") or "local_docs/edinet/source_registry_tse_prime_edinet.yaml"
+        body.get("registry_path") or "local_docs/edinet/source_registry_all_domestic_edinet.yaml"
     )
-    max_targets = _as_int(body.get("max_targets"), 2000)
+    scope = str(body.get("scope") or "domestic_stocks")
+    scope_label = _financial_registry_scope_label(scope)
+    max_targets = _as_int(body.get("max_targets"), 0)
     max_periods = max(_as_int(body.get("max_periods"), 1), 1)
-    issues = [issue for issue in load_jpx_listed_issues(jpx_listed_path) if issue.is_prime]
+    source_issues = load_jpx_listed_issues(jpx_listed_path)
+    issues = [
+        issue
+        for issue in source_issues
+        if _issue_matches_financial_registry_scope(issue, scope)
+    ]
+    prime_count = sum(1 for issue in source_issues if bool(issue.is_prime))
     issues.sort(key=lambda issue: issue.code)
     selected = issues[:max_targets] if max_targets > 0 else issues
     if not selected:
@@ -1131,11 +1161,16 @@ def _financials_prime_registry(body: JsonDict) -> JsonDict:
             "saved": False,
             "registry_path": output_path,
             "jpx_listed_path": jpx_listed_path,
+            "scope": scope,
+            "registry_scope_label": scope_label,
             "count": 0,
-            "total_prime_count": 0,
+            "eligible_count": 0,
+            "total_source_count": len(source_issues),
+            "scope_total_count": 0,
+            "total_prime_count": prime_count,
             "sources": source_manifest(),
             "hint": (
-                "東証プライム銘柄が見つかりません。先にJPX公式の東証上場銘柄一覧を取得し、"
+                f"{scope_label}の銘柄が見つかりません。先にJPX公式の東証上場銘柄一覧を取得し、"
                 "市場区分データとして保存してください。"
             ),
             "auto_trading": False,
@@ -1145,7 +1180,7 @@ def _financials_prime_registry(body: JsonDict) -> JsonDict:
     registry_text = _edinet_registry_yaml(
         selected,
         max_periods=max_periods,
-        title="TSE Prime EDINET financials registry",
+        title=f"{scope_label} EDINET financials registry",
     )
     saved_path: str | None = None
     if _as_bool(body.get("save"), True):
@@ -1153,33 +1188,60 @@ def _financials_prime_registry(body: JsonDict) -> JsonDict:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(registry_text, encoding="utf-8")
         saved_path = str(target)
-    return {
+    payload: JsonDict = {
         "available": True,
         "saved": saved_path is not None,
         "registry_path": saved_path or output_path,
         "jpx_listed_path": jpx_listed_path,
+        "scope": scope,
+        "registry_scope_label": scope_label,
         "count": len(selected),
-        "total_prime_count": len(issues),
+        "eligible_count": len(issues),
+        "scope_total_count": len(issues),
+        "total_source_count": len(source_issues),
+        "total_prime_count": prime_count,
         "max_periods": max_periods,
-        "csv_text": registry_text,
         "sample": [issue.to_dict() for issue in selected[:20]],
         "sources": source_manifest(),
         "hint": (
-            "東証プライム銘柄からEDINET取得用registryを生成しました。"
+            f"{scope_label}からEDINET取得用registryを生成しました。"
             "このregistryを使って財務CSVを更新できます。"
         ),
         "auto_trading": False,
         "call_real_api": False,
     }
+    if _as_bool(body.get("include_csv_text"), False) or not saved_path:
+        payload["csv_text"] = registry_text
+    return payload
 
 
 def _financials_prime_refresh(body: JsonDict) -> JsonDict:
-    registry = _financials_prime_registry(
+    return _financials_jpx_refresh(
+        {
+            **body,
+            "scope": "prime",
+            "registry_path": body.get("registry_path")
+            or "local_docs/edinet/source_registry_tse_prime_edinet.yaml",
+        }
+    )
+
+
+def _financials_listed_refresh(body: JsonDict) -> JsonDict:
+    return _financials_jpx_refresh(
+        {
+            **body,
+            "scope": body.get("scope") or "domestic_stocks",
+            "registry_path": body.get("registry_path")
+            or "local_docs/edinet/source_registry_all_domestic_edinet.yaml",
+        }
+    )
+
+
+def _financials_jpx_refresh(body: JsonDict) -> JsonDict:
+    registry = _financials_jpx_registry(
         {
             **body,
             "save": True,
-            "registry_path": body.get("registry_path")
-            or "local_docs/edinet/source_registry_tse_prime_edinet.yaml",
         }
     )
     if not registry.get("available"):
@@ -1192,13 +1254,18 @@ def _financials_prime_refresh(body: JsonDict) -> JsonDict:
     )
     result["prime_registry"] = {
         "registry_path": registry.get("registry_path"),
+        "scope": registry.get("scope"),
+        "registry_scope_label": registry.get("registry_scope_label"),
         "count": registry.get("count"),
+        "eligible_count": registry.get("eligible_count"),
         "total_prime_count": registry.get("total_prime_count"),
         "jpx_listed_path": registry.get("jpx_listed_path"),
     }
+    result["jpx_registry"] = result["prime_registry"]
     if result.get("financials_updated") is not False:
         result["hint"] = (
-            "東証プライム銘柄registryを生成し、EDINET公式APIから財務データを更新しました。"
+            f"{registry.get('registry_scope_label')}のregistryを生成し、"
+            "EDINET公式APIから財務データを更新しました。"
             "以後の保有分析・候補抽出・シミュレーションは更新後CSVを参照します。"
         )
     return result
@@ -1207,6 +1274,73 @@ def _financials_prime_refresh(body: JsonDict) -> JsonDict:
 def _financials_prime_refresh_async(body: JsonDict) -> JsonDict:
     job_id = JOBS.start("financials-prime-refresh", lambda: _financials_prime_refresh(body))
     return {"job_id": job_id, "status": "running", "kind": "financials-prime-refresh"}
+
+
+def _financials_listed_refresh_async(body: JsonDict) -> JsonDict:
+    job_id = JOBS.start("financials-listed-refresh", lambda: _financials_listed_refresh(body))
+    return {"job_id": job_id, "status": "running", "kind": "financials-listed-refresh"}
+
+
+def _issue_matches_financial_registry_scope(issue: Any, scope: str) -> bool:
+    normalized = scope.strip().lower()
+    segment = str(issue.market_segment or "")
+    if normalized in {"prime", "tse_prime", "tosho_prime"}:
+        return bool(issue.is_prime)
+    if normalized in {"domestic_stocks", "all_domestic", "listed_companies", "all"}:
+        return _is_domestic_stock_segment(segment)
+    if normalized in {"standard", "tse_standard"}:
+        return _is_standard_segment(segment) and _is_domestic_stock_segment(segment)
+    if normalized in {"growth", "tse_growth"}:
+        return _is_growth_segment(segment) and _is_domestic_stock_segment(segment)
+    return _is_domestic_stock_segment(segment)
+
+
+def _is_domestic_stock_segment(segment: str) -> bool:
+    text = str(segment or "")
+    normalized = text.lower()
+    has_domestic_stock = (
+        "内国株式" in text
+        or "国内株式" in text
+        or "domestic stock" in normalized
+        or "domestic common stock" in normalized
+    )
+    return (
+        has_domestic_stock
+        and (
+            _is_prime_segment(segment)
+            or _is_standard_segment(segment)
+            or _is_growth_segment(segment)
+        )
+    )
+
+
+def _is_prime_segment(segment: str) -> bool:
+    text = str(segment or "")
+    normalized = text.lower()
+    return "プライム" in text or "prime" in normalized
+
+
+def _is_standard_segment(segment: str) -> bool:
+    text = str(segment or "")
+    normalized = text.lower()
+    return "スタンダード" in text or "standard" in normalized
+
+
+def _is_growth_segment(segment: str) -> bool:
+    text = str(segment or "")
+    normalized = text.lower()
+    return "グロース" in text or "growth" in normalized
+
+
+def _financial_registry_scope_label(scope: str) -> str:
+    normalized = scope.strip().lower()
+    if normalized in {"prime", "tse_prime", "tosho_prime"}:
+        return "東証プライム"
+    if normalized in {"standard", "tse_standard"}:
+        return "東証スタンダード"
+    if normalized in {"growth", "tse_growth"}:
+        return "東証グロース"
+    return "全社（国内株式）"
 
 
 def _edinet_registry_yaml(
@@ -2380,6 +2514,9 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/financials/prime-registry"): _financials_prime_registry,
     ("POST", "/api/financials/prime-refresh"): _financials_prime_refresh,
     ("POST", "/api/financials/prime-refresh-async"): _financials_prime_refresh_async,
+    ("POST", "/api/financials/listed-registry"): _financials_listed_registry,
+    ("POST", "/api/financials/listed-refresh"): _financials_listed_refresh,
+    ("POST", "/api/financials/listed-refresh-async"): _financials_listed_refresh_async,
     ("POST", "/api/financials/refresh"): _financials_refresh,
     ("POST", "/api/financials/refresh-async"): _financials_refresh_async,
     ("POST", "/api/financials/securities"): _financials_securities,
