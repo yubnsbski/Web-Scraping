@@ -16,8 +16,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
-from investment_assistant.ingestion.fetcher import SafeFetcher
 from investment_assistant.observability import get_logger
+from investment_assistant.portfolio._market_common import default_fetch, render_csv
 
 _logger = get_logger("portfolio.ohlcv")
 
@@ -96,10 +96,6 @@ def parse_yahoo_ohlcv(json_text: str) -> list[OhlcvBar]:
     return bars
 
 
-def _default_fetch(url: str) -> str:
-    return SafeFetcher().fetch_document(url).html
-
-
 def fetch_ohlcv(
     tickers: Iterable[str],
     *,
@@ -113,7 +109,7 @@ def fetch_ohlcv(
     a single failing ticker is recorded in ``notes`` and never aborts the batch.
     """
 
-    fetcher = fetch or _default_fetch
+    fetcher = fetch or default_fetch
     series: dict[str, list[dict[str, object]]] = {}
     counts: dict[str, int] = {}
     notes: dict[str, str] = {}
@@ -144,13 +140,7 @@ def fetch_ohlcv(
     }
 
 
-def _csv_cell(value: object) -> str:
-    return "" if value is None else str(value)
-
-
 def ohlcv_csv_text(bars: Iterable[dict[str, object]]) -> str:
     """Render OHLCV bar dicts as CSV text with a fixed header."""
 
-    lines = [",".join(_OHLCV_FIELDS)]
-    lines.extend(",".join(_csv_cell(bar.get(field)) for field in _OHLCV_FIELDS) for bar in bars)
-    return "\n".join(lines) + "\n"
+    return render_csv(_OHLCV_FIELDS, bars)

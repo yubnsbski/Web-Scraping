@@ -22,8 +22,8 @@ import json
 import os
 from collections.abc import Callable, Iterable
 
-from investment_assistant.ingestion.fetcher import SafeFetcher
 from investment_assistant.observability import get_logger
+from investment_assistant.portfolio._market_common import default_fetch
 
 _logger = get_logger("portfolio.prices")
 
@@ -90,10 +90,6 @@ def parse_yahoo_close(json_text: str) -> float | None:
     return None
 
 
-def _default_fetch(url: str) -> str:
-    return SafeFetcher().fetch_document(url).html
-
-
 def _resolve_provider(
     provider_id: str | None, url_template: str | None
 ) -> tuple[str, str, Callable[[str], float | None]]:
@@ -125,7 +121,7 @@ def fetch_prices(
     the caller's provider choice actually drives the fetch.
     """
 
-    fetcher = fetch or _default_fetch
+    fetcher = fetch or default_fetch
     resolved_id, template, parser = _resolve_provider(provider_id, url_template)
     prices: dict[str, float | None] = {}
     notes: dict[str, str] = {}
