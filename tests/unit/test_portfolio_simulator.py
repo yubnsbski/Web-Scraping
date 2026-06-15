@@ -23,6 +23,18 @@ def _csv(tmp_path: Path, rows: str) -> Path:
     return path
 
 
+def _current_yields(tmp_path: Path) -> Path:
+    path = tmp_path / "current_yields.csv"
+    path.write_text(
+        "ticker,name,current_dividend_per_share,current_price,yield_pct,as_of,"
+        "source_ref,provider_id,note\n"
+        "9433,KDDI,80,2500,3.2,2026-06-15,"
+        "user_verified_current_dividend,user_csv,current price basis\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_dividend_band_bollinger() -> None:
     band = dividend_band([30.0, 40.0, 50.0])
     assert band is not None
@@ -96,6 +108,30 @@ def test_simulate_conservative_below_latest_with_history(tmp_path: Path) -> None
     assert alloc["dividend_per_share"] < 50.0  # conservative band lower
 
 
+def test_simulator_prefers_current_yield_overlay_for_prediction(tmp_path: Path) -> None:
+    csv = _csv(tmp_path, "9433,KDDI,2025,1000,68,145,stable\n")
+    out = simulate_portfolio(
+        budget=250_000,
+        holdings=[{"ticker": "9433", "price": 2500}],
+        auto_weight="equal",
+        dividend_basis="latest",
+        financials_csv=str(csv),
+        current_yields_csv=_current_yields(tmp_path),
+    )
+
+    alloc = out["allocations"][0]  # type: ignore[index]
+    assert alloc["dividend_per_share_latest"] == 80.0
+    assert alloc["dividend_source"] == "current_dividend_per_share"
+    assert alloc["annual_dividend"] == 8000
+    assert alloc["annual_band_lower"] == 8000
+    assert alloc["annual_band_upper"] == 8000
+    assert alloc["yield"] == 0.032
+    summary = out["summary"]
+    assert summary["portfolio_yield_latest"] == 0.032  # type: ignore[index]
+    projection = out["projection"]
+    assert projection["nominal"][0] == 8000  # type: ignore[index]
+
+
 def test_build_universe_sorts_by_safety(tmp_path: Path) -> None:
     csv = _csv(
         tmp_path,
@@ -106,6 +142,21 @@ def test_build_universe_sorts_by_safety(tmp_path: Path) -> None:
     row = next(r for r in universe if r["ticker"] == "8306")
     assert row["dividend_latest"] == 50.0
     assert row["yield_latest"] is not None
+
+
+def test_build_universe_uses_current_yield_overlay(tmp_path: Path) -> None:
+    csv = _csv(tmp_path, "9433,KDDI,2025,1000,68,145,stable\n")
+    universe = build_universe(
+        str(csv),
+        prices={"9433": 2500},
+        current_yields_csv=_current_yields(tmp_path),
+    )
+
+    row = next(r for r in universe if r["ticker"] == "9433")
+    assert row["dividend_latest"] == 80.0
+    assert row["dividend_latest_edinet"] == 145.0
+    assert row["yield_latest"] == 0.032
+    assert row["yield_basis"] == "current_fact"
 
 
 def test_optimize_cash_min_minimises_leftover() -> None:

@@ -15,6 +15,7 @@ from investment_assistant.financials import (
     compare_financials,
     load_financials,
 )
+from investment_assistant.financials.current_yield import DEFAULT_CURRENT_YIELDS_CSV
 from investment_assistant.financials.evidence import (
     DEFAULT_FINANCIALS_CSV,
     build_financial_evidence,
@@ -720,6 +721,7 @@ def _portfolio_simulate(body: JsonDict) -> JsonDict:
         optimization=str(body.get("optimization") or "none"),
         dividend_basis=str(body.get("dividend_basis") or "conservative"),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
     )
 
 
@@ -739,6 +741,7 @@ def _portfolio_target(body: JsonDict) -> JsonDict:
         optimization=str(body.get("optimization") or "none"),
         dividend_basis=str(body.get("dividend_basis") or "conservative"),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
     )
 
 
@@ -767,7 +770,11 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
             "call_real_api": False,
         }
     try:
-        universe = build_universe(financials_csv, prices=prices)
+        universe = build_universe(
+            financials_csv,
+            prices=prices,
+            current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
+        )
     except FileNotFoundError:
         return {
             "available": False,
@@ -1078,6 +1085,51 @@ def _market_prices(body: JsonDict) -> JsonDict:
     result = fetch_prices(tickers)
     result["provider_policy"] = policy.to_dict()
     return result
+
+
+def _market_current_yields_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.financials.current_yield import (
+        CurrentYieldFact,
+        current_yield_fact_from_row,
+        current_yields_to_csv_text,
+        load_current_yields,
+        merge_current_yield_facts,
+        parse_current_yields_csv,
+    )
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+
+    path = reject_path_traversal(str(body.get("path") or DEFAULT_CURRENT_YIELDS_CSV))
+    incoming_facts: list[CurrentYieldFact] = []
+    csv_text = str(body.get("csv_text") or "").strip()
+    if csv_text:
+        incoming_facts.extend(parse_current_yields_csv(csv_text).values())
+    raw_rows = body.get("rows")
+    if isinstance(raw_rows, list):
+        for item in raw_rows:
+            if isinstance(item, dict):
+                fact = current_yield_fact_from_row(item)
+                if fact is not None:
+                    incoming_facts.append(fact)
+    if not incoming_facts:
+        raise ApiError("current yield CSV rows are required", status=400)
+
+    existing = (
+        load_current_yields(path).values()
+        if _as_bool(body.get("merge_existing"), True)
+        else []
+    )
+    merged = merge_current_yield_facts(existing, incoming_facts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(current_yields_to_csv_text(merged), encoding="utf-8")
+    return {
+        "available": True,
+        "saved_path": str(path),
+        "count": len(merged),
+        "imported_count": len(incoming_facts),
+        "facts": [fact.to_dict() for fact in merged],
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _provider_policy_ledger(body: JsonDict) -> JsonDict:
@@ -1402,6 +1454,7 @@ def _portfolio_analyze(body: JsonDict) -> JsonDict:
     return analyze_portfolio(
         holdings_from_payload(body),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
         runtime_mode=str(body.get("runtime_mode") or "development"),
     )
 
@@ -1420,6 +1473,7 @@ def _investment_detail(body: JsonDict) -> JsonDict:
         holdings=holdings,
         funds=fund_profiles_from_payload(body),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
     )
 
 
@@ -1483,12 +1537,14 @@ def _investment_monthly_report(body: JsonDict) -> JsonDict:
             optimization=str(body.get("optimization") or "balanced"),
             dividend_basis=str(body.get("dividend_basis") or "conservative"),
             financials_csv=financials_csv,
+            current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
         )
     report = build_investment_monthly_report(
         holdings,
         candidates=candidates,
         target_result=target_result,
         financials_csv=financials_csv,
+        current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
         runtime_mode=str(body.get("runtime_mode") or "development"),
     )
     if _as_bool(body.get("save_history"), True):
@@ -2120,6 +2176,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/jpx-listed/download"): _jpx_listed_download,
     ("POST", "/api/market/jpx-listed/download-import"): _jpx_listed_download_import,
     ("POST", "/api/market/prices"): _market_prices,
+    ("POST", "/api/market/current-yields/import"): _market_current_yields_import,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,

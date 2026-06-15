@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.financials.current_yield import DEFAULT_CURRENT_YIELDS_CSV
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
 from investment_assistant.investment.analysis import analyze_portfolio
 from investment_assistant.investment.models import DISCLAIMER, InvestmentHolding
@@ -18,6 +19,7 @@ def build_investment_monthly_report(
     candidates: Sequence[dict[str, object]] = (),
     target_result: Mapping[str, object] | None = None,
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    current_yields_csv: str | Path | None = DEFAULT_CURRENT_YIELDS_CSV,
     runtime_mode: str = "development",
 ) -> dict[str, object]:
     """Build a non-advisory monthly report from computed facts."""
@@ -25,6 +27,7 @@ def build_investment_monthly_report(
     analysis = analyze_portfolio(
         holdings,
         financials_csv=financials_csv,
+        current_yields_csv=current_yields_csv,
         runtime_mode=runtime_mode,
     )
     summary = analysis["summary"]
@@ -330,7 +333,9 @@ def _formula(key: str) -> str:
     formulas = {
         "market_value": "数量 × 現在価格（未入力時は取得単価）",
         "unrealized_pnl": "評価額 - 取得額",
-        "annual_income_estimate": "ユーザー入力分配金、またはEDINET最新1株配当 × 数量",
+        "annual_income_estimate": (
+            "ユーザー入力分配金、現在配当/予想配当CSV、またはEDINET最新1株配当 × 数量"
+        ),
         "nisa_remaining": "18,000,000円 - NISA口座の取得額合計",
         "concentration_top_weight": "最大保有銘柄の評価額 ÷ ポートフォリオ評価額",
         "concentration_hhi": "各保有比率の2乗和",

@@ -1271,6 +1271,35 @@ def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     assert "not allowed in production" in payload["error"]
 
 
+def test_market_current_yields_import_saves_current_dividend_overlay(tmp_path: Path) -> None:
+    output_path = tmp_path / "current_yields.csv"
+    status, payload = handle_api(
+        "POST",
+        "/api/market/current-yields/import",
+        {
+            "path": str(output_path),
+            "rows": [
+                {
+                    "ticker": "9433",
+                    "name": "KDDI",
+                    "current_dividend_per_share": 80,
+                    "current_price": 2500,
+                    "yield_pct": 3.2,
+                    "as_of": "2026-06-15",
+                    "source_ref": "user_verified_current_dividend",
+                }
+            ],
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["saved_path"] == str(output_path)
+    assert payload["count"] == 1
+    assert output_path.is_file()
+    assert "current_dividend_per_share" in output_path.read_text(encoding="utf-8")
+
+
 def test_provider_policy_ledger_route_reports_runtime_decisions() -> None:
     status, payload = handle_api(
         "POST",

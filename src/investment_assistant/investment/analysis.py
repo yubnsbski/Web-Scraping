@@ -6,6 +6,12 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.financials.current_yield import (
+    DEFAULT_CURRENT_YIELDS_CSV,
+    CurrentYieldFact,
+    load_current_yields,
+    reconcile_current_yield,
+)
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, load_comparison
 from investment_assistant.investment.edinet import build_edinet_summary
 from investment_assistant.investment.models import DISCLAIMER, InvestmentHolding
@@ -23,6 +29,7 @@ def analyze_portfolio(
     holdings: Sequence[InvestmentHolding],
     *,
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    current_yields_csv: str | Path | None = DEFAULT_CURRENT_YIELDS_CSV,
     runtime_mode: str = "development",
 ) -> dict[str, object]:
     """Analyze user-provided holdings without LLMs or recommendations."""
@@ -33,6 +40,7 @@ def analyze_portfolio(
     generated_at_dt = datetime.now(UTC)
     generated_at = generated_at_dt.isoformat()
     companies = _company_index(financials_csv)
+    current_yields = load_current_yields(current_yields_csv)
     financials_metadata = _financials_metadata(financials_csv, generated_at_dt)
     rows: list[dict[str, object]] = []
     evidence: list[dict[str, object]] = []
@@ -54,7 +62,20 @@ def analyze_portfolio(
         market_value = holding.quantity * price
         cost_basis = holding.quantity * holding.avg_cost
         company = companies.get(holding.ticker_or_fund_code)
-        annual_income, income_source = _annual_income(holding, company)
+        current_yield_fact = current_yields.get(holding.ticker_or_fund_code)
+        edinet_dps = _number((company or {}).get("latest_dividend_per_share"))
+        yield_reconciliation = reconcile_current_yield(
+            ticker=holding.ticker_or_fund_code,
+            name=holding.name,
+            edinet_dividend_per_share=edinet_dps,
+            current_price=price,
+            fact=current_yield_fact,
+        )
+        annual_income, income_source = _annual_income(
+            holding,
+            company,
+            current_yield=current_yield_fact,
+        )
         provider_id = _holding_provider_id(holding)
         policy = provider_policy(provider_id, runtime_mode=runtime_mode)
         pnl = market_value - cost_basis
@@ -70,6 +91,7 @@ def analyze_portfolio(
             "unrealized_pnl_pct": round(pnl / cost_basis * 100.0, 2) if cost_basis else 0.0,
             "annual_income_estimate": round(annual_income, 2),
             "annual_income_source": income_source,
+            "current_yield_reconciliation": yield_reconciliation.to_dict(),
             "income_yield_pct": round(annual_income / market_value * 100.0, 2)
             if market_value
             else 0.0,
@@ -92,6 +114,7 @@ def analyze_portfolio(
             row=row,
             market_value=market_value,
             income_source=income_source,
+            yield_reconciliation=yield_reconciliation.to_dict(),
         )
         row["data_alerts"] = row_data_alerts
         row["income_alerts"] = row_income_alerts
@@ -135,11 +158,14 @@ def analyze_portfolio(
                 {
                     "claim_key": f"holding.{holding.ticker_or_fund_code}.annual_income",
                     "source_type": income_source,
-                    "source_ref": str(financials_csv)
-                    if income_source == "edinet_latest_dividend_per_share"
-                    else holding.source,
+                    "source_ref": _income_source_ref(
+                        income_source=income_source,
+                        holding=holding,
+                        financials_csv=financials_csv,
+                        current_yield=current_yield_fact,
+                    ),
                     "metric_key": "annual_income_estimate",
-                    "formula": "quantity * dividend_or_distribution_per_unit",
+                    "formula": _income_formula(income_source),
                     "last_updated": generated_at,
                     "note": "Income estimate is deterministic and not a future guarantee.",
                 }
@@ -180,6 +206,10 @@ def analyze_portfolio(
         "nisa": nisa,
         "edinet_covered_holdings": sum(1 for row in rows if row.get("edinet_summary")),
         "edinet_source_ref": str(financials_csv),
+        "current_yields_source_ref": str(current_yields_csv)
+        if current_yields_csv is not None
+        else None,
+        "current_yield_overlay_count": len(current_yields),
         "data_quality": _data_quality_summary(data_alerts),
         "income_quality": _income_quality_summary(income_alerts),
     }
@@ -250,17 +280,51 @@ def _company_index(financials_csv: str | Path) -> dict[str, dict[str, object]]:
 
 
 def _annual_income(
-    holding: InvestmentHolding, company: dict[str, object] | None
+    holding: InvestmentHolding,
+    company: dict[str, object] | None,
+    *,
+    current_yield: CurrentYieldFact | None = None,
 ) -> tuple[float, str]:
     if holding.annual_income is not None:
         return max(holding.annual_income, 0.0), "user_annual_income"
     if holding.distribution_per_unit is not None:
         return max(holding.distribution_per_unit, 0.0) * holding.quantity, "user_distribution"
+    if (
+        holding.asset_type == "stock"
+        and current_yield is not None
+        and current_yield.current_dividend_per_share is not None
+    ):
+        return (
+            current_yield.current_dividend_per_share * holding.quantity,
+            "current_dividend_per_share",
+        )
     if holding.asset_type == "stock" and company is not None:
         dps = _number(company.get("latest_dividend_per_share"))
         if dps is not None:
             return dps * holding.quantity, "edinet_latest_dividend_per_share"
     return 0.0, "not_available"
+
+
+def _income_source_ref(
+    *,
+    income_source: str,
+    holding: InvestmentHolding,
+    financials_csv: str | Path,
+    current_yield: CurrentYieldFact | None,
+) -> str:
+    if income_source == "edinet_latest_dividend_per_share":
+        return str(financials_csv)
+    if income_source == "current_dividend_per_share" and current_yield is not None:
+        return current_yield.source_ref or current_yield.provider_id
+    return holding.source
+
+
+def _income_formula(income_source: str) -> str:
+    if income_source == "current_dividend_per_share":
+        return "quantity * current_dividend_per_share"
+    if income_source == "edinet_latest_dividend_per_share":
+        return "quantity * edinet_latest_dividend_per_share"
+    return "quantity * dividend_or_distribution_per_unit"
 
 
 def _holding_data_alerts(
@@ -359,6 +423,7 @@ def _income_alerts(
     row: Mapping[str, object],
     market_value: float,
     income_source: str,
+    yield_reconciliation: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
     alerts: list[dict[str, object]] = []
     base: dict[str, object] = {
@@ -400,6 +465,22 @@ def _income_alerts(
                 "value": 0.0,
                 "message": (
                     "No dividend or distribution source was available; income estimate is 0."
+                ),
+            }
+        )
+    warnings = yield_reconciliation.get("warnings") if yield_reconciliation is not None else None
+    if isinstance(warnings, (tuple, list)) and "edinet_current_basis_review" in warnings:
+        alerts.append(
+            {
+                **base,
+                "level": "warn",
+                "code": "current_yield_basis_review",
+                "field": "annual_income_estimate",
+                "value": row.get("annual_income_estimate"),
+                "message": (
+                    "EDINET dividend is a historical filing value and implies a high "
+                    "current yield; add a current dividend/forecast CSV fact before "
+                    "using it as current yield."
                 ),
             }
         )

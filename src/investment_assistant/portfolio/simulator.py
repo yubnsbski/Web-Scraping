@@ -19,6 +19,12 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from investment_assistant.financials.current_yield import (
+    DEFAULT_CURRENT_YIELDS_CSV,
+    CurrentYieldFact,
+    load_current_yields,
+    reconcile_current_yield,
+)
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, load_comparison
 
 DISCLAIMER = (
@@ -100,12 +106,15 @@ class _Prepared:
     shares_fixed: float
     amount_fixed: float
     nisa: bool
+    dividend_source: str
+    current_yield: dict[str, object] | None
 
 
 def build_universe(
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
     *,
     prices: dict[str, float] | None = None,
+    current_yields_csv: str | Path | None = DEFAULT_CURRENT_YIELDS_CSV,
 ) -> list[dict[str, object]]:
     """List the EDINET universe with current/conservative dividend + safety.
 
@@ -115,22 +124,43 @@ def build_universe(
 
     prices = prices or {}
     companies = _index_companies(load_comparison(financials_csv))
+    current_yields = load_current_yields(current_yields_csv)
     rows: list[dict[str, object]] = []
     for ticker, company in sorted(companies.items()):
         series = company.get("dividend_series")
         band = dividend_band(series if isinstance(series, list) else [])
         latest = _num(company.get("latest_dividend_per_share"))
-        conservative = band["lower"] if band else latest
         price = _num(prices.get(ticker))
+        current_fact = current_yields.get(ticker)
+        reconciliation = reconcile_current_yield(
+            ticker=ticker,
+            name=str(company.get("name") or ""),
+            edinet_dividend_per_share=latest,
+            current_price=price,
+            fact=current_fact,
+        )
+        current_dps = (
+            current_fact.current_dividend_per_share
+            if current_fact is not None and current_fact.current_dividend_per_share is not None
+            else latest
+        )
+        conservative = (
+            current_dps
+            if current_fact is not None
+            else (band["lower"] if band else latest)
+        )
         rows.append(
             {
                 "ticker": ticker,
                 "name": company.get("name"),
                 "price": round(price) if price > 0 else None,
-                "dividend_latest": latest,
+                "dividend_latest": current_dps,
+                "dividend_latest_edinet": latest,
                 "dividend_conservative": conservative,
-                "yield_latest": round(latest / price, 4) if price > 0 else None,
+                "yield_latest": round(current_dps / price, 4) if price > 0 else None,
                 "yield_conservative": round(conservative / price, 4) if price > 0 else None,
+                "yield_basis": reconciliation.status,
+                "current_yield_reconciliation": reconciliation.to_dict(),
                 "safety": estimate_safety(company),
                 "band": band,
                 "periods": len(series) if isinstance(series, list) else 0,
@@ -151,6 +181,7 @@ def simulate_portfolio(
     optimization: str = "none",
     dividend_basis: str = "conservative",
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    current_yields_csv: str | Path | None = DEFAULT_CURRENT_YIELDS_CSV,
     lot_default: int = 100,
 ) -> dict[str, object]:
     """Build a portfolio and project dividend income (conservative by default).
@@ -170,8 +201,9 @@ def simulate_portfolio(
     optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
     basis = "latest" if dividend_basis == "latest" else "conservative"
     by_ticker = _index_companies(load_comparison(financials_csv))
+    current_yields = load_current_yields(current_yields_csv)
 
-    prepared = [_prepare_holding(h, by_ticker, lot_default) for h in holdings]
+    prepared = [_prepare_holding(h, by_ticker, lot_default, current_yields) for h in holdings]
     prepared = [h for h in prepared if h.price > 0]
     if not prepared:
         return {
@@ -207,6 +239,7 @@ def plan_for_target_dividend(
     optimization: str = "none",
     dividend_basis: str = "conservative",
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    current_yields_csv: str | Path | None = DEFAULT_CURRENT_YIELDS_CSV,
     lot_default: int = 100,
     net_target: bool = False,
 ) -> dict[str, object]:
@@ -229,8 +262,9 @@ def plan_for_target_dividend(
     optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
     basis = "latest" if dividend_basis == "latest" else "conservative"
     by_ticker = _index_companies(load_comparison(financials_csv))
+    current_yields = load_current_yields(current_yields_csv)
 
-    prepared = [_prepare_holding(h, by_ticker, lot_default) for h in holdings]
+    prepared = [_prepare_holding(h, by_ticker, lot_default, current_yields) for h in holdings]
     prepared = [h for h in prepared if h.price > 0]
     if not prepared:
         return {
@@ -405,24 +439,52 @@ def _index_companies(comparison: dict[str, object] | None) -> dict[str, dict[str
 
 
 def _prepare_holding(
-    holding: dict[str, object], by_ticker: dict[str, dict[str, object]], lot_default: int
+    holding: dict[str, object],
+    by_ticker: dict[str, dict[str, object]],
+    lot_default: int,
+    current_yields: dict[str, CurrentYieldFact] | None = None,
 ) -> _Prepared:
     ticker = str(holding.get("ticker") or "").strip()
     company = by_ticker.get(ticker)
     series = (company or {}).get("dividend_series")
     band = dividend_band(series if isinstance(series, list) else [])
+    price = _num(holding.get("price"))
+    current_yields = current_yields or {}
+    current_fact = current_yields.get(ticker)
 
     override = holding.get("dividend_per_share")
     if override is not None:
         latest = _num(override)
+        dividend_source = "user_dividend_per_share"
+        reconciliation = None
+    elif current_fact is not None and current_fact.current_dividend_per_share is not None:
+        latest = current_fact.current_dividend_per_share
+        dividend_source = "current_dividend_per_share"
+        band = _flat_band(latest)
+        reconciliation = reconcile_current_yield(
+            ticker=ticker,
+            name=str(holding.get("name") or (company or {}).get("name") or ""),
+            edinet_dividend_per_share=_num((company or {}).get("latest_dividend_per_share")),
+            current_price=price,
+            fact=current_fact,
+        ).to_dict()
     else:
         latest = _num((company or {}).get("latest_dividend_per_share"))
-    conservative = band["lower"] if band else latest
+        dividend_source = "edinet_latest_dividend_per_share"
+        reconciliation = reconcile_current_yield(
+            ticker=ticker,
+            name=str(holding.get("name") or (company or {}).get("name") or ""),
+            edinet_dividend_per_share=latest,
+            current_price=price,
+        ).to_dict()
+    conservative = latest if dividend_source == "current_dividend_per_share" else (
+        band["lower"] if band else latest
+    )
     lot = int(_num(holding.get("lot"))) or lot_default
     return _Prepared(
         ticker=ticker,
         name=str(holding.get("name") or (company or {}).get("name") or ""),
-        price=_num(holding.get("price")),
+        price=price,
         dps_latest=latest,
         dps_conservative=conservative,
         band=band,
@@ -432,6 +494,8 @@ def _prepare_holding(
         shares_fixed=_num(holding.get("shares")),
         amount_fixed=_num(holding.get("amount")),
         nisa=bool(holding.get("nisa")),
+        dividend_source=dividend_source,
+        current_yield=reconciliation,
     )
 
 
@@ -594,6 +658,7 @@ def _allocate(
                 "invested": round(invested),
                 "dividend_per_share": dps,
                 "dividend_per_share_latest": holding.dps_latest,
+                "dividend_source": holding.dividend_source,
                 "annual_dividend": round(annual),
                 "annual_dividend_net": round(annual - tax),
                 "dividend_tax": round(tax),
@@ -602,6 +667,7 @@ def _allocate(
                 "annual_band_lower": round(shares * float(band.get("lower", dps))),
                 "annual_band_upper": round(shares * float(band.get("upper", holding.dps_latest))),
                 "yield": round((annual / invested) if invested > 0 else 0.0, 4),
+                "current_yield_reconciliation": holding.current_yield,
                 "safety": round(holding.safety, 4),
                 "band": holding.band,
             }
@@ -672,3 +738,8 @@ def _num(value: object) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+def _flat_band(value: float) -> dict[str, float]:
+    rounded = round(max(float(value), 0.0), 2)
+    return {"mean": rounded, "std": 0.0, "upper": rounded, "lower": rounded}

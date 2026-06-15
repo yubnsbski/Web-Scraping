@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from investment_assistant.financials.current_yield import DEFAULT_CURRENT_YIELDS_CSV
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV, load_comparison
 from investment_assistant.investment.analysis import analyze_portfolio
 from investment_assistant.investment.edinet import build_edinet_summary
@@ -23,6 +24,7 @@ def build_investment_detail(
     holdings: Sequence[InvestmentHolding] = (),
     funds: Sequence[FundProfile] = (),
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    current_yields_csv: str | Path | None = DEFAULT_CURRENT_YIELDS_CSV,
 ) -> dict[str, object]:
     """Build a non-advisory detail view for a single code."""
 
@@ -48,7 +50,11 @@ def build_investment_detail(
     holding_summary: dict[str, object] | None = None
     holding_rows: list[dict[str, object]] = []
     if matching_holdings:
-        analysis = analyze_portfolio(holdings, financials_csv=financials_csv)
+        analysis = analyze_portfolio(
+            holdings,
+            financials_csv=financials_csv,
+            current_yields_csv=current_yields_csv,
+        )
         all_rows = analysis.get("holdings")
         if isinstance(all_rows, list):
             holding_rows = [

@@ -57,6 +57,18 @@ def _financials(tmp_path: Path) -> Path:
     return path
 
 
+def _current_yields(tmp_path: Path) -> Path:
+    path = tmp_path / "current_yields.csv"
+    path.write_text(
+        "ticker,name,current_dividend_per_share,current_price,yield_pct,as_of,"
+        "source_ref,provider_id,note\n"
+        "9433,KDDI,80,2500,3.2,2026-06-15,"
+        "user_verified_current_dividend,user_csv,current price basis\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_analyze_mixed_stock_and_fund_portfolio(tmp_path: Path) -> None:
     holdings = holdings_from_payload({"csv_text": HOLDINGS_CSV})
     result = analyze_portfolio(holdings, financials_csv=_financials(tmp_path))
@@ -83,6 +95,79 @@ def test_analyze_mixed_stock_and_fund_portfolio(tmp_path: Path) -> None:
     assert income_quality["alerts"] == []
     assert result["auto_trading"] is False
     assert "投資助言" in str(result["disclaimer"])
+
+
+def test_analyze_portfolio_prefers_current_yield_overlay(tmp_path: Path) -> None:
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "9433,KDDI,2025,1000,68,145,stable\n",
+        encoding="utf-8",
+    )
+    holdings_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit\n"
+        "stock,9433,KDDI,100,2400,tokutei,taxable,user_csv,2500,,\n"
+    )
+
+    result = analyze_portfolio(
+        holdings_from_payload({"csv_text": holdings_csv}),
+        financials_csv=financials,
+        current_yields_csv=_current_yields(tmp_path),
+    )
+
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    assert summary["annual_income_estimate"] == 8000.0
+    assert summary["income_yield_pct"] == 3.2
+    rows = result["holdings"]
+    assert isinstance(rows, list)
+    row = rows[0]
+    assert isinstance(row, dict)
+    assert row["annual_income_source"] == "current_dividend_per_share"
+    reconciliation = row["current_yield_reconciliation"]
+    assert isinstance(reconciliation, dict)
+    assert reconciliation["edinet_implied_yield_pct"] == 5.8
+    assert reconciliation["income_yield_pct"] == 3.2
+    assert "edinet_current_basis_mismatch_adjusted" in reconciliation["warnings"]
+    evidence = result["evidence"]
+    assert isinstance(evidence, list)
+    annual_income_evidence = next(
+        item
+        for item in evidence
+        if isinstance(item, dict) and item.get("claim_key") == "holding.9433.annual_income"
+    )
+    assert annual_income_evidence["formula"] == "quantity * current_dividend_per_share"
+
+
+def test_analyze_portfolio_flags_edinet_current_yield_basis_review(tmp_path: Path) -> None:
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "9433,KDDI,2025,1000,68,145,stable\n",
+        encoding="utf-8",
+    )
+    holdings_csv = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
+        "source,current_price,annual_income,distribution_per_unit\n"
+        "stock,9433,KDDI,100,2400,tokutei,taxable,user_csv,2500,,\n"
+    )
+
+    result = analyze_portfolio(
+        holdings_from_payload({"csv_text": holdings_csv}),
+        financials_csv=financials,
+        current_yields_csv=tmp_path / "missing_current_yields.csv",
+    )
+
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    income_quality = summary["income_quality"]
+    assert isinstance(income_quality, dict)
+    assert income_quality["status"] == "warn"
+    alerts = income_quality["alerts"]
+    assert isinstance(alerts, list)
+    alert_codes = {str(alert.get("code")) for alert in alerts if isinstance(alert, dict)}
+    assert "current_yield_basis_review" in alert_codes
 
 
 def test_analyze_portfolio_flags_nisa_cap_usage(tmp_path: Path) -> None:
