@@ -179,7 +179,10 @@ def _edinet_api_key_set(body: JsonDict) -> JsonDict:
 
 
 def _jquants_status(_: JsonDict) -> JsonDict:
-    from investment_assistant.investment.provider_policy import provider_policy
+    from investment_assistant.investment.provider_policy import (
+        CONTRACTED_PROVIDERS_ENV,
+        provider_policy,
+    )
 
     env_configured_before_dotenv = bool(
         os.getenv(_JQUANTS_REFRESH_TOKEN_ENV_VAR, "").strip()
@@ -192,6 +195,7 @@ def _jquants_status(_: JsonDict) -> JsonDict:
         os.getenv(_JQUANTS_REFRESH_TOKEN_ENV_VAR, "").strip()
         or os.getenv(_JQUANTS_API_KEY_ENV_VAR, "").strip()
     )
+    _ensure_env_from_dotenv(CONTRACTED_PROVIDERS_ENV)
     policy = provider_policy(_JQUANTS_PROVIDER_ID, runtime_mode="production")
     return {
         "api_key_configured": configured,
@@ -2297,11 +2301,21 @@ def _market_bars(body: JsonDict) -> JsonDict:
     if provider_id.strip().lower() != _JQUANTS_PROVIDER_ID:
         raise ApiError("daily OHLCV bars are currently implemented for J-Quants only")
 
-    result = JQuantsClient().fetch_daily_bars(
-        tickers,
-        date=str(body.get("date") or "").strip() or None,
-        lookback_days=_as_int(body.get("lookback_days"), 30),
-    )
+    client = JQuantsClient()
+    fetch_date = str(body.get("date") or "").strip() or None
+    fetch_lookback_days = _as_int(body.get("lookback_days"), 30)
+    if _as_bool(body.get("bulk"), False):
+        result = client.fetch_daily_bars_bulk(
+            tickers,
+            date=fetch_date,
+            lookback_days=fetch_lookback_days,
+        )
+    else:
+        result = client.fetch_daily_bars(
+            tickers,
+            date=fetch_date,
+            lookback_days=fetch_lookback_days,
+        )
     if _as_bool(body.get("use_bar_store"), True):
         _apply_daily_bar_store(
             result,
@@ -2377,6 +2391,7 @@ def _market_bars_universe(body: JsonDict) -> JsonDict:
     nested.setdefault("provider_id", _JQUANTS_PROVIDER_ID)
     nested.setdefault("runtime_mode", "production")
     nested.setdefault("allow_cache_on_policy_block", True)
+    nested.setdefault("bulk", True)
     result = _market_bars(nested)
     result["selection"] = selection
     return result

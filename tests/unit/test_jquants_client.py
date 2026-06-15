@@ -161,6 +161,44 @@ def test_fetch_daily_bars_returns_normalized_ohlcv_summary() -> None:
     assert summary["return_pct"] == 0.603622
 
 
+def test_fetch_daily_bars_bulk_uses_date_range_and_pagination() -> None:
+    calls: list[dict[str, str]] = []
+
+    def fake_fetch(
+        path: str,
+        params: Mapping[str, str],
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:
+        _ = path, headers
+        calls.append(dict(params))
+        if "pagination_key" not in params:
+            return {
+                "data": [
+                    {"Date": "2026-06-15", "Code": "72030", "C": 3271, "Vo": 100},
+                    {"Date": "2026-06-15", "Code": "99990", "C": 100, "Vo": 10},
+                ],
+                "pagination_key": "next-page",
+            }
+        return {
+            "data": [
+                {"Date": "2026-06-15", "Code": "94330", "C": 2677.5, "Vo": 200},
+            ],
+        }
+
+    client = JQuantsClient(api_key="unit-key", fetch_json=fake_fetch)
+
+    result = client.fetch_daily_bars_bulk(["7203", "9433"], lookback_days=3)
+
+    assert len(calls) == 2
+    assert "code" not in calls[0]
+    assert calls[1]["pagination_key"] == "next-page"
+    assert result["fetch_mode"] == "bulk_date_range"
+    assert result["pages_fetched"] == 2
+    assert result["rows_returned"] == 3
+    assert result["matched_ticker_count"] == 2
+    assert [row["ticker"] for row in result["bars"]] == ["7203", "9433"]
+
+
 def test_fetch_daily_bars_retries_inside_subscription_window() -> None:
     tried: list[dict[str, str]] = []
 

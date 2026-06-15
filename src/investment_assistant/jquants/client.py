@@ -58,18 +58,18 @@ class JQuantsClient:
     ) -> JsonDict:
         """Fetch stock OHLC rows from ``/v2/equities/bars/daily``."""
 
-        return self._daily_bars_for_code(
-            normalize_equity_code(code),
+        return self._daily_bars_page(
+            code=normalize_equity_code(code),
             date=date,
             from_date=from_date,
             to_date=to_date,
             pagination_key=pagination_key,
         )
 
-    def _daily_bars_for_code(
+    def _daily_bars_page(
         self,
-        code: str,
         *,
+        code: str | None = None,
         date: str | None = None,
         from_date: str | None = None,
         to_date: str | None = None,
@@ -92,7 +92,7 @@ class JQuantsClient:
 
     def _daily_bars_with_subscription_fallback(
         self,
-        code: str,
+        code: str | None,
         *,
         date: str | None,
         from_date: str | None,
@@ -100,8 +100,8 @@ class JQuantsClient:
         lookback_days: int,
     ) -> JsonDict:
         try:
-            return self._daily_bars_for_code(
-                code,
+            return self._daily_bars_page(
+                code=code,
                 date=date,
                 from_date=from_date,
                 to_date=to_date,
@@ -111,8 +111,8 @@ class JQuantsClient:
             if retry_window is None:
                 raise
             retry_from, retry_to = retry_window
-            result = self._daily_bars_for_code(
-                code,
+            result = self._daily_bars_page(
+                code=code,
                 from_date=retry_from,
                 to_date=retry_to,
             )
@@ -181,6 +181,115 @@ class JQuantsClient:
             "as_of": as_of,
             "source": "https://api.jquants.com/v2/equities/bars/daily",
             "provider_id": "jquants",
+            "auto_trading": False,
+            "call_real_api": True,
+        }
+
+    def fetch_daily_bars_bulk(
+        self,
+        tickers: Iterable[str],
+        *,
+        date: str | None = None,
+        lookback_days: int = 30,
+    ) -> JsonDict:
+        """Fetch OHLCV rows in page batches, then filter to the requested tickers.
+
+        J-Quants' daily bars endpoint can return many issues for a date/range.
+        Universe updates should therefore avoid one request per ticker whenever
+        possible; that shape hits provider rate limits quickly.
+        """
+
+        from investment_assistant.portfolio.bar_store import (
+            daily_bar_from_jquants_row,
+            summarize_daily_bars,
+            visible_ticker,
+        )
+
+        wanted = {visible_ticker(ticker) for ticker in tickers if str(ticker or "").strip()}
+        today = datetime.now(UTC).date()
+        from_date = today - timedelta(days=max(lookback_days, 1))
+        source = "https://api.jquants.com/v2/equities/bars/daily"
+        rows: list[JsonDict] = []
+        notes: dict[str, str] = {}
+        pages_fetched = 0
+        pagination_key: str | None = None
+        subscription_window_used: dict[str, str] | None = None
+
+        try:
+            while True:
+                try:
+                    result = self._daily_bars_page(
+                        date=date,
+                        from_date=None if date else from_date.isoformat(),
+                        to_date=None if date else today.isoformat(),
+                        pagination_key=pagination_key,
+                    )
+                except JQuantsApiError as exc:
+                    retry_window = None if date else _subscription_retry_window(
+                        str(exc), lookback_days
+                    )
+                    if retry_window is None:
+                        raise
+                    retry_from, retry_to = retry_window
+                    subscription_window_used = {"from": retry_from, "to": retry_to}
+                    rows = []
+                    pages_fetched = 0
+                    pagination_key = None
+                    while True:
+                        result = self._daily_bars_page(
+                            from_date=retry_from,
+                            to_date=retry_to,
+                            pagination_key=pagination_key,
+                        )
+                        rows.extend(result["rows"])
+                        pages_fetched += 1
+                        pagination_key = _pagination_key(result)
+                        if not pagination_key:
+                            break
+                    break
+                rows.extend(result["rows"])
+                pages_fetched += 1
+                pagination_key = _pagination_key(result)
+                if not pagination_key:
+                    break
+        except JQuantsApiError as exc:
+            notes["bulk"] = str(exc)
+
+        bar_facts = [
+            fact
+            for row in rows
+            if (ticker := visible_ticker(row.get("Code") or row.get("code"))) in wanted
+            if (
+                fact := daily_bar_from_jquants_row(
+                    row,
+                    fallback_ticker=ticker,
+                    provider_id="jquants",
+                    source_ref=source,
+                )
+            )
+            is not None
+        ]
+        matched = {fact.ticker for fact in bar_facts}
+        missing = sorted(wanted - matched)
+        if subscription_window_used:
+            notes["bulk"] = (
+                "subscription_window_used:"
+                f"{subscription_window_used.get('from')}~{subscription_window_used.get('to')}"
+            )
+        if missing and len(wanted) <= 50 and "bulk" not in notes:
+            notes["missing_tickers"] = ",".join(missing)
+        return {
+            "bars": [fact.to_dict() for fact in bar_facts],
+            "summary": summarize_daily_bars(bar_facts),
+            "notes": notes,
+            "tried_codes": {"bulk": ["date_range"]},
+            "source": source,
+            "provider_id": "jquants",
+            "fetch_mode": "bulk_date_range",
+            "pages_fetched": pages_fetched,
+            "rows_returned": len(rows),
+            "matched_ticker_count": len(matched),
+            "missing_ticker_count": len(missing),
             "auto_trading": False,
             "call_real_api": True,
         }
@@ -353,6 +462,12 @@ def _extract_rows(payload: JsonDict) -> list[JsonDict]:
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def _pagination_key(payload: JsonDict) -> str | None:
+    value = payload.get("pagination_key") or payload.get("next_page_token")
+    text = str(value or "").strip()
+    return text or None
 
 
 def _latest_close(rows: Iterable[JsonDict]) -> tuple[float | None, str | None]:

@@ -95,9 +95,10 @@ def test_edinet_api_key_can_be_set_for_runtime_without_echo(monkeypatch) -> None
     assert "runtime-secret" not in str(payload)
 
 
-def test_jquants_status_reports_runtime_key_without_echo(monkeypatch) -> None:
+def test_jquants_status_reports_runtime_key_without_echo(tmp_path: Path, monkeypatch) -> None:
     from investment_assistant.webapi import service
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(service, "_JQUANTS_API_KEY_RUNTIME_SET", False)
     monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
     monkeypatch.delenv("JQUANTS_REFRESH_TOKEN", raising=False)
@@ -125,9 +126,10 @@ def test_jquants_status_reports_runtime_key_without_echo(monkeypatch) -> None:
     assert "unit-test-jquants-token" not in json.dumps(payload, ensure_ascii=False)
 
 
-def test_jquants_contract_ack_unlocks_provider_policy(monkeypatch) -> None:
+def test_jquants_contract_ack_unlocks_provider_policy(tmp_path: Path, monkeypatch) -> None:
     from investment_assistant.webapi import service
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(service, "_JQUANTS_API_KEY_RUNTIME_SET", False)
     monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
     monkeypatch.delenv("JQUANTS_REFRESH_TOKEN", raising=False)
@@ -2319,7 +2321,7 @@ def test_market_bars_universe_selects_prime_and_saves_ohlcv(
     bar_store_path = tmp_path / "daily_bars.csv"
     price_store_path = tmp_path / "current_prices.csv"
 
-    def fake_bars(
+    def fake_bars_bulk(
         self: JQuantsClient,
         tickers: list[str],
         *,
@@ -2361,7 +2363,7 @@ def test_market_bars_universe_selects_prime_and_saves_ohlcv(
             "call_real_api": True,
         }
 
-    monkeypatch.setattr(JQuantsClient, "fetch_daily_bars", fake_bars)
+    monkeypatch.setattr(JQuantsClient, "fetch_daily_bars_bulk", fake_bars_bulk)
 
     status, payload = handle_api(
         "POST",
@@ -2422,6 +2424,34 @@ def test_market_bars_can_use_cache_when_provider_is_policy_blocked(
     assert payload["call_real_api"] is False
     assert payload["bar_store"]["cache_used"] == ["9433"]
     assert payload["summary"]["tickers"]["9433"]["latest_volume"] == 1300000.0
+
+
+def test_jquants_status_loads_contracted_provider_from_dotenv(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("JQUANTS_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("JQUANTS_API_KEY", raising=False)
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", raising=False)
+    monkeypatch.setattr(service, "_JQUANTS_API_KEY_RUNTIME_SET", False)
+    monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
+    (tmp_path / ".env.local").write_text(
+        "JQUANTS_REFRESH_TOKEN=fake-token\n"
+        "INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS=jquants\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api("GET", "/api/jquants/status", {})
+
+    assert status == 200
+    assert payload["api_key_configured"] is True
+    assert payload["api_key_source"] == "dotenv"
+    assert payload["contract_acknowledged"] is True
+    assert payload["production_allowed"] is True
+    assert payload["provider_policy"]["commercial_use"] == "allowed_if_contracted"
 
 
 def test_data_status_summarizes_canonical_local_sources(tmp_path: Path) -> None:
