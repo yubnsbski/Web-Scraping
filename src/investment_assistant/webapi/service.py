@@ -579,7 +579,7 @@ def _market_prices(body: JsonDict) -> JsonDict:
         policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
     except ValueError as exc:
         raise ApiError(str(exc), status=400) from exc
-    result = fetch_prices(tickers)
+    result = fetch_prices(tickers, provider_id=provider_id)
     result["provider_policy"] = policy.to_dict()
     return result
 

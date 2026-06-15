@@ -86,6 +86,24 @@ at the produced file, or pass `financials_csv` in the request body. With real
 EDINET data loaded, the dividend band (Bollinger lower), safety score, and
 split-adjusted dividend series are all driven by official filings.
 
+## Market prices (Stooq / Yahoo Finance)
+
+`/api/market/prices` and the Simulate tab's「市場価格を更新」fetch the latest close
+per ticker. The data source follows the selected `provider_id`:
+
+- `stooq_public_csv` (default) — Stooq snapshot CSV.
+- `yfinance` — Yahoo Finance v8 chart JSON (Tokyo `.T` symbols).
+
+Pick it in the UI's「価格ソース」selector, pass `provider_id` in the request body,
+or set the default for headless use:
+
+```bash
+export MARKET_PRICE_PROVIDER=yfinance   # or stooq_public_csv
+```
+
+Personal-use, on-demand quotes only — respect each source's terms; production use
+of a market-data provider needs the provider marked as contracted.
+
 ## Customising the universe
 
 - **More tickers:** copy a block in `source_registry_dividend_edinet.yaml`,
