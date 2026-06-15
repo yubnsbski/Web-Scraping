@@ -110,55 +110,36 @@ const HERO_CARDS = [
   { label: "4", value: "出力", desc: "試算と根拠を残す" },
 ] as const;
 
-const WORKFLOW_STEPS = [
+const COMMAND_ACTIONS = [
   {
     id: "data",
     step: "1",
-    title: "データ",
-    body: "EDINET、CSV、サンプルを選びます。",
-    action: "開く",
+    title: "データ更新",
+    body: "財務・株価・日足を整える",
   },
   {
     id: "holdings",
     step: "2",
-    title: "保有",
-    body: "保有一覧を入れて集計します。",
-    action: "開く",
+    title: "保有入力",
+    body: "CSV/手入力で現在地を作る",
   },
   {
     id: "candidates",
     step: "3",
-    title: "候補",
-    body: "条件に合う対象だけを表示します。",
-    action: "開く",
-  },
-  {
-    id: "simulate",
-    step: "4",
-    title: "試算",
-    body: "配当・分配金の見込みを見ます。",
-    action: "開く",
+    title: "候補比較",
+    body: "条件一致だけを並べる",
   },
   {
     id: "report",
-    step: "5",
-    title: "レポート",
-    body: "KPI、計算式、根拠をまとめます。",
-    action: "開く",
-  },
-  {
-    id: "answer",
-    step: "6",
-    title: "AIチャット",
-    body: "根拠付きで疑問を整理します。",
-    action: "開く",
+    step: "4",
+    title: "根拠出力",
+    body: "計算式と免責を残す",
   },
 ] satisfies {
   id: TabId;
   step: string;
   title: string;
   body: string;
-  action: string;
 }[];
 
 const REPORT_WIZARD_STEPS = [
@@ -504,6 +485,11 @@ export function App() {
         onDataUpdated={markFinancialsDataUpdated}
         refreshKey={financialsRefreshNonce}
       />
+      <CommandCenter
+        currentTab={tab}
+        financialsCsvPath={financialsCsvPath}
+        onNavigate={setTab}
+      />
       <section className="top-security-picker" aria-label="証券コードと企業選択">
         <SecuritySearch
           financialsCsvPath={financialsCsvPath}
@@ -514,20 +500,6 @@ export function App() {
             openDetail(String(security.ticker ?? security.code ?? ""), "stock")
           }
         />
-      </section>
-      <section className="workflow quick-workflow" aria-label="操作ステップ">
-        {WORKFLOW_STEPS.map((step) => (
-          <button
-            key={step.id}
-            className={step.id === tab ? "step-card active" : "step-card"}
-            onClick={() => setTab(step.id)}
-          >
-            <span className="step-number">{step.step}</span>
-            <b>{step.title}</b>
-            <span>{step.body}</span>
-            <small>{step.action}</small>
-          </button>
-        ))}
       </section>
       <main className="panel">
         {tab === "dashboard" && <DashboardTab />}
@@ -602,6 +574,148 @@ function useAsync<T>() {
     }
   }
   return { loading, error, data, run };
+}
+
+function CommandCenter(props: {
+  currentTab: TabId;
+  financialsCsvPath: string;
+  onNavigate: (tab: TabId) => void;
+}) {
+  const statusState = useAsync<Json>();
+  const loadStatus = () =>
+    statusState.run(() =>
+      api<Json>("/api/data/status", {
+        financials_csv: props.financialsCsvPath,
+        stale_after_days: 7,
+      }),
+    );
+
+  useEffect(() => {
+    void loadStatus();
+  }, [props.financialsCsvPath]);
+
+  const byKey = (statusState.data?.by_key ?? {}) as Json;
+  const summary = (statusState.data?.summary ?? {}) as Json;
+  const readyCount = Number(summary.ready_count ?? 0);
+  const missingCount = Number(summary.missing_count ?? 0);
+  const signalRows = [
+    { key: "financials", label: "財務", target: "data" },
+    { key: "market_prices", label: "株価", target: "data" },
+    { key: "daily_bars", label: "日足", target: "data" },
+    { key: "company_master", label: "会社", target: "data" },
+  ] satisfies { key: string; label: string; target: TabId }[];
+
+  const missingFinancials = datasetStatus(byKey.financials) !== "ready";
+  const missingMarket = datasetStatus(byKey.market_prices) !== "ready";
+  const missingBars = datasetStatus(byKey.daily_bars) !== "ready";
+  const next =
+    missingFinancials
+      ? {
+          tab: "data" as const,
+          title: "まず財務データを整える",
+          body: "候補抽出、詳細、試算、レポートの共通土台です。取得済みCSVかEDINET更新から始めます。",
+          cta: "データを更新",
+        }
+      : missingMarket || missingBars
+        ? {
+            tab: "data" as const,
+            title: "市場価格と日足をそろえる",
+            body: "市場価格更新で保有価格へ反映できる状態にします。四本値・出来高は流動性確認にも使います。",
+            cta: "株価を更新",
+          }
+        : props.currentTab === "dashboard"
+          ? {
+              tab: "holdings" as const,
+              title: "保有を入れて現在地を見る",
+              body: "CSVまたは手入力で、評価額、NISA区分、配当・分配金の見込みを機械的に集計します。",
+              cta: "保有を入力",
+            }
+          : {
+              tab: "report" as const,
+              title: "根拠付きレポートにまとめる",
+              body: "重要KPI、計算式、出典、免責をひとつの流れで確認できます。",
+              cta: "レポートへ",
+            };
+
+  return (
+    <section className="command-center" aria-label="次に進むための司令塔">
+      <div className="command-lead">
+        <p className="eyebrow">次の一手</p>
+        <h2>{next.title}</h2>
+        <p>{next.body}</p>
+        <div className="command-actions">
+          <button className="primary" onClick={() => props.onNavigate(next.tab)}>
+            {next.cta}
+          </button>
+          <button onClick={() => void loadStatus()} disabled={statusState.loading}>
+            状態更新
+          </button>
+        </div>
+        {statusState.error && <p className="status error">状態取得エラー: {statusState.error}</p>}
+      </div>
+
+      <div className="command-signals" aria-label="データ状態">
+        <div>
+          <span>準備済み</span>
+          <b>{readyCount.toLocaleString()}</b>
+        </div>
+        <div>
+          <span>要確認</span>
+          <b>{missingCount.toLocaleString()}</b>
+        </div>
+        {signalRows.map((row) => {
+          const item = byKey[row.key] as Json | undefined;
+          const status = datasetStatus(item);
+          return (
+            <button
+              key={row.key}
+              className={`command-signal ${statusTone(status)}`}
+              onClick={() => props.onNavigate(row.target)}
+            >
+              <span>{row.label}</span>
+              <b>{statusLabel(status)}</b>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="command-flow" aria-label="主要操作">
+        {COMMAND_ACTIONS.map((action) => (
+          <button
+            key={action.id}
+            className={action.id === props.currentTab ? "command-step active" : "command-step"}
+            onClick={() => props.onNavigate(action.id)}
+          >
+            <span>{action.step}</span>
+            <b>{action.title}</b>
+            <small>{action.body}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function datasetStatus(item: unknown): string {
+  if (!item || typeof item !== "object") return "unknown";
+  const status = String((item as Json).status ?? "unknown");
+  return status.trim() || "unknown";
+}
+
+function statusLabel(status: string): string {
+  if (status === "ready" || status === "fresh") return "利用可";
+  if (status === "stale") return "更新推奨";
+  if (status === "missing") return "未取得";
+  if (status === "invalid" || status === "error") return "要確認";
+  return "確認中";
+}
+
+function statusTone(status: string): string {
+  if (status === "ready" || status === "fresh") return "ok";
+  if (status === "missing" || status === "stale" || status === "invalid" || status === "error") {
+    return "warn";
+  }
+  return "";
 }
 
 function sleep(ms: number): Promise<void> {
