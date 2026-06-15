@@ -3679,7 +3679,7 @@ function MarketDataPanel() {
   return (
     <section className="tool-section">
       <div className="section-head">
-        <h3>市場データ取得（Yahoo Finance）</h3>
+        <h3>市場データ取得（Yahoo!ファイナンス）</h3>
         <span className="badge">{mode === "ohlcv" ? "日足OHLCV" : "当日分足"}</span>
       </div>
       <p className="hint">
@@ -3940,7 +3940,7 @@ function SimulateTab() {
         <Field label="価格ソース">
           <select value={priceProvider} onChange={(e) => setPriceProvider(e.target.value)}>
             <option value="stooq_public_csv">Stooq</option>
-            <option value="yfinance">Yahoo Finance</option>
+            <option value="yfinance">Yahoo!ファイナンス</option>
           </select>
         </Field>
         <button onClick={() => void updatePrices()} disabled={busy || holdings.length === 0}>
