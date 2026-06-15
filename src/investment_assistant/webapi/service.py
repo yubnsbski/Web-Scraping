@@ -2055,8 +2055,12 @@ def _edinet_targets_registry_yaml(
 
 
 def _market_prices(body: JsonDict) -> JsonDict:
-    from investment_assistant.investment.provider_policy import ensure_provider_allowed
+    from investment_assistant.investment.provider_policy import (
+        ensure_provider_allowed,
+        provider_policy,
+    )
     from investment_assistant.jquants.client import JQuantsApiError, JQuantsClient
+    from investment_assistant.portfolio.price_store import DEFAULT_CURRENT_PRICES_CSV
     from investment_assistant.portfolio.prices import fetch_prices
 
     raw = body.get("tickers")
@@ -2070,6 +2074,31 @@ def _market_prices(body: JsonDict) -> JsonDict:
     try:
         policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
     except ValueError as exc:
+        if _as_bool(body.get("allow_cache_on_policy_block"), False):
+            policy = provider_policy(provider_id, runtime_mode=runtime_mode)
+            result = {
+                "prices": {ticker: None for ticker in tickers},
+                "notes": {ticker: str(exc) for ticker in tickers},
+                "provider_id": provider_id,
+                "auto_trading": False,
+                "call_real_api": False,
+                "provider_blocked": True,
+            }
+            _apply_market_price_store(
+                result,
+                tickers,
+                provider_id=provider_id,
+                path=Path(str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV)),
+            )
+            price_store = result.get("price_store")
+            cache_used = (
+                price_store.get("cache_used")
+                if isinstance(price_store, dict)
+                else []
+            )
+            result["provider_policy"] = policy.to_dict()
+            result["price_store_cache_hit"] = bool(cache_used)
+            return result
         raise ApiError(str(exc), status=400) from exc
     if provider_id.strip().lower() == _JQUANTS_PROVIDER_ID:
         try:
@@ -2085,8 +2114,110 @@ def _market_prices(body: JsonDict) -> JsonDict:
         result["provider_id"] = provider_id
         result["auto_trading"] = False
         result["call_real_api"] = provider_id.strip().lower() != "user_csv"
+    if _as_bool(body.get("use_price_store"), True):
+        _apply_market_price_store(
+            result,
+            tickers,
+            provider_id=provider_id,
+            path=Path(str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV)),
+        )
     result["provider_policy"] = policy.to_dict()
     return result
+
+
+def _apply_market_price_store(
+    result: JsonDict,
+    tickers: list[str],
+    *,
+    provider_id: str,
+    path: Path,
+) -> None:
+    from investment_assistant.portfolio.price_store import (
+        facts_from_price_response,
+        load_current_prices,
+        merge_market_price_facts,
+        normalize_ticker,
+        save_current_prices,
+    )
+
+    raw_prices = result.get("prices")
+    prices: dict[str, object] = dict(raw_prices) if isinstance(raw_prices, dict) else {}
+    raw_as_of = result.get("as_of")
+    as_of: dict[str, object] = dict(raw_as_of) if isinstance(raw_as_of, dict) else {}
+    raw_notes = result.get("notes")
+    notes: dict[str, object] = dict(raw_notes) if isinstance(raw_notes, dict) else {}
+    source_ref = str(result.get("source") or "")
+    cached = load_current_prices(path)
+    fetched_facts = facts_from_price_response(
+        tickers,
+        prices=prices,
+        as_of=as_of,
+        provider_id=provider_id,
+        source_ref=source_ref,
+        notes=notes,
+    )
+    cache_used: list[str] = []
+    for raw in tickers:
+        ticker = normalize_ticker(raw)
+        if not ticker:
+            continue
+        if prices.get(ticker) is not None or prices.get(str(raw)) is not None:
+            continue
+        fact = cached.get(ticker)
+        if fact is None:
+            continue
+        prices[str(raw)] = fact.price
+        if fact.as_of:
+            as_of[str(raw)] = fact.as_of
+        previous_note = str(notes.get(str(raw)) or "").strip()
+        notes[str(raw)] = (
+            f"{previous_note}; using_cached_price"
+            if previous_note
+            else "using_cached_price"
+        )
+        cache_used.append(ticker)
+
+    saved_path: str | None = None
+    total_count = len(cached)
+    if fetched_facts:
+        merged = merge_market_price_facts(cached.values(), fetched_facts)
+        saved_path = save_current_prices(merged, path)
+        total_count = len(merged)
+
+    result["prices"] = prices
+    result["as_of"] = as_of
+    result["notes"] = notes
+    result["price_store"] = {
+        "path": str(path),
+        "saved": bool(saved_path),
+        "saved_path": saved_path,
+        "saved_count": len(fetched_facts),
+        "cache_used": cache_used,
+        "cached_count_before": len(cached),
+        "total_count": total_count,
+        "auto_trading": False,
+    }
+
+
+def _data_status(body: JsonDict) -> JsonDict:
+    from investment_assistant.financials.current_yield import DEFAULT_CURRENT_YIELDS_CSV
+    from investment_assistant.investment.data_catalog import (
+        DEFAULT_COMPANY_MASTER_CSV,
+        build_data_catalog,
+    )
+    from investment_assistant.investment.universe import DEFAULT_JPX_LISTED_ISSUES_PATH
+    from investment_assistant.portfolio.price_store import DEFAULT_CURRENT_PRICES_CSV
+
+    catalog = build_data_catalog(
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        jpx_listed_path=str(body.get("jpx_listed_path") or DEFAULT_JPX_LISTED_ISSUES_PATH),
+        company_master_path=str(body.get("company_master_path") or DEFAULT_COMPANY_MASTER_CSV),
+        market_prices_path=str(body.get("market_prices_path") or DEFAULT_CURRENT_PRICES_CSV),
+        current_yields_path=str(body.get("current_yields_path") or DEFAULT_CURRENT_YIELDS_CSV),
+        stale_after_days=max(_as_int(body.get("stale_after_days"), 7), 1),
+    )
+    catalog["jquants"] = _jquants_status({})
+    return catalog
 
 
 def _market_current_yields_import(body: JsonDict) -> JsonDict:
@@ -3195,6 +3326,8 @@ def _yaml_scalar(value: object) -> str:
 
 _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/health"): _health,
+    ("GET", "/api/data/status"): _data_status,
+    ("POST", "/api/data/status"): _data_status,
     ("GET", "/api/budget"): _budget,
     ("GET", "/api/runtime/real-api"): _runtime_real_api_status,
     ("POST", "/api/runtime/real-api"): _runtime_real_api_set,

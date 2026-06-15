@@ -149,6 +149,11 @@ textarea {
   border-color: rgba(245, 158, 11, 0.5);
 }
 
+.badge.ok {
+  color: var(--safe);
+  border-color: rgba(34, 197, 94, 0.48);
+}
+
 .metric-grid,
 .guide-grid {
   display: grid;
@@ -594,6 +599,26 @@ button:disabled {
 
 .manual-financials-panel textarea {
   min-height: 220px;
+}
+
+.data-status-panel {
+  margin-block: 16px;
+}
+
+.data-status-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.data-status-card {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.data-status-card .mono {
+  overflow-wrap: anywhere;
 }
 
 .edinet-comparison {

@@ -1903,6 +1903,40 @@ def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     assert "not allowed in production" in payload["error"]
 
 
+def test_market_prices_can_use_cache_when_provider_is_policy_blocked(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", raising=False)
+    monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
+    store_path = tmp_path / "current_prices.csv"
+    store_path.write_text(
+        "ticker,price,as_of,provider_id,source_ref,note\n"
+        "9433,4970,2026-06-15,jquants,unit,\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices",
+        {
+            "tickers": ["9433"],
+            "provider_id": "jquants",
+            "runtime_mode": "production",
+            "price_store_path": str(store_path),
+            "allow_cache_on_policy_block": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["provider_blocked"] is True
+    assert payload["call_real_api"] is False
+    assert payload["prices"] == {"9433": 4970.0}
+    assert payload["price_store"]["cache_used"] == ["9433"]
+
+
 def test_market_prices_uses_jquants_provider_when_contracted(monkeypatch) -> None:
     from investment_assistant.jquants.client import JQuantsClient
 
@@ -1944,6 +1978,115 @@ def test_market_prices_uses_jquants_provider_when_contracted(monkeypatch) -> Non
     assert payload["prices"] == {"8306": 1234.0}
     assert payload["provider_id"] == "jquants"
     assert payload["provider_policy"]["production_allowed"] is True
+    assert payload["auto_trading"] is False
+
+
+def test_market_prices_saves_and_reuses_local_price_store(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.portfolio import prices as price_module
+
+    store_path = tmp_path / "current_prices.csv"
+
+    def first_fetch(tickers: list[str]) -> dict[str, object]:
+        assert tickers == ["9433"]
+        return {
+            "prices": {"9433": 4970.0},
+            "notes": {},
+            "source": "unit-price-source",
+        }
+
+    monkeypatch.setattr(price_module, "fetch_prices", first_fetch)
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices",
+        {
+            "tickers": ["9433"],
+            "provider_id": "stooq_public_csv",
+            "runtime_mode": "development",
+            "price_store_path": str(store_path),
+        },
+    )
+
+    assert status == 200
+    assert payload["prices"] == {"9433": 4970.0}
+    assert payload["price_store"]["saved"] is True
+    assert payload["price_store"]["saved_count"] == 1
+    assert store_path.is_file()
+
+    def missing_fetch(tickers: list[str]) -> dict[str, object]:
+        assert tickers == ["9433"]
+        return {
+            "prices": {"9433": None},
+            "notes": {"9433": "provider_miss"},
+            "source": "unit-price-source",
+        }
+
+    monkeypatch.setattr(price_module, "fetch_prices", missing_fetch)
+    status, cached = handle_api(
+        "POST",
+        "/api/market/prices",
+        {
+            "tickers": ["9433"],
+            "provider_id": "stooq_public_csv",
+            "runtime_mode": "development",
+            "price_store_path": str(store_path),
+        },
+    )
+
+    assert status == 200
+    assert cached["prices"] == {"9433": 4970.0}
+    assert cached["price_store"]["saved"] is False
+    assert cached["price_store"]["cache_used"] == ["9433"]
+    assert "using_cached_price" in cached["notes"]["9433"]
+
+
+def test_data_status_summarizes_canonical_local_sources(tmp_path: Path) -> None:
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "9433,KDDI,2025,1000,45,145,stable\n",
+        encoding="utf-8",
+    )
+    listed = tmp_path / "listed_issues.csv"
+    listed.write_text(
+        "date,code,name,market segment,33 sector\n"
+        "2026-05-31,9433,KDDI,Prime Market (Domestic Stock),Information\n",
+        encoding="utf-8",
+    )
+    company_master = tmp_path / "company_master.csv"
+    company_master.write_text(
+        "ticker,name,market_segment,has_financials\n"
+        "9433,KDDI,プライム（国内株式）,true\n",
+        encoding="utf-8",
+    )
+    prices = tmp_path / "current_prices.csv"
+    prices.write_text(
+        "ticker,price,as_of,provider_id,source_ref,note\n"
+        "9433,4970,2026-06-15,jquants,unit,\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/data/status",
+        {
+            "financials_csv": str(financials),
+            "jpx_listed_path": str(listed),
+            "company_master_path": str(company_master),
+            "market_prices_path": str(prices),
+            "current_yields_path": str(tmp_path / "missing_yields.csv"),
+            "stale_after_days": 9999,
+        },
+    )
+
+    assert status == 200
+    assert payload["by_key"]["financials"]["company_count"] == 1
+    assert payload["by_key"]["jpx_listed"]["prime_count"] == 1
+    assert payload["by_key"]["company_master"]["financials_count"] == 1
+    assert payload["by_key"]["market_prices"]["ticker_count"] == 1
+    assert payload["by_key"]["current_yields"]["status"] == "missing"
     assert payload["auto_trading"] is False
 
 

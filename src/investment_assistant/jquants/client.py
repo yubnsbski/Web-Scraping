@@ -57,8 +57,25 @@ class JQuantsClient:
     ) -> JsonDict:
         """Fetch stock OHLC rows from ``/v2/equities/bars/daily``."""
 
+        return self._daily_bars_for_code(
+            normalize_equity_code(code),
+            date=date,
+            from_date=from_date,
+            to_date=to_date,
+            pagination_key=pagination_key,
+        )
+
+    def _daily_bars_for_code(
+        self,
+        code: str,
+        *,
+        date: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        pagination_key: str | None = None,
+    ) -> JsonDict:
         query = {
-            "code": normalize_equity_code(code),
+            "code": code,
             "date": _compact_date(date),
             "from": _compact_date(from_date),
             "to": _compact_date(to_date),
@@ -90,19 +107,32 @@ class JQuantsClient:
             ticker = str(raw).strip()
             if not ticker or ticker in prices:
                 continue
+            errors: list[str] = []
+            candidates = candidate_equity_codes(ticker)
             try:
-                result = self.daily_bars(
-                    ticker,
-                    date=date,
-                    from_date=None if date else from_date.isoformat(),
-                    to_date=None if date else today.isoformat(),
-                )
+                result: JsonDict | None = None
+                for code in candidates:
+                    try:
+                        result = self._daily_bars_for_code(
+                            code,
+                            date=date,
+                            from_date=None if date else from_date.isoformat(),
+                            to_date=None if date else today.isoformat(),
+                        )
+                        price, row_date = _latest_close(result["rows"])
+                        if price is not None:
+                            break
+                        errors.append(f"{code}: no_close_price_returned")
+                    except JQuantsApiError as exc:
+                        errors.append(f"{code}: {exc}")
+                if result is None:
+                    raise JQuantsApiError("; ".join(errors) or "no J-Quants response")
                 price, row_date = _latest_close(result["rows"])
                 prices[ticker] = price
                 if row_date:
                     as_of[ticker] = row_date
                 if price is None:
-                    notes[ticker] = "no_close_price_returned"
+                    notes[ticker] = "; ".join(errors) or "no_close_price_returned"
             except JQuantsApiError as exc:
                 prices[ticker] = None
                 notes[ticker] = str(exc)
@@ -137,7 +167,7 @@ class JQuantsClient:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read()
         except HTTPError as exc:
-            raise JQuantsApiError(f"J-Quants API returned HTTP {exc.code}") from exc
+            raise JQuantsApiError(_http_error_message(exc, path, cleaned)) from exc
         except URLError as exc:
             raise JQuantsApiError(f"J-Quants API connection failed: {exc.reason}") from exc
         try:
@@ -159,6 +189,25 @@ def normalize_equity_code(code: str) -> str:
     return digits or raw
 
 
+def candidate_equity_codes(code: str) -> tuple[str, ...]:
+    """Return J-Quants code candidates for visible Japanese security codes."""
+
+    raw = str(code or "").strip().upper()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    primary = normalize_equity_code(code)
+    candidates: list[str] = []
+    for candidate in (primary, digits):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    if len(digits) == 5 and digits.endswith("0"):
+        visible = digits[:4]
+        if visible not in candidates:
+            candidates.append(visible)
+    if not digits and raw and raw not in candidates:
+        candidates.append(raw)
+    return tuple(candidates)
+
+
 def _env_api_key() -> str:
     return os.getenv(API_KEY_ENV_VAR, "").strip() or os.getenv(REFRESH_TOKEN_ENV_VAR, "").strip()
 
@@ -173,7 +222,7 @@ def _compact_date(value: str | None) -> str | None:
 
 
 def _extract_rows(payload: JsonDict) -> list[JsonDict]:
-    for key in ("daily_quotes", "bars", "data", "items", "equities"):
+    for key in ("daily_bars", "daily_quotes", "bars", "data", "items", "equities"):
         value = payload.get(key)
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
@@ -204,3 +253,18 @@ def _positive_float(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _http_error_message(exc: HTTPError, path: str, params: Mapping[str, str]) -> str:
+    try:
+        raw = exc.read(500)
+    except Exception:  # noqa: BLE001 - HTTPError body is best-effort diagnostics only
+        raw = b""
+    detail = raw.decode("utf-8", errors="replace").strip()
+    safe_params = ", ".join(f"{key}={value}" for key, value in params.items() if key != "x-api-key")
+    message = f"J-Quants API returned HTTP {exc.code} for {path}"
+    if safe_params:
+        message = f"{message} ({safe_params})"
+    if detail:
+        message = f"{message}: {detail[:300]}"
+    return message

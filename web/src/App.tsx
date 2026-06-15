@@ -4097,6 +4097,7 @@ function ScrapeTab({
   const jpxDownloadState = useAsync<Json>();
   const companyMasterState = useAsync<Json>();
   const missingRegistryState = useAsync<Json>();
+  const dataStatusState = useAsync<Json>();
 
   useEffect(() => {
     setManualFinancialsOutputPath(financialsCsvPath);
@@ -4105,6 +4106,13 @@ function ScrapeTab({
   useEffect(() => {
     void edinetStatusState.run(() => api<Json>("/api/edinet/status"));
     void jquantsStatusState.run(() => api<Json>("/api/jquants/status"));
+    void dataStatusState.run(() =>
+      api<Json>("/api/data/status", {
+        financials_csv: financialsCsvPath,
+        jpx_listed_path: jpxListedOutputPath,
+        company_master_path: companyMasterOutputPath,
+      }),
+    );
   }, []);
 
   function currentSource() {
@@ -4359,6 +4367,15 @@ function ScrapeTab({
       }),
     );
 
+  const refreshDataStatus = () =>
+    dataStatusState.run(() =>
+      api<Json>("/api/data/status", {
+        financials_csv: financialsCsvPath,
+        jpx_listed_path: jpxListedOutputPath,
+        company_master_path: companyMasterOutputPath,
+      }),
+    );
+
   const saveManual = () =>
     manualState.run(() =>
       api<Json>("/api/manual-doc/save", {
@@ -4372,6 +4389,9 @@ function ScrapeTab({
   const dryResults: Json[] = sourceState.data?.dry_run?.results ?? [];
   const results: Json[] = sourceState.data?.run?.results ?? sourceState.data?.results ?? [];
   const jquantsPolicy = jquantsStatusState.data?.provider_policy as Json | undefined;
+  const dataStatusDatasets: Json[] = Array.isArray(dataStatusState.data?.datasets)
+    ? (dataStatusState.data?.datasets as Json[])
+    : [];
   return (
     <section className="tool-section">
       <div className="section-head">
@@ -4383,6 +4403,64 @@ function ScrapeTab({
       </div>
 
       <GuideCards items={SCRAPE_GUIDES} />
+
+      <div className="edinet-ingest data-status-panel">
+        <div className="report-audit-head">
+          <div>
+            <h3>データ整理</h3>
+            <p className="hint">
+              アプリが読む財務・会社・株価データをまとめて確認します。
+            </p>
+          </div>
+          <button onClick={refreshDataStatus} disabled={dataStatusState.loading}>
+            状態を更新
+          </button>
+        </div>
+        <Status loading={dataStatusState.loading} error={dataStatusState.error} />
+        {dataStatusState.data && (
+          <>
+            <p className="callout">
+              状態: <b>{String(dataStatusState.data.status)}</b> / 準備済み{" "}
+              {String((dataStatusState.data.summary as Json | undefined)?.ready_count ?? 0)}件 / 要確認{" "}
+              {String((dataStatusState.data.summary as Json | undefined)?.missing_count ?? 0)}件
+            </p>
+            <div className="data-status-grid">
+              {dataStatusDatasets.map((dataset) => (
+                <article key={String(dataset.key)} className="guide-card data-status-card">
+                  <b>{String(dataset.label)}</b>
+                  <span className={`badge ${dataset.status === "ready" ? "ok" : "warn"}`}>
+                    {String(dataset.status)}
+                  </span>
+                  <p className="mono">{String(dataset.path)}</p>
+                  <p className="hint">
+                    件数 {String(dataset.row_count ?? dataset.ticker_count ?? 0)}
+                    {dataset.company_count != null
+                      ? ` / 会社 ${String(dataset.company_count)}`
+                      : ""}
+                    {dataset.prime_count != null
+                      ? ` / Prime ${String(dataset.prime_count)}`
+                      : ""}
+                  </p>
+                  {dataset.latest_as_of && (
+                    <p className="hint">基準日 {String(dataset.latest_as_of)}</p>
+                  )}
+                </article>
+              ))}
+            </div>
+            {Array.isArray(dataStatusState.data.next_actions) &&
+              dataStatusState.data.next_actions.length > 0 && (
+                <div className="callout warn-callout">
+                  <b>次にやること</b>
+                  <ul>
+                    {(dataStatusState.data.next_actions as string[]).map((action) => (
+                      <li key={action}>{action}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+          </>
+        )}
+      </div>
 
       <div className="workflow">
         <article className="step-card">
@@ -5573,6 +5651,7 @@ function SimulateTab({
       provider_id: priceProvider,
       runtime_mode: priceProvider === "jquants" ? "production" : "development",
       lookback_days: 14,
+      allow_cache_on_policy_block: true,
     });
   };
 
