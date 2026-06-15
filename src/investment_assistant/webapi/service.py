@@ -55,6 +55,32 @@ _JQUANTS_CAPABILITIES: tuple[JsonDict, ...] = (
         "endpoint": "/v2/equities/bars/daily",
         "status": "implemented",
         "use": "シミュレーションと保有分析の現在価格補完に利用",
+        "local_endpoint": "/api/market/bars",
+        "data_items": [
+            "日付",
+            "始値",
+            "高値",
+            "安値",
+            "終値",
+            "出来高",
+            "売買代金",
+            "調整後四本値",
+            "調整後出来高",
+        ],
+        "can_do": [
+            "終値を現在価格として補完する",
+            "指定期間の価格推移と出来高を保存する",
+            "調整後終値ベースの騰落率を計算する",
+            "期間高値・安値・平均出来高を確認する",
+            "配当利回りや保有損益の株価基準日をそろえる",
+        ],
+        "not_doing": [
+            "売買推奨",
+            "自動売買",
+            "将来リターンの断定予測",
+            "第三者へのJ-Quants生データ再配布",
+        ],
+        "storage": "local_docs/market/daily_bars.csv",
     },
     {
         "key": "financial_summary",
@@ -2060,6 +2086,7 @@ def _market_prices(body: JsonDict) -> JsonDict:
         provider_policy,
     )
     from investment_assistant.jquants.client import JQuantsApiError, JQuantsClient
+    from investment_assistant.portfolio.bar_store import DEFAULT_DAILY_BARS_CSV
     from investment_assistant.portfolio.price_store import DEFAULT_CURRENT_PRICES_CSV
     from investment_assistant.portfolio.prices import fetch_prices
 
@@ -2089,6 +2116,7 @@ def _market_prices(body: JsonDict) -> JsonDict:
                 tickers,
                 provider_id=provider_id,
                 path=Path(str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV)),
+                daily_bars_path=Path(str(body.get("daily_bars_path") or DEFAULT_DAILY_BARS_CSV)),
             )
             price_store = result.get("price_store")
             cache_used = (
@@ -2120,6 +2148,69 @@ def _market_prices(body: JsonDict) -> JsonDict:
             tickers,
             provider_id=provider_id,
             path=Path(str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV)),
+            daily_bars_path=Path(str(body.get("daily_bars_path") or DEFAULT_DAILY_BARS_CSV)),
+        )
+    result["provider_policy"] = policy.to_dict()
+    return result
+
+
+def _market_bars(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.provider_policy import (
+        ensure_provider_allowed,
+        provider_policy,
+    )
+    from investment_assistant.jquants.client import JQuantsClient
+    from investment_assistant.portfolio.bar_store import DEFAULT_DAILY_BARS_CSV
+    from investment_assistant.portfolio.price_store import DEFAULT_CURRENT_PRICES_CSV
+
+    raw = body.get("tickers")
+    tickers = [str(t) for t in raw] if isinstance(raw, list) else []
+    provider_id = str(body.get("provider_id") or _JQUANTS_PROVIDER_ID)
+    runtime_mode = str(
+        body.get("runtime_mode")
+        or os.getenv("INVESTMENT_ASSISTANT_RUNTIME_MODE")
+        or "development"
+    )
+    store_path = Path(str(body.get("bar_store_path") or DEFAULT_DAILY_BARS_CSV))
+    try:
+        policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
+    except ValueError as exc:
+        if _as_bool(body.get("allow_cache_on_policy_block"), False):
+            policy = provider_policy(provider_id, runtime_mode=runtime_mode)
+            result = {
+                "bars": [],
+                "notes": {ticker: str(exc) for ticker in tickers},
+                "provider_id": provider_id,
+                "provider_blocked": True,
+                "auto_trading": False,
+                "call_real_api": False,
+            }
+            _apply_daily_bar_store(
+                result,
+                tickers,
+                path=store_path,
+                price_path=Path(str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV)),
+                lookback_days=_as_int(body.get("lookback_days"), 30),
+            )
+            result["provider_policy"] = policy.to_dict()
+            return result
+        raise ApiError(str(exc), status=400) from exc
+
+    if provider_id.strip().lower() != _JQUANTS_PROVIDER_ID:
+        raise ApiError("daily OHLCV bars are currently implemented for J-Quants only")
+
+    result = JQuantsClient().fetch_daily_bars(
+        tickers,
+        date=str(body.get("date") or "").strip() or None,
+        lookback_days=_as_int(body.get("lookback_days"), 30),
+    )
+    if _as_bool(body.get("use_bar_store"), True):
+        _apply_daily_bar_store(
+            result,
+            tickers,
+            path=store_path,
+            price_path=Path(str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV)),
+            lookback_days=_as_int(body.get("lookback_days"), 30),
         )
     result["provider_policy"] = policy.to_dict()
     return result
@@ -2131,8 +2222,15 @@ def _apply_market_price_store(
     *,
     provider_id: str,
     path: Path,
+    daily_bars_path: Path | None = None,
 ) -> None:
+    from investment_assistant.portfolio.bar_store import (
+        filter_daily_bars,
+        latest_price_facts_from_bars,
+        load_daily_bars,
+    )
     from investment_assistant.portfolio.price_store import (
+        MarketPriceFact,
         facts_from_price_response,
         load_current_prices,
         merge_market_price_facts,
@@ -2156,7 +2254,21 @@ def _apply_market_price_store(
         source_ref=source_ref,
         notes=notes,
     )
+    bar_price_facts: dict[str, MarketPriceFact] = {}
+    if daily_bars_path is not None:
+        cached_bars = load_daily_bars(daily_bars_path)
+        visible_bars = filter_daily_bars(cached_bars, tickers=tickers, limit_per_ticker=1)
+        bar_price_facts = {
+            fact.ticker: fact
+            for fact in latest_price_facts_from_bars(
+                visible_bars,
+                source_ref=str(daily_bars_path),
+            )
+        }
+
     cache_used: list[str] = []
+    daily_bar_used: list[str] = []
+    daily_bar_facts_used: list[MarketPriceFact] = []
     for raw in tickers:
         ticker = normalize_ticker(raw)
         if not ticker:
@@ -2164,23 +2276,28 @@ def _apply_market_price_store(
         if prices.get(ticker) is not None or prices.get(str(raw)) is not None:
             continue
         fact = cached.get(ticker)
+        note = "using_cached_price"
+        if fact is None:
+            fact = bar_price_facts.get(ticker)
+            note = "using_daily_bar_close"
         if fact is None:
             continue
         prices[str(raw)] = fact.price
         if fact.as_of:
             as_of[str(raw)] = fact.as_of
         previous_note = str(notes.get(str(raw)) or "").strip()
-        notes[str(raw)] = (
-            f"{previous_note}; using_cached_price"
-            if previous_note
-            else "using_cached_price"
-        )
-        cache_used.append(ticker)
+        notes[str(raw)] = f"{previous_note}; {note}" if previous_note else note
+        if note == "using_daily_bar_close":
+            daily_bar_used.append(ticker)
+            daily_bar_facts_used.append(fact)
+        else:
+            cache_used.append(ticker)
 
     saved_path: str | None = None
     total_count = len(cached)
-    if fetched_facts:
-        merged = merge_market_price_facts(cached.values(), fetched_facts)
+    facts_to_save = fetched_facts + daily_bar_facts_used
+    if facts_to_save:
+        merged = merge_market_price_facts(cached.values(), facts_to_save)
         saved_path = save_current_prices(merged, path)
         total_count = len(merged)
 
@@ -2191,8 +2308,89 @@ def _apply_market_price_store(
         "path": str(path),
         "saved": bool(saved_path),
         "saved_path": saved_path,
-        "saved_count": len(fetched_facts),
+        "saved_count": len(facts_to_save),
         "cache_used": cache_used,
+        "daily_bar_cache_used": daily_bar_used,
+        "daily_bars_path": str(daily_bars_path) if daily_bars_path else "",
+        "cached_count_before": len(cached),
+        "total_count": total_count,
+        "auto_trading": False,
+    }
+
+
+def _apply_daily_bar_store(
+    result: JsonDict,
+    tickers: list[str],
+    *,
+    path: Path,
+    price_path: Path | None,
+    lookback_days: int,
+) -> None:
+    from investment_assistant.portfolio.bar_store import (
+        daily_bar_fact_from_row,
+        filter_daily_bars,
+        latest_price_facts_from_bars,
+        load_daily_bars,
+        merge_daily_bars,
+        save_daily_bars,
+        summarize_daily_bars,
+    )
+    from investment_assistant.portfolio.price_store import (
+        load_current_prices,
+        merge_market_price_facts,
+        save_current_prices,
+    )
+
+    raw_bars = result.get("bars")
+    fetched = [
+        fact
+        for item in (raw_bars if isinstance(raw_bars, list) else [])
+        if isinstance(item, dict) and (fact := daily_bar_fact_from_row(item)) is not None
+    ]
+    cached = load_daily_bars(path)
+    if fetched:
+        merged = merge_daily_bars(cached, fetched)
+        saved_path = save_daily_bars(merged, path)
+        visible = filter_daily_bars(merged, tickers=tickers, limit_per_ticker=lookback_days)
+        result["bars"] = [fact.to_dict() for fact in visible]
+        result["summary"] = summarize_daily_bars(visible)
+        cache_used: list[str] = []
+        saved = True
+        total_count = len(merged)
+    else:
+        visible = filter_daily_bars(cached, tickers=tickers, limit_per_ticker=lookback_days)
+        result["bars"] = [fact.to_dict() for fact in visible]
+        result["summary"] = summarize_daily_bars(visible)
+        cache_used = sorted({fact.ticker for fact in visible})
+        saved_path = None
+        saved = False
+        total_count = len(cached)
+    price_sync: dict[str, object] = {
+        "saved": False,
+        "saved_path": None,
+        "saved_count": 0,
+        "path": str(price_path) if price_path else "",
+    }
+    if price_path is not None and visible:
+        price_facts = latest_price_facts_from_bars(visible, source_ref=str(path))
+        if price_facts:
+            current_prices = load_current_prices(price_path)
+            merged_prices = merge_market_price_facts(current_prices.values(), price_facts)
+            price_saved_path = save_current_prices(merged_prices, price_path)
+            price_sync = {
+                "saved": True,
+                "saved_path": price_saved_path,
+                "saved_count": len(price_facts),
+                "path": str(price_path),
+                "tickers": [fact.ticker for fact in price_facts],
+            }
+    result["bar_store"] = {
+        "path": str(path),
+        "saved": saved,
+        "saved_path": saved_path,
+        "saved_count": len(fetched),
+        "cache_used": cache_used,
+        "price_sync": price_sync,
         "cached_count_before": len(cached),
         "total_count": total_count,
         "auto_trading": False,
@@ -2206,6 +2404,7 @@ def _data_status(body: JsonDict) -> JsonDict:
         build_data_catalog,
     )
     from investment_assistant.investment.universe import DEFAULT_JPX_LISTED_ISSUES_PATH
+    from investment_assistant.portfolio.bar_store import DEFAULT_DAILY_BARS_CSV
     from investment_assistant.portfolio.price_store import DEFAULT_CURRENT_PRICES_CSV
 
     catalog = build_data_catalog(
@@ -2213,6 +2412,7 @@ def _data_status(body: JsonDict) -> JsonDict:
         jpx_listed_path=str(body.get("jpx_listed_path") or DEFAULT_JPX_LISTED_ISSUES_PATH),
         company_master_path=str(body.get("company_master_path") or DEFAULT_COMPANY_MASTER_CSV),
         market_prices_path=str(body.get("market_prices_path") or DEFAULT_CURRENT_PRICES_CSV),
+        daily_bars_path=str(body.get("daily_bars_path") or DEFAULT_DAILY_BARS_CSV),
         current_yields_path=str(body.get("current_yields_path") or DEFAULT_CURRENT_YIELDS_CSV),
         stale_after_days=max(_as_int(body.get("stale_after_days"), 7), 1),
     )
@@ -3357,6 +3557,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/companies/status"): _companies_master_status,
     ("POST", "/api/companies/refresh"): _companies_master_refresh,
     ("POST", "/api/market/prices"): _market_prices,
+    ("POST", "/api/market/bars"): _market_bars,
     ("POST", "/api/market/current-yields/import"): _market_current_yields_import,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,

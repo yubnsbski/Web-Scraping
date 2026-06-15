@@ -75,3 +75,55 @@ def test_fetch_latest_prices_falls_back_to_visible_four_digit_code() -> None:
     assert tried == ["94330", "9433"]
     assert result["prices"] == {"9433": 4970.0}
     assert result["as_of"] == {"9433": "2026-06-12"}
+
+
+def test_fetch_daily_bars_returns_normalized_ohlcv_summary() -> None:
+    captured: dict[str, object] = {}
+
+    def fake_fetch(
+        path: str,
+        params: Mapping[str, str],
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:
+        captured["path"] = path
+        captured["params"] = dict(params)
+        captured["headers"] = dict(headers)
+        return {
+            "data": [
+                {
+                    "Date": "2026-06-12",
+                    "Code": "94330",
+                    "O": 4900,
+                    "H": 5010,
+                    "L": 4890,
+                    "C": 4970,
+                    "Vo": 1200000,
+                    "Va": 5964000000,
+                    "AdjC": 4970,
+                },
+                {
+                    "Date": "2026-06-15",
+                    "Code": "94330",
+                    "O": 4970,
+                    "H": 5020,
+                    "L": 4950,
+                    "C": 5000,
+                    "Vo": 1300000,
+                    "Va": 6500000000,
+                    "AdjC": 5000,
+                },
+            ],
+        }
+
+    client = JQuantsClient(api_key="unit-key", fetch_json=fake_fetch)
+
+    result = client.fetch_daily_bars(["9433"], lookback_days=5)
+
+    assert captured["path"] == "/equities/bars/daily"
+    assert captured["params"]["code"] == "94330"  # type: ignore[index]
+    assert len(result["bars"]) == 2
+    assert result["bars"][0]["ticker"] == "9433"
+    assert result["bars"][0]["volume"] == 1200000.0
+    summary = result["summary"]["tickers"]["9433"]  # type: ignore[index]
+    assert summary["latest_close"] == 5000.0
+    assert summary["return_pct"] == 0.603622

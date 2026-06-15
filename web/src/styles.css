@@ -621,6 +621,14 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.compact-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .edinet-comparison {
   margin-top: 12px;
 }

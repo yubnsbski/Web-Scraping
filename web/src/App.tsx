@@ -767,6 +767,13 @@ function downloadTextFile(filename: string, text: string, type = "text/csv"): vo
   URL.revokeObjectURL(url);
 }
 
+function splitTickerInput(value: string): string[] {
+  return value
+    .split(/[\s,、，]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 async function readCsvFileText(file: File): Promise<string> {
   const buffer = await file.arrayBuffer();
   for (const encoding of ["utf-8", "shift_jis", "euc-jp"]) {
@@ -4070,6 +4077,8 @@ function ScrapeTab({
   const [edinetApiKeyInput, setEdinetApiKeyInput] = useState("");
   const [jquantsApiKeyInput, setJquantsApiKeyInput] = useState("");
   const [jquantsContractAcknowledged, setJquantsContractAcknowledged] = useState(false);
+  const [jquantsBarTickers, setJquantsBarTickers] = useState("9433,8306");
+  const [jquantsBarLookbackDays, setJquantsBarLookbackDays] = useState(30);
   const [allDomesticRegistryPath, setAllDomesticRegistryPath] = useState(
     "local_docs/edinet/source_registry_all_domestic_edinet.yaml",
   );
@@ -4092,6 +4101,7 @@ function ScrapeTab({
   const edinetState = useAsync<Json>();
   const edinetStatusState = useAsync<Json>();
   const jquantsStatusState = useAsync<Json>();
+  const jquantsBarsState = useAsync<Json>();
   const financialsState = useAsync<Json>();
   const jpxListedState = useAsync<Json>();
   const jpxDownloadState = useAsync<Json>();
@@ -4375,6 +4385,19 @@ function ScrapeTab({
         company_master_path: companyMasterOutputPath,
       }),
     );
+
+  const refreshJquantsBars = () =>
+    jquantsBarsState.run(async () => {
+      const result = await api<Json>("/api/market/bars", {
+        tickers: splitTickerInput(jquantsBarTickers),
+        provider_id: "jquants",
+        runtime_mode: "production",
+        lookback_days: jquantsBarLookbackDays,
+        allow_cache_on_policy_block: true,
+      });
+      await refreshDataStatus();
+      return result;
+    });
 
   const saveManual = () =>
     manualState.run(() =>
@@ -4793,10 +4816,80 @@ function ScrapeTab({
                 </div>
                 <p className="mono">{String(item.endpoint)}</p>
                 <small>{String(item.use)}</small>
+                {Array.isArray(item.can_do) && (
+                  <ul className="compact-list">
+                    {(item.can_do as string[]).map((text) => (
+                      <li key={text}>{text}</li>
+                    ))}
+                  </ul>
+                )}
+                {Array.isArray(item.not_doing) && (
+                  <p className="hint">除外: {(item.not_doing as string[]).join(" / ")}</p>
+                )}
+                {item.storage && <p className="mono">保存: {String(item.storage)}</p>}
               </article>
             ))}
           </div>
         )}
+        <div className="subpanel csv-manual-panel">
+          <h4>株価四本値・出来高を更新</h4>
+          <p className="hint">
+            日次OHLCVを取得して、価格推移・出来高・調整後終値の要約に使います。売買推奨や自動売買は行いません。
+          </p>
+          <div className="form">
+            <Field label="証券コード">
+              <input
+                value={jquantsBarTickers}
+                onChange={(e) => setJquantsBarTickers(e.target.value)}
+                placeholder="9433, 8306"
+              />
+            </Field>
+            <Field label="取得日数">
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={jquantsBarLookbackDays}
+                onChange={(e) => setJquantsBarLookbackDays(Number(e.target.value))}
+              />
+            </Field>
+            <button onClick={refreshJquantsBars} disabled={jquantsBarsState.loading}>
+              OHLCVを更新
+            </button>
+          </div>
+          <Status loading={jquantsBarsState.loading} error={jquantsBarsState.error} />
+          {jquantsBarsState.data && (
+            <div className="callout">
+              取得行数: {String((jquantsBarsState.data.bars as Json[] | undefined)?.length ?? 0)} / 保存:{" "}
+              {String((jquantsBarsState.data.bar_store as Json | undefined)?.saved ?? false)}
+              <br />
+              保存先:{" "}
+              <span className="mono">
+                {String((jquantsBarsState.data.bar_store as Json | undefined)?.path ?? "local_docs/market/daily_bars.csv")}
+              </span>
+              {jquantsBarsState.data.provider_blocked ? (
+                <>
+                  <br />
+                  <span className="warn-text">J-Quants本体は未設定または未許可です。保存済みデータのみ表示します。</span>
+                </>
+              ) : null}
+              {jquantsBarsState.data.summary?.tickers && (
+                <div className="operator-grid">
+                  {Object.values(jquantsBarsState.data.summary.tickers as Json).map((summary: Json) => (
+                    <article className="operator-card" key={String(summary.ticker)}>
+                      <b>{String(summary.ticker)}</b>
+                      <small>
+                        {String(summary.latest_date ?? "-")} / 終値 {String(summary.latest_close ?? "-")} / 出来高{" "}
+                        {String(summary.latest_volume ?? "-")}
+                      </small>
+                      <small>期間騰落率 {String(summary.return_pct ?? "-")}%</small>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="edinet-ingest">

@@ -23,6 +23,10 @@ from investment_assistant.portfolio.price_store import (
     DEFAULT_CURRENT_PRICES_CSV,
     load_current_prices,
 )
+from investment_assistant.portfolio.bar_store import (
+    DEFAULT_DAILY_BARS_CSV,
+    load_daily_bars,
+)
 
 JsonDict = dict[str, Any]
 DEFAULT_COMPANY_MASTER_CSV = Path("local_docs/company_master/company_master.csv")
@@ -34,6 +38,7 @@ def build_data_catalog(
     jpx_listed_path: str | Path = DEFAULT_JPX_LISTED_ISSUES_PATH,
     company_master_path: str | Path = DEFAULT_COMPANY_MASTER_CSV,
     market_prices_path: str | Path = DEFAULT_CURRENT_PRICES_CSV,
+    daily_bars_path: str | Path = DEFAULT_DAILY_BARS_CSV,
     current_yields_path: str | Path = DEFAULT_CURRENT_YIELDS_CSV,
     stale_after_days: int = 7,
 ) -> JsonDict:
@@ -45,6 +50,7 @@ def build_data_catalog(
         _jpx_listed_dataset(Path(jpx_listed_path), stale_days),
         _company_master_dataset(Path(company_master_path), stale_days),
         _market_prices_dataset(Path(market_prices_path), stale_days),
+        _daily_bars_dataset(Path(daily_bars_path), stale_days),
         _current_yields_dataset(Path(current_yields_path), stale_days),
     ]
     by_key = {str(item["key"]): item for item in datasets}
@@ -60,6 +66,7 @@ def build_data_catalog(
             "jpx_listed_path": str(jpx_listed_path),
             "company_master_path": str(company_master_path),
             "market_prices_path": str(market_prices_path),
+            "daily_bars_path": str(daily_bars_path),
             "current_yields_path": str(current_yields_path),
         },
         "datasets": datasets,
@@ -161,6 +168,27 @@ def _market_prices_dataset(path: Path, stale_after_days: int) -> JsonDict:
     )
 
 
+def _daily_bars_dataset(path: Path, stale_after_days: int) -> JsonDict:
+    def reader() -> JsonDict:
+        facts = load_daily_bars(path)
+        tickers = {fact.ticker for fact in facts}
+        return {
+            "row_count": len(facts),
+            "ticker_count": len(tickers),
+            "latest_as_of": _max_text(fact.date for fact in facts),
+            "providers": sorted({fact.provider_id for fact in facts if fact.provider_id}),
+        }
+
+    return _dataset(
+        key="daily_bars",
+        label="株価四本値・出来高",
+        path=path,
+        stale_after_days=1,
+        reader=reader,
+        purpose="日次OHLCV、調整後終値、出来高、売買代金による履歴分析",
+    )
+
+
 def _current_yields_dataset(path: Path, stale_after_days: int) -> JsonDict:
     def reader() -> JsonDict:
         facts = load_current_yields(path)
@@ -257,6 +285,8 @@ def _next_actions(datasets: list[JsonDict]) -> list[str]:
         actions.append("会社マスターを更新して、会社情報と財務取得状況をそろえる。")
     if by_key["market_prices"]["status"] in {"missing", "stale"}:
         actions.append("J-Quantsまたは許可済み価格ソースで株価を更新する。")
+    if by_key["daily_bars"]["status"] in {"missing", "stale"}:
+        actions.append("J-Quantsの日次OHLCVを更新して、出来高と価格推移を確認できる状態にする。")
     if by_key["current_yields"]["status"] == "missing":
         actions.append("必要な銘柄だけ現在配当・利回りデータを追加する。")
     return actions

@@ -146,6 +146,75 @@ class JQuantsClient:
             "call_real_api": True,
         }
 
+    def fetch_daily_bars(
+        self,
+        tickers: Iterable[str],
+        *,
+        date: str | None = None,
+        lookback_days: int = 30,
+    ) -> JsonDict:
+        """Fetch normalized daily OHLCV rows for each ticker."""
+
+        from investment_assistant.portfolio.bar_store import (
+            daily_bar_from_jquants_row,
+            summarize_daily_bars,
+        )
+
+        bar_facts: list[Any] = []
+        notes: dict[str, str] = {}
+        tried_codes: dict[str, list[str]] = {}
+        today = datetime.now(UTC).date()
+        from_date = today - timedelta(days=max(lookback_days, 1))
+        source = "https://api.jquants.com/v2/equities/bars/daily"
+        for raw in tickers:
+            ticker = str(raw).strip()
+            if not ticker:
+                continue
+            errors: list[str] = []
+            candidates = candidate_equity_codes(ticker)
+            tried_codes[ticker] = list(candidates)
+            for code in candidates:
+                try:
+                    result = self._daily_bars_for_code(
+                        code,
+                        date=date,
+                        from_date=None if date else from_date.isoformat(),
+                        to_date=None if date else today.isoformat(),
+                    )
+                except JQuantsApiError as exc:
+                    errors.append(f"{code}: {exc}")
+                    continue
+                rows = result["rows"]
+                normalized = [
+                    fact
+                    for row in rows
+                    if (
+                        fact := daily_bar_from_jquants_row(
+                            row,
+                            fallback_ticker=ticker,
+                            provider_id="jquants",
+                            source_ref=source,
+                        )
+                    )
+                    is not None
+                ]
+                if normalized:
+                    bar_facts.extend(normalized)
+                    break
+                errors.append(f"{code}: no_daily_bars_returned")
+            if errors and not any(str(fact.ticker) == ticker for fact in bar_facts):
+                notes[ticker] = "; ".join(errors)
+        return {
+            "bars": [fact.to_dict() for fact in bar_facts],
+            "summary": summarize_daily_bars(bar_facts),
+            "notes": notes,
+            "tried_codes": tried_codes,
+            "source": source,
+            "provider_id": "jquants",
+            "auto_trading": False,
+            "call_real_api": True,
+        }
+
     def _request_json(self, path: str, params: Mapping[str, str | None]) -> JsonDict:
         if not self.api_key:
             raise JQuantsApiError(
@@ -238,6 +307,8 @@ def _latest_close(rows: Iterable[JsonDict]) -> tuple[float | None, str | None]:
             or row.get("close")
             or row.get("AdjustmentClose")
             or row.get("adjustment_close")
+            or row.get("AdjC")
+            or row.get("C")
         )
         if value is not None:
             candidates.append((date, value))

@@ -2042,6 +2042,165 @@ def test_market_prices_saves_and_reuses_local_price_store(
     assert "using_cached_price" in cached["notes"]["9433"]
 
 
+def test_market_prices_falls_back_to_daily_bars_when_current_price_is_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", raising=False)
+    monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
+    store_path = tmp_path / "current_prices.csv"
+    bars_path = tmp_path / "daily_bars.csv"
+    bars_path.write_text(
+        "ticker,date,open,high,low,close,volume,trading_value,adjustment_factor,"
+        "adjusted_open,adjusted_high,adjusted_low,adjusted_close,adjusted_volume,"
+        "upper_limit_hit,lower_limit_hit,provider_id,source_ref\n"
+        "9433,2026-06-12,4900,5010,4890,4970,1200000,,1,4900,5010,4890,4970,"
+        "1200000,0,0,jquants,unit\n"
+        "9433,2026-06-15,4970,5020,4950,5000,1300000,,1,4970,5020,4950,5000,"
+        "1300000,0,0,jquants,unit\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices",
+        {
+            "tickers": ["9433"],
+            "provider_id": "jquants",
+            "runtime_mode": "production",
+            "price_store_path": str(store_path),
+            "daily_bars_path": str(bars_path),
+            "allow_cache_on_policy_block": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["provider_blocked"] is True
+    assert payload["prices"] == {"9433": 5000.0}
+    assert payload["as_of"] == {"9433": "2026-06-15"}
+    assert payload["price_store"]["daily_bar_cache_used"] == ["9433"]
+    assert "using_daily_bar_close" in payload["notes"]["9433"]
+    assert store_path.read_text(encoding="utf-8").count("9433") == 1
+    assert "5000" in store_path.read_text(encoding="utf-8")
+
+
+def test_market_bars_uses_jquants_and_saves_daily_ohlcv(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.jquants.client import JQuantsClient
+
+    monkeypatch.setenv("JQUANTS_API_KEY", "unit-key")
+    monkeypatch.setenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", "jquants")
+    store_path = tmp_path / "daily_bars.csv"
+    price_store_path = tmp_path / "current_prices.csv"
+
+    def fake_bars(
+        self: JQuantsClient,
+        tickers: list[str],
+        *,
+        date: str | None = None,
+        lookback_days: int = 30,
+    ) -> dict[str, object]:
+        assert tickers == ["9433"]
+        assert date is None
+        assert lookback_days == 10
+        return {
+            "bars": [
+                {
+                    "ticker": "9433",
+                    "date": "2026-06-12",
+                    "open": 4900.0,
+                    "high": 5010.0,
+                    "low": 4890.0,
+                    "close": 4970.0,
+                    "volume": 1200000.0,
+                    "adjusted_close": 4970.0,
+                    "provider_id": "jquants",
+                },
+                {
+                    "ticker": "9433",
+                    "date": "2026-06-15",
+                    "open": 4970.0,
+                    "high": 5020.0,
+                    "low": 4950.0,
+                    "close": 5000.0,
+                    "volume": 1300000.0,
+                    "adjusted_close": 5000.0,
+                    "provider_id": "jquants",
+                },
+            ],
+            "summary": {},
+            "notes": {},
+            "source": "unit-jquants-bars",
+            "provider_id": "jquants",
+            "auto_trading": False,
+            "call_real_api": True,
+        }
+
+    monkeypatch.setattr(JQuantsClient, "fetch_daily_bars", fake_bars)
+    status, payload = handle_api(
+        "POST",
+        "/api/market/bars",
+        {
+            "tickers": ["9433"],
+            "provider_id": "jquants",
+            "runtime_mode": "production",
+            "lookback_days": 10,
+            "bar_store_path": str(store_path),
+            "price_store_path": str(price_store_path),
+        },
+    )
+
+    assert status == 200
+    assert len(payload["bars"]) == 2
+    assert payload["bar_store"]["saved"] is True
+    assert payload["bar_store"]["price_sync"]["saved"] is True
+    assert payload["bar_store"]["price_sync"]["tickers"] == ["9433"]
+    assert payload["summary"]["tickers"]["9433"]["latest_close"] == 5000.0
+    assert store_path.is_file()
+    assert "5000" in price_store_path.read_text(encoding="utf-8")
+
+
+def test_market_bars_can_use_cache_when_provider_is_policy_blocked(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", raising=False)
+    monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
+    store_path = tmp_path / "daily_bars.csv"
+    store_path.write_text(
+        "ticker,date,open,high,low,close,volume,trading_value,adjustment_factor,"
+        "adjusted_open,adjusted_high,adjusted_low,adjusted_close,adjusted_volume,"
+        "upper_limit_hit,lower_limit_hit,provider_id,source_ref\n"
+        "9433,2026-06-15,4970,5020,4950,5000,1300000,,1,4970,5020,4950,5000,"
+        "1300000,0,0,jquants,unit\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/bars",
+        {
+            "tickers": ["9433"],
+            "provider_id": "jquants",
+            "runtime_mode": "production",
+            "bar_store_path": str(store_path),
+            "allow_cache_on_policy_block": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["provider_blocked"] is True
+    assert payload["call_real_api"] is False
+    assert payload["bar_store"]["cache_used"] == ["9433"]
+    assert payload["summary"]["tickers"]["9433"]["latest_volume"] == 1300000.0
+
+
 def test_data_status_summarizes_canonical_local_sources(tmp_path: Path) -> None:
     financials = tmp_path / "financials.csv"
     financials.write_text(
@@ -2067,6 +2226,15 @@ def test_data_status_summarizes_canonical_local_sources(tmp_path: Path) -> None:
         "9433,4970,2026-06-15,jquants,unit,\n",
         encoding="utf-8",
     )
+    bars = tmp_path / "daily_bars.csv"
+    bars.write_text(
+        "ticker,date,open,high,low,close,volume,trading_value,adjustment_factor,"
+        "adjusted_open,adjusted_high,adjusted_low,adjusted_close,adjusted_volume,"
+        "upper_limit_hit,lower_limit_hit,provider_id,source_ref\n"
+        "9433,2026-06-15,4970,5020,4950,5000,1300000,,1,4970,5020,4950,5000,"
+        "1300000,0,0,jquants,unit\n",
+        encoding="utf-8",
+    )
 
     status, payload = handle_api(
         "POST",
@@ -2076,6 +2244,7 @@ def test_data_status_summarizes_canonical_local_sources(tmp_path: Path) -> None:
             "jpx_listed_path": str(listed),
             "company_master_path": str(company_master),
             "market_prices_path": str(prices),
+            "daily_bars_path": str(bars),
             "current_yields_path": str(tmp_path / "missing_yields.csv"),
             "stale_after_days": 9999,
         },
@@ -2086,6 +2255,7 @@ def test_data_status_summarizes_canonical_local_sources(tmp_path: Path) -> None:
     assert payload["by_key"]["jpx_listed"]["prime_count"] == 1
     assert payload["by_key"]["company_master"]["financials_count"] == 1
     assert payload["by_key"]["market_prices"]["ticker_count"] == 1
+    assert payload["by_key"]["daily_bars"]["ticker_count"] == 1
     assert payload["by_key"]["current_yields"]["status"] == "missing"
     assert payload["auto_trading"] is False
 
