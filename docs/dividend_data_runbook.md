@@ -62,7 +62,7 @@ investment-assistant rag-stats
 ## See it work offline (no network, no key)
 
 ```bash
-python scripts/demo_offline_pipeline.py
+investment-assistant demo          # or: python -m investment_assistant.demo
 ```
 
 Drives the real CLI paths with injected fakes through the whole chain — IR

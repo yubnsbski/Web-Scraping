@@ -1297,6 +1297,8 @@ def main(argv: list[str] | None = None) -> int:
     smoke_parser = subparsers.add_parser("smoke")
     smoke_parser.add_argument("--prompt", default="hello")
 
+    subparsers.add_parser("demo", help="Run the offline end-to-end pipeline demo")
+
     gemini_live_parser = subparsers.add_parser("gemini-live")
     gemini_live_parser.add_argument("--prompt", required=True)
     gemini_live_parser.add_argument("--task-type", default="rag_answer")
@@ -1489,6 +1491,10 @@ def _dispatch(args: argparse.Namespace) -> object | None:
         return asdict(build_budget_report(args.config))
     if command == "smoke":
         return run_smoke(config_path=args.config, prompt=args.prompt)
+    if command == "demo":
+        from investment_assistant.demo import run_offline_demo
+
+        return run_offline_demo()
     if command == "gemini-live":
         if not args.call_real_api:
             print("Refusing to call Gemini API without --call-real-api.")
