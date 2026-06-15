@@ -802,6 +802,18 @@ function downloadTextFile(filename: string, text: string, type = "text/csv"): vo
   URL.revokeObjectURL(url);
 }
 
+async function readCsvFileText(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  for (const encoding of ["utf-8", "shift_jis"]) {
+    try {
+      return new TextDecoder(encoding, { fatal: true }).decode(buffer);
+    } catch {
+      // Try the next common Japanese CSV encoding.
+    }
+  }
+  return new TextDecoder("utf-8").decode(buffer);
+}
+
 function jsonText(value: unknown): string {
   return JSON.stringify(value ?? {}, null, 2);
 }
@@ -1830,7 +1842,7 @@ function HoldingsTab({
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
-    void file.text().then((text) => {
+    void readCsvFileText(file).then((text) => {
       setCsv(text);
       setValidationActionMessage(`Loaded ${file.name}. Validate before import or analysis.`);
     });
@@ -2262,7 +2274,7 @@ function CandidateScreenTab({
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
-    void file.text().then((text) => {
+    void readCsvFileText(file).then((text) => {
       setFundsCsv(text);
       setScreenActionMessage(`${file.name} を読み込みました。候補抽出前に検証してください。`);
     });
@@ -4195,7 +4207,7 @@ function ScrapeTab({
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
-    void file.text().then((text) => setManualFinancialsCsv(text));
+    void readCsvFileText(file).then((text) => setManualFinancialsCsv(text));
   };
 
   const loadSampleFinancials = () => setManualFinancialsCsv(SAMPLE_FINANCIALS_CSV);
@@ -4233,7 +4245,7 @@ function ScrapeTab({
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
-    void file.text().then((text) => setJpxListedText(text));
+    void readCsvFileText(file).then((text) => setJpxListedText(text));
   };
   const loadJpxListedTemplate = () =>
     jpxListedState.run(async () => {

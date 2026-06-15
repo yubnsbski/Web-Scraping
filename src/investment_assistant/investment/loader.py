@@ -21,6 +21,95 @@ from investment_assistant.investment.models import (
 )
 
 _ROW_ERROR_RE = re.compile(r"^Row (?P<row>\d+): (?P<detail>.+)$")
+_HOLDING_MINIMUM_COLUMNS: tuple[str, ...] = (
+    "asset_type",
+    "ticker_or_fund_code",
+    "name",
+    "quantity",
+    "avg_cost",
+)
+_CSV_HEADER_ALIASES: dict[str, str] = {
+    "assettype": "asset_type",
+    "asset_type": "asset_type",
+    "資産種別": "asset_type",
+    "商品種別": "asset_type",
+    "種別": "asset_type",
+    "ticker": "ticker_or_fund_code",
+    "code": "ticker_or_fund_code",
+    "securitycode": "ticker_or_fund_code",
+    "ticker_or_fund_code": "ticker_or_fund_code",
+    "銘柄コード": "ticker_or_fund_code",
+    "証券コード": "ticker_or_fund_code",
+    "コード": "ticker_or_fund_code",
+    "ファンドコード": "ticker_or_fund_code",
+    "fund_code": "fund_code",
+    "name": "name",
+    "銘柄名": "name",
+    "名称": "name",
+    "商品名": "name",
+    "ファンド名": "name",
+    "quantity": "quantity",
+    "qty": "quantity",
+    "shares": "quantity",
+    "units": "quantity",
+    "数量": "quantity",
+    "保有数量": "quantity",
+    "株数": "quantity",
+    "口数": "quantity",
+    "avgcost": "avg_cost",
+    "avg_cost": "avg_cost",
+    "averagecost": "avg_cost",
+    "取得単価": "avg_cost",
+    "平均取得単価": "avg_cost",
+    "平均単価": "avg_cost",
+    "買付単価": "avg_cost",
+    "currentprice": "current_price",
+    "current_price": "current_price",
+    "price": "current_price",
+    "現在価格": "current_price",
+    "現在値": "current_price",
+    "時価": "current_price",
+    "評価単価": "current_price",
+    "accounttype": "account_type",
+    "account_type": "account_type",
+    "口座": "account_type",
+    "口座区分": "account_type",
+    "預り区分": "account_type",
+    "taxwrapper": "tax_wrapper",
+    "tax_wrapper": "tax_wrapper",
+    "税区分": "tax_wrapper",
+    "NISA区分": "tax_wrapper",
+    "nisa区分": "tax_wrapper",
+    "source": "source",
+    "入力元": "source",
+    "データ元": "source",
+    "annualincome": "annual_income",
+    "annual_income": "annual_income",
+    "年間配当": "annual_income",
+    "年間分配金": "annual_income",
+    "distributionperunit": "distribution_per_unit",
+    "distribution_per_unit": "distribution_per_unit",
+    "1口分配金": "distribution_per_unit",
+    "一口分配金": "distribution_per_unit",
+    "dataprovider": "data_provider",
+    "data_provider": "data_provider",
+    "provider": "data_provider",
+    "priceasof": "price_as_of",
+    "price_as_of": "price_as_of",
+    "価格日": "price_as_of",
+    "基準日": "price_as_of",
+    "expense_ratio": "expense_ratio",
+    "信託報酬": "expense_ratio",
+    "asset_class": "asset_class",
+    "資産クラス": "asset_class",
+    "distribution_policy": "distribution_policy",
+    "分配方針": "distribution_policy",
+    "nisa_eligible": "nisa_eligible",
+    "NISA対象": "nisa_eligible",
+    "provider_id": "provider_id",
+    "diversification_score": "diversification_score",
+    "分散度": "diversification_score",
+}
 
 
 def holdings_from_payload(payload: Mapping[str, object]) -> list[InvestmentHolding]:
@@ -51,7 +140,7 @@ def validate_holdings_payload(payload: Mapping[str, object]) -> dict[str, object
     base = _validation_base(
         kind="holdings",
         columns=HOLDING_TEMPLATE_COLUMNS,
-        required_columns=HOLDING_COLUMNS,
+        required_columns=_HOLDING_MINIMUM_COLUMNS,
         optional_columns=HOLDING_OPTIONAL_COLUMNS,
         recommended_columns=HOLDING_RECOMMENDED_COLUMNS,
     )
@@ -290,7 +379,7 @@ def load_holdings_csv(path: str | Path) -> list[InvestmentHolding]:
 
 
 def load_holdings_csv_text(text: str) -> list[InvestmentHolding]:
-    rows = _read_rows(text, required=HOLDING_COLUMNS)
+    rows = _read_rows(text, required=_HOLDING_MINIMUM_COLUMNS)
     holdings = [_holding_from_mapping(row, row=index) for index, row in enumerate(rows, start=2)]
     if not holdings:
         raise ValueError("Holding CSV must contain at least one row.")
@@ -310,12 +399,21 @@ def load_funds_csv_text(text: str) -> list[FundProfile]:
 
 
 def _read_rows(text: str, *, required: tuple[str, ...]) -> list[dict[str, str]]:
-    reader = csv.DictReader(io.StringIO(text.strip()))
-    fieldnames = set(reader.fieldnames or [])
+    reader = csv.DictReader(io.StringIO(text.strip().lstrip("\ufeff")))
+    field_map = _csv_field_map(reader.fieldnames or [])
+    fieldnames = set(field_map.values())
     missing = [column for column in required if column not in fieldnames]
     if missing:
         raise ValueError(f"Missing required CSV columns: {', '.join(missing)}")
-    return [dict(row) for row in reader]
+    rows: list[dict[str, str]] = []
+    for row in reader:
+        normalized: dict[str, str] = {}
+        for key, value in row.items():
+            mapped = field_map.get(str(key or ""))
+            if mapped and mapped not in normalized:
+                normalized[mapped] = str(value or "").strip()
+        rows.append(normalized)
+    return rows
 
 
 def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | None:
@@ -340,8 +438,26 @@ def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | Non
 
 
 def _csv_fieldnames(text: str) -> set[str]:
-    reader = csv.DictReader(io.StringIO(text.strip()))
-    return {str(field) for field in (reader.fieldnames or [])}
+    reader = csv.DictReader(io.StringIO(text.strip().lstrip("\ufeff")))
+    return set(_csv_field_map(reader.fieldnames or []).values())
+
+
+def _csv_field_map(fieldnames: Sequence[str | None]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for field in fieldnames:
+        if field is None:
+            continue
+        original = str(field).strip().lstrip("\ufeff")
+        if not original:
+            continue
+        out[original] = _canonical_csv_header(original)
+    return out
+
+
+def _canonical_csv_header(value: str) -> str:
+    stripped = value.strip().lstrip("\ufeff")
+    compact = re.sub(r"[\s　_\-・/（）()\[\]]+", "", stripped).lower()
+    return _CSV_HEADER_ALIASES.get(compact) or _CSV_HEADER_ALIASES.get(stripped) or stripped
 
 
 def _write_csv(columns: tuple[str, ...], rows: Sequence[Mapping[str, object]]) -> str:
@@ -491,10 +607,18 @@ def _asset_type(value: str) -> str:
         "jp_stock": "stock",
         "japan_stock": "stock",
         "equity": "stock",
+        "stock": "stock",
+        "株式": "stock",
+        "国内株式": "stock",
+        "内国株式": "stock",
+        "日本株": "stock",
+        "日本株式": "stock",
         "mutual_fund": "fund",
         "investment_trust": "fund",
+        "fund": "fund",
         "投信": "fund",
-        "日本株": "stock",
+        "投資信託": "fund",
+        "ファンド": "fund",
     }
     return aliases.get(normalized, normalized)
 
@@ -526,6 +650,9 @@ def _optional_float(value: object, *, row: int, column: str) -> float | None:
     text = _text(value, default="")
     if not text:
         return None
+    text = _numeric_text(text)
+    if not text:
+        return None
     try:
         return float(text)
     except ValueError as exc:
@@ -536,6 +663,18 @@ def _text(value: object, *, default: str) -> str:
     if value is None:
         return default
     return str(value).strip()
+
+
+def _numeric_text(value: str) -> str:
+    text = value.strip()
+    if text in {"-", "ー", "―", "N/A", "n/a", "なし"}:
+        return ""
+    text = text.replace(",", "").replace("，", "")
+    text = text.replace("￥", "").replace("¥", "")
+    for suffix in ("円", "株", "口", " shares", " share", " units", " unit"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+    return text.strip()
 
 
 def _bool(value: object) -> bool:

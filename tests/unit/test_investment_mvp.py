@@ -170,6 +170,33 @@ def test_analyze_portfolio_flags_edinet_current_yield_basis_review(tmp_path: Pat
     assert "current_yield_basis_review" in alert_codes
 
 
+def test_holdings_import_accepts_japanese_broker_csv_headers(tmp_path: Path) -> None:
+    holdings_csv = (
+        "資産種別,証券コード,銘柄名,数量,平均取得単価,口座区分,NISA区分,現在価格\n"
+        "国内株式,9433,KDDI,\"100株\",\"2,400円\",特定,課税,\"2,500円\"\n"
+    )
+
+    result = analyze_portfolio(
+        holdings_from_payload({"csv_text": holdings_csv}),
+        financials_csv=_financials(tmp_path),
+    )
+
+    summary = result["summary"]
+    assert isinstance(summary, dict)
+    assert summary["holdings_count"] == 1
+    assert summary["market_value"] == 250000.0
+    assert summary["cost_basis"] == 240000.0
+    rows = result["holdings"]
+    assert isinstance(rows, list)
+    row = rows[0]
+    assert isinstance(row, dict)
+    assert row["asset_type"] == "stock"
+    assert row["ticker_or_fund_code"] == "9433"
+    assert row["account_type"] == "特定"
+    assert row["tax_wrapper"] == "課税"
+    assert row["source"] == "user_input"
+
+
 def test_analyze_portfolio_flags_nisa_cap_usage(tmp_path: Path) -> None:
     holdings_csv = (
         "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
