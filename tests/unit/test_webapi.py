@@ -771,3 +771,49 @@ def test_provider_policy_ledger_route_reports_runtime_decisions() -> None:
     assert rows["jquants"]["recommended_use"] == "contract_required"
     assert payload["auto_trading"] is False
     assert payload["call_real_api"] is False
+
+
+def test_market_ohlcv_route_validates_and_routes(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    # Empty tickers are rejected before any fetch.
+    status, payload = handle_api("POST", "/api/market/ohlcv", {"tickers": []})
+    assert status == 400 and "non-empty" in payload["error"]
+
+    # Too many tickers are rejected.
+    status, _ = handle_api("POST", "/api/market/ohlcv", {"tickers": [str(i) for i in range(51)]})
+    assert status == 400
+
+    # Yahoo is uncontracted, so production is blocked before fetching.
+    status, payload = handle_api(
+        "POST", "/api/market/ohlcv", {"tickers": ["8306"], "runtime_mode": "production"}
+    )
+    assert status == 400 and "not allowed in production" in payload["error"]
+
+    # Development mode routes to the runner (stubbed to avoid network).
+    captured: dict[str, object] = {}
+
+    def fake_ohlcv(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"ohlcv": {"8306": []}, "counts": {"8306": 0}, "tickers_count": 1}
+
+    monkeypatch.setattr(service.cli, "run_market_ohlcv", fake_ohlcv)
+    status, payload = handle_api(
+        "POST", "/api/market/ohlcv", {"tickers": "8306, 7203", "range": "5d"}
+    )
+    assert status == 200
+    assert captured["tickers"] == ["8306", "7203"] and captured["range_"] == "5d"
+
+
+def test_market_intraday_route_validates_and_routes(monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    status, payload = handle_api("POST", "/api/market/intraday", {"tickers": ""})
+    assert status == 400 and "non-empty" in payload["error"]
+
+    def fake_intraday(**kwargs: object) -> dict[str, object]:
+        return {"intraday": {"2914": []}, "counts": {"2914": 0}, "tickers_count": 1}
+
+    monkeypatch.setattr(service.cli, "run_yahoo_intraday", fake_intraday)
+    status, payload = handle_api("POST", "/api/market/intraday", {"tickers": ["2914"]})
+    assert status == 200 and payload["counts"] == {"2914": 0}
