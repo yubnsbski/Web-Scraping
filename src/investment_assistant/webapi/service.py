@@ -1281,6 +1281,142 @@ def _financials_listed_refresh_async(body: JsonDict) -> JsonDict:
     return {"job_id": job_id, "status": "running", "kind": "financials-listed-refresh"}
 
 
+def _financials_missing_registry(body: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+
+    registry_path = str(
+        body.get("registry_path") or "local_docs/edinet/source_registry_all_domestic_edinet.yaml"
+    )
+    output_dir = str(body.get("output_dir") or "local_docs/edinet")
+    financials_csv = str(
+        body.get("financials_csv") or Path(output_dir) / "financials.csv"
+    )
+    missing_registry_path = str(
+        body.get("missing_registry_path")
+        or body.get("output_path")
+        or "local_docs/edinet/source_registry_missing_edinet.yaml"
+    )
+    max_targets = _as_int(body.get("max_targets"), 200)
+    max_periods = max(_as_int(body.get("max_periods"), 1), 1)
+
+    targets = build_edinet_targets_from_registry(registry_path)
+    existing_tickers = _financials_existing_tickers(financials_csv)
+    missing = [
+        target
+        for target in targets
+        if _normalize_ticker(target.ticker) not in existing_tickers
+    ]
+    selected = missing[:max_targets] if max_targets > 0 else missing
+
+    registry_text = _edinet_targets_registry_yaml(
+        selected,
+        max_periods=max_periods,
+        title="Missing EDINET financials registry",
+    )
+    saved_path: str | None = None
+    if _as_bool(body.get("save"), True):
+        target_path = reject_path_traversal(missing_registry_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(registry_text, encoding="utf-8")
+        saved_path = str(target_path)
+
+    payload: JsonDict = {
+        "available": bool(targets),
+        "saved": saved_path is not None,
+        "registry_path": saved_path or missing_registry_path,
+        "base_registry_path": registry_path,
+        "financials_csv": financials_csv,
+        "financials_csv_exists": Path(financials_csv).is_file(),
+        "registry_count": len(targets),
+        "existing_count": len(existing_tickers),
+        "missing_count": len(missing),
+        "count": len(selected),
+        "max_targets": max_targets,
+        "max_periods": max_periods,
+        "sample": [_edinet_target_to_dict(target) for target in selected[:20]],
+        "hint": (
+            "未取得の証券コードだけを抽出しました。"
+            "このregistryを使うと、既存の財務CSVを壊さず差分だけ補完できます。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+    if _as_bool(body.get("include_csv_text"), False) or not saved_path:
+        payload["csv_text"] = registry_text
+    return payload
+
+
+def _financials_missing_refresh(body: JsonDict) -> JsonDict:
+    registry = _financials_missing_registry({**body, "save": True})
+    if not registry.get("available"):
+        registry["financials_updated"] = False
+        registry["hint"] = (
+            "補完元のregistryが見つからないか、対象が空です。"
+            "先に全社registryを生成してください。"
+        )
+        return registry
+    if _as_int(registry.get("count"), 0) <= 0:
+        registry["financials_updated"] = False
+        registry["mode"] = "missing_already_complete"
+        registry["hint"] = (
+            "未取得の証券コードはありません。"
+            "現在の財務CSVは対象registryをすべてカバーしています。"
+        )
+        return registry
+
+    result = _financials_refresh(
+        {
+            **body,
+            "registry_path": registry.get("registry_path"),
+        }
+    )
+    result["missing_registry"] = {
+        "registry_path": registry.get("registry_path"),
+        "base_registry_path": registry.get("base_registry_path"),
+        "financials_csv": registry.get("financials_csv"),
+        "registry_count": registry.get("registry_count"),
+        "existing_count": registry.get("existing_count"),
+        "missing_count": registry.get("missing_count"),
+        "count": registry.get("count"),
+        "max_targets": registry.get("max_targets"),
+    }
+    if result.get("financials_updated") is not False:
+        result["hint"] = (
+            "未取得の証券コードだけを対象にEDINET財務データを補完しました。"
+            "取得後の財務CSVは既存データとマージされています。"
+        )
+    return result
+
+
+def _financials_missing_refresh_async(body: JsonDict) -> JsonDict:
+    job_id = JOBS.start("financials-missing-refresh", lambda: _financials_missing_refresh(body))
+    return {"job_id": job_id, "status": "running", "kind": "financials-missing-refresh"}
+
+
+def _financials_existing_tickers(financials_csv: str) -> set[str]:
+    path = Path(financials_csv)
+    if not path.is_file():
+        return set()
+    try:
+        return {_normalize_ticker(point.ticker) for point in load_financials(path)}
+    except (OSError, ValueError):
+        return set()
+
+
+def _normalize_ticker(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
+def _edinet_target_to_dict(target: Any) -> JsonDict:
+    return {
+        "ticker": getattr(target, "ticker", ""),
+        "company": getattr(target, "company", None),
+        "name": getattr(target, "name", ""),
+        "max_periods": getattr(target, "max_periods", 1),
+    }
+
+
 def _issue_matches_financial_registry_scope(issue: Any, scope: str) -> bool:
     normalized = scope.strip().lower()
     segment = str(issue.market_segment or "")
@@ -1361,6 +1497,35 @@ def _edinet_registry_yaml(
                 f"  - name: {_yaml_scalar(name)}",
                 f"    ticker: {_yaml_scalar(issue.code)}",
                 f"    company: {_yaml_scalar(issue.name)}",
+                '    source_type: "public_api"',
+                '    provider: "edinet"',
+                "    allowed: true",
+                f"    max_periods: {max_periods}",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _edinet_targets_registry_yaml(
+    targets: list[Any],
+    *,
+    max_periods: int,
+    title: str,
+) -> str:
+    lines = [
+        f"# {title}",
+        "# Generated from an EDINET registry diff. Used only for missing public API ingestion.",
+        "sources:",
+    ]
+    for target in targets:
+        ticker = str(getattr(target, "ticker", "") or "").strip()
+        company = str(getattr(target, "company", "") or "").strip()
+        name = str(getattr(target, "name", "") or f"{ticker}_{company}".strip("_"))
+        lines.extend(
+            [
+                f"  - name: {_yaml_scalar(name)}",
+                f"    ticker: {_yaml_scalar(ticker)}",
+                f"    company: {_yaml_scalar(company)}",
                 '    source_type: "public_api"',
                 '    provider: "edinet"',
                 "    allowed: true",
@@ -2517,6 +2682,9 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/financials/listed-registry"): _financials_listed_registry,
     ("POST", "/api/financials/listed-refresh"): _financials_listed_refresh,
     ("POST", "/api/financials/listed-refresh-async"): _financials_listed_refresh_async,
+    ("POST", "/api/financials/missing-registry"): _financials_missing_registry,
+    ("POST", "/api/financials/missing-refresh"): _financials_missing_refresh,
+    ("POST", "/api/financials/missing-refresh-async"): _financials_missing_refresh_async,
     ("POST", "/api/financials/refresh"): _financials_refresh,
     ("POST", "/api/financials/refresh-async"): _financials_refresh_async,
     ("POST", "/api/financials/securities"): _financials_securities,

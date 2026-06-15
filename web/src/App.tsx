@@ -4114,6 +4114,10 @@ function ScrapeTab({
     "local_docs/edinet/source_registry_all_domestic_edinet.yaml",
   );
   const [allDomesticMaxTargets, setAllDomesticMaxTargets] = useState(0);
+  const [missingRegistryPath, setMissingRegistryPath] = useState(
+    "local_docs/edinet/source_registry_missing_edinet.yaml",
+  );
+  const [missingMaxTargets, setMissingMaxTargets] = useState(200);
   const [manualFinancialsCsv, setManualFinancialsCsv] = useState(SAMPLE_FINANCIALS_CSV);
   const [manualFinancialsOutputPath, setManualFinancialsOutputPath] =
     useState(financialsCsvPath);
@@ -4128,6 +4132,7 @@ function ScrapeTab({
   const jpxListedState = useAsync<Json>();
   const jpxDownloadState = useAsync<Json>();
   const primeRegistryState = useAsync<Json>();
+  const missingRegistryState = useAsync<Json>();
 
   useEffect(() => {
     setManualFinancialsOutputPath(financialsCsvPath);
@@ -4336,6 +4341,59 @@ function ScrapeTab({
       );
       setAllDomesticRegistryPath(registryPath);
       setEdinetRegistry(registryPath);
+      const csvPath = String(
+        result.financials_csv ?? `${edinetOutputDir.replace(/[\\/]$/, "")}/financials.csv`,
+      );
+      if (result.financials_updated !== false) {
+        onFinancialsCsvPathChange(csvPath);
+        onFinancialsDataUpdated();
+        setManualFinancialsOutputPath(csvPath);
+      }
+      await edinetStatusState.run(() => api<Json>("/api/edinet/status"));
+      return result;
+    });
+
+  const generateMissingRegistry = () =>
+    missingRegistryState.run(async () => {
+      const result = await api<Json>("/api/financials/missing-registry", {
+        registry_path: allDomesticRegistryPath,
+        financials_csv: financialsCsvPath,
+        missing_registry_path: missingRegistryPath,
+        max_targets: missingMaxTargets,
+        max_periods: 1,
+        save: true,
+      });
+      if (result.registry_path) {
+        setMissingRegistryPath(String(result.registry_path));
+      }
+      return result;
+    });
+
+  const runMissingFinancialsRefresh = (days = edinetDays, years = edinetYears) =>
+    edinetState.run(async () => {
+      if (edinetApiKeyInput.trim()) {
+        await edinetStatusState.run(() =>
+          api<Json>("/api/edinet/api-key", {
+            api_key: edinetApiKeyInput.trim(),
+          }),
+        );
+      }
+      const result = await runJob("/api/financials/missing-refresh-async", {
+        registry_path: allDomesticRegistryPath,
+        financials_csv: financialsCsvPath,
+        missing_registry_path: missingRegistryPath,
+        max_targets: missingMaxTargets,
+        max_periods: 1,
+        days,
+        years: years > 0 ? years : undefined,
+        output_dir: edinetOutputDir,
+        db_path: dbPath,
+        index_after_fetch: true,
+      });
+      const registryPath = String(
+        (result.missing_registry as Json | undefined)?.registry_path ?? missingRegistryPath,
+      );
+      setMissingRegistryPath(registryPath);
       const csvPath = String(
         result.financials_csv ?? `${edinetOutputDir.replace(/[\\/]$/, "")}/financials.csv`,
       );
@@ -4731,6 +4789,21 @@ function ScrapeTab({
               onChange={(e) => setAllDomesticMaxTargets(Number(e.target.value))}
             />
           </Field>
+          <Field label="未取得registry">
+            <input
+              value={missingRegistryPath}
+              onChange={(e) => setMissingRegistryPath(e.target.value)}
+            />
+          </Field>
+          <Field label="未取得補完上限（0=全件）">
+            <input
+              type="number"
+              min={0}
+              max={5000}
+              value={missingMaxTargets}
+              onChange={(e) => setMissingMaxTargets(Number(e.target.value))}
+            />
+          </Field>
           <Field label="出力ディレクトリ">
             <input value={edinetOutputDir} onChange={(e) => setEdinetOutputDir(e.target.value)} />
           </Field>
@@ -4765,6 +4838,9 @@ function ScrapeTab({
           <button onClick={generateAllDomesticRegistry} disabled={primeRegistryState.loading}>
             全社registry生成
           </button>
+          <button onClick={generateMissingRegistry} disabled={missingRegistryState.loading}>
+            未取得を確認
+          </button>
           <button
             className="primary"
             onClick={() => runPrimeFinancialsRefresh(7, 0)}
@@ -4778,6 +4854,13 @@ function ScrapeTab({
             disabled={edinetState.loading}
           >
             全社財務を自動更新
+          </button>
+          <button
+            className="primary"
+            onClick={() => runMissingFinancialsRefresh(7, 0)}
+            disabled={edinetState.loading}
+          >
+            未取得を補完
           </button>
           <button onClick={() => runEdinetIngest()} disabled={edinetState.loading}>
             設定値で更新
@@ -4793,6 +4876,12 @@ function ScrapeTab({
             disabled={edinetState.loading}
           >
             全社1年バックフィル
+          </button>
+          <button
+            onClick={() => runMissingFinancialsRefresh(31, 1)}
+            disabled={edinetState.loading}
+          >
+            未取得1年補完
           </button>
           <button
             onClick={() => void edinetStatusState.run(() => api<Json>("/api/edinet/status"))}
@@ -4818,6 +4907,20 @@ function ScrapeTab({
             <br />
             東証プライム: {String(primeRegistryState.data.total_prime_count ?? 0)}社
             <p className="hint">{String(primeRegistryState.data.hint ?? "")}</p>
+          </div>
+        )}
+        <Status loading={missingRegistryState.loading} error={missingRegistryState.error} />
+        {missingRegistryState.data && (
+          <div className="callout">
+            未取得registry:{" "}
+            <span className="mono">{String(missingRegistryState.data.registry_path ?? "-")}</span>
+            <br />
+            全対象: {String(missingRegistryState.data.registry_count ?? 0)}社 / 取得済み:{" "}
+            {String(missingRegistryState.data.existing_count ?? 0)}社 / 未取得:{" "}
+            {String(missingRegistryState.data.missing_count ?? 0)}社
+            <br />
+            今回の補完対象: {String(missingRegistryState.data.count ?? 0)}社
+            <p className="hint">{String(missingRegistryState.data.hint ?? "")}</p>
           </div>
         )}
         <Status loading={edinetStatusState.loading} error={edinetStatusState.error} />

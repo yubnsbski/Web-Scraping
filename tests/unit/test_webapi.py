@@ -266,6 +266,62 @@ def test_listed_registry_generates_domestic_stock_targets_from_jpx_listed(
     assert [target.ticker for target in targets] == ["4478", "7203", "9999"]
 
 
+def test_missing_registry_generates_only_uncovered_financial_targets(
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+    from investment_assistant.investment.universe import ListedIssue, write_jpx_listed_issues
+
+    listed_path = tmp_path / "listed_issues.csv"
+    write_jpx_listed_issues(
+        [
+            ListedIssue("7203", "Toyota", "Prime Market (Domestic Stock)", "Transportation"),
+            ListedIssue("9999", "Standard Sample", "Standard Market (Domestic Stock)", "Services"),
+            ListedIssue("4478", "Growth Sample", "Growth Market (Domestic Stock)", "IT"),
+        ],
+        listed_path,
+    )
+    base_registry_path = tmp_path / "all_domestic.yaml"
+    status, _ = handle_api(
+        "POST",
+        "/api/financials/listed-registry",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(base_registry_path),
+            "max_targets": 0,
+        },
+    )
+    assert status == 200
+
+    financials_csv = tmp_path / "financials.csv"
+    financials_csv.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "7203,Toyota,2025,100,55,75,stable\n",
+        encoding="utf-8",
+    )
+    missing_registry_path = tmp_path / "missing.yaml"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/missing-registry",
+        {
+            "registry_path": str(base_registry_path),
+            "financials_csv": str(financials_csv),
+            "missing_registry_path": str(missing_registry_path),
+            "max_targets": 0,
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["registry_count"] == 3
+    assert payload["existing_count"] == 1
+    assert payload["missing_count"] == 2
+    assert payload["count"] == 2
+    targets = build_edinet_targets_from_registry(missing_registry_path)
+    assert [target.ticker for target in targets] == ["4478", "9999"]
+
+
 def test_prime_refresh_generates_registry_and_delegates_to_financials_refresh(
     monkeypatch,
     tmp_path: Path,
@@ -360,6 +416,75 @@ def test_listed_refresh_generates_registry_and_delegates_to_financials_refresh(
     assert registry_path.is_file()
     assert payload["jpx_registry"]["count"] == 2
     assert payload["jpx_registry"]["scope"] == "domestic_stocks"
+
+
+def test_missing_refresh_delegates_only_missing_targets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+    from investment_assistant.investment.universe import ListedIssue, write_jpx_listed_issues
+    from investment_assistant.webapi import service
+
+    listed_path = tmp_path / "listed_issues.csv"
+    write_jpx_listed_issues(
+        [
+            ListedIssue("7203", "Toyota", "Prime Market (Domestic Stock)", "Transportation"),
+            ListedIssue("9999", "Standard Sample", "Standard Market (Domestic Stock)", "Services"),
+        ],
+        listed_path,
+    )
+    base_registry_path = tmp_path / "all_domestic.yaml"
+    status, _ = handle_api(
+        "POST",
+        "/api/financials/listed-registry",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(base_registry_path),
+            "max_targets": 0,
+        },
+    )
+    assert status == 200
+
+    financials_csv = tmp_path / "financials.csv"
+    financials_csv.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "7203,Toyota,2025,100,55,75,stable\n",
+        encoding="utf-8",
+    )
+    missing_registry_path = tmp_path / "missing.yaml"
+    captured: dict[str, object] = {}
+
+    def fake_refresh(body: dict[str, object]) -> dict[str, object]:
+        captured.update(body)
+        return {
+            "mode": "edinet_api",
+            "financials_updated": True,
+            "financials_csv": str(financials_csv),
+            "ingested_count": 1,
+            "targets_count": 1,
+        }
+
+    monkeypatch.setattr(service, "_financials_refresh", fake_refresh)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/missing-refresh",
+        {
+            "registry_path": str(base_registry_path),
+            "financials_csv": str(financials_csv),
+            "missing_registry_path": str(missing_registry_path),
+            "max_targets": 0,
+            "output_dir": str(tmp_path),
+        },
+    )
+
+    assert status == 200
+    assert payload["financials_updated"] is True
+    assert captured["registry_path"] == str(missing_registry_path)
+    assert payload["missing_registry"]["missing_count"] == 1
+    targets = build_edinet_targets_from_registry(missing_registry_path)
+    assert [target.ticker for target in targets] == ["9999"]
 
 
 def test_edinet_status_reads_local_dotenv_without_exposing_key(
