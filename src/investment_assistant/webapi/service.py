@@ -584,6 +584,63 @@ def _market_prices(body: JsonDict) -> JsonDict:
     return result
 
 
+_MAX_MARKET_TICKERS = 50
+
+
+def _market_ticker_list(body: JsonDict) -> list[str]:
+    """Accept ``tickers`` as a list or a comma-separated string; trim and drop blanks."""
+
+    raw = body.get("tickers")
+    if isinstance(raw, str):
+        items = raw.split(",")
+    elif isinstance(raw, list):
+        items = [str(item) for item in raw]
+    else:
+        items = []
+    return [ticker.strip() for ticker in items if ticker.strip()]
+
+
+def _market_universe(body: JsonDict) -> tuple[list[str], str]:
+    """Validate and return ``(tickers, runtime_mode)`` for a market scrape request."""
+
+    tickers = _market_ticker_list(body)
+    if not tickers:
+        raise ApiError("tickers must be a non-empty list or comma-separated string", status=400)
+    if len(tickers) > _MAX_MARKET_TICKERS:
+        raise ApiError(f"too many tickers (max {_MAX_MARKET_TICKERS})", status=400)
+    runtime_mode = str(
+        body.get("runtime_mode")
+        or os.getenv("INVESTMENT_ASSISTANT_RUNTIME_MODE")
+        or "development"
+    )
+    return tickers, runtime_mode
+
+
+def _ensure_market_provider(provider_id: str, runtime_mode: str) -> None:
+    from investment_assistant.investment.provider_policy import ensure_provider_allowed
+
+    try:
+        ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
+    except ValueError as exc:
+        raise ApiError(str(exc), status=400) from exc
+
+
+def _market_ohlcv(body: JsonDict) -> JsonDict:
+    tickers, runtime_mode = _market_universe(body)
+    _ensure_market_provider("yfinance", runtime_mode)
+    return cli.run_market_ohlcv(
+        tickers=tickers,
+        range_=str(body.get("range") or "1mo"),
+        interval=str(body.get("interval") or "1d"),
+    )
+
+
+def _market_intraday(body: JsonDict) -> JsonDict:
+    tickers, runtime_mode = _market_universe(body)
+    _ensure_market_provider("yahoo_jp_intraday", runtime_mode)
+    return cli.run_yahoo_intraday(tickers=tickers)
+
+
 def _provider_policy_ledger(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import provider_policy_ledger
 
@@ -1293,6 +1350,8 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/target"): _portfolio_target,
     ("POST", "/api/portfolio/universe"): _portfolio_universe,
     ("POST", "/api/market/prices"): _market_prices,
+    ("POST", "/api/market/ohlcv"): _market_ohlcv,
+    ("POST", "/api/market/intraday"): _market_intraday,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,
