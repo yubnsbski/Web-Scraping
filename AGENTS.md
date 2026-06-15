@@ -1,5 +1,26 @@
 # AGENTS.md
 
+## リポジトリ作業ガイド（AI向け）
+
+エージェントが最短で立ち上がるための要点。
+
+- **品質ゲート**（変更後は必ず全て緑にする）:
+  ```bash
+  python -m pytest -q && ruff check . && mypy src
+  ```
+- **全体像を1コマンドで掴む**: `investment-assistant demo` がデータ取得→RAG→EDINET→配当
+  シミュレーションをオフラインで通しで実行する（実装は `src/investment_assistant/demo.py`）。
+- **アーキテクチャ**（`src/investment_assistant/` 配下）:
+  - `ingestion/` 安全なfetcher・robots・レート制限・HTTPキャッシュ（SSRF対策込み）
+  - `crawler/` 目的志向IRクロール（リンク種別判定: page/document/asset、PDFは別枠で surface）
+  - `edinet/` EDINET APIクライアントとXBRL CSV抽出 → `financials.csv`
+  - `rag/` チャンク化・SQLite保存・キーワード/ハイブリッド検索
+  - `portfolio/` 配当シミュレータ（手取り計算・目標逆算）
+  - `cli.py` 全サブコマンドの入口、`webapi/` HTTP層
+- **オフラインファースト規約**: 単体テストとデモは実ネットワーク・実APIを呼ばない。
+  ネットワーク境界（fetcher / EDINETクライアント / LLM）は注入可能にし、fakeを渡す。
+- **テスト**: 変更には `tests/unit/` にテストを追加・更新する。
+
 ## 基本方針
 
 - Pythonを優先し、保守性・テスト容易性・疎結合を重視する。

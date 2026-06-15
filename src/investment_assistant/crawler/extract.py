@@ -15,11 +15,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urldefrag, urljoin
+from typing import Literal
+from urllib.parse import urldefrag, urljoin, urlsplit
 
 from investment_assistant.ingestion.html_extract import extract_text_from_html
 
 __all__ = [
+    "ASSET_EXTENSIONS",
+    "DOCUMENT_EXTENSIONS",
     "EXCLUDE_KEYWORDS",
     "TARGET_KEYWORDS",
     "Link",
@@ -29,6 +32,7 @@ __all__ = [
     "count_target_keywords",
     "extract_body_text",
     "extract_links",
+    "link_kind",
     "rank_links",
     "score_link",
 ]
@@ -70,6 +74,34 @@ TARGET_WEIGHT = 1.0
 EXCLUDE_PENALTY = 2.0
 DEFAULT_MIN_CHARS = 800
 DEFAULT_MIN_KEYWORD_HITS = 1
+
+# Non-HTML asset links the crawler must never descend into as pages (they waste
+# the per-page link budget and a fetch, and yield garbage when parsed as HTML).
+ASSET_EXTENSIONS: tuple[str, ...] = (
+    ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+    ".ico", ".bmp", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".mp4", ".webm", ".mov", ".avi", ".mp3", ".wav",
+)
+# Document links worth surfacing (IR 決算短信 / 有価証券報告書 / 統合報告書 are usually
+# PDFs) but not parseable as HTML — recorded separately rather than crawled.
+DOCUMENT_EXTENSIONS: tuple[str, ...] = (
+    ".pdf", ".xls", ".xlsx", ".csv", ".doc", ".docx", ".ppt", ".pptx", ".zip",
+)
+
+
+def link_kind(url: str) -> Literal["page", "document", "asset"]:
+    """Classify a link as ``"page"``, ``"document"`` (PDF/Excel/…) or ``"asset"``.
+
+    Based on the URL path extension, so the frontier can crawl only HTML pages,
+    surface documents for separate handling, and drop static assets entirely.
+    """
+
+    path = urlsplit(url).path.lower()
+    if path.endswith(ASSET_EXTENSIONS):
+        return "asset"
+    if path.endswith(DOCUMENT_EXTENSIONS):
+        return "document"
+    return "page"
 
 
 @dataclass(frozen=True)

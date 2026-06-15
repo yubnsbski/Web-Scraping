@@ -31,7 +31,13 @@ Codex中心で開発・保守を自動化し、ユーザーは commit、PR、本
 - 公式APIまたはrobots.txtと利用規約を尊重した取得を行う。
 - レート制限とキャッシュを実装する。
 - `investment_assistant.ingestion` に安全なfetcher、robots確認、domain別レート制限、SQLite HTTPキャッシュを置く。
-- 取得処理の単体テストでは実ネットワークを呼ばず、fake transportを使う。
+- `investment_assistant.crawler` に目的志向IRクロール（配当方針・財務開示ページへ誘導するリンクを
+  優先するスコアリングBFS）を置く。リンクは page / document / asset に分類し、HTMLページのみを
+  巡回、静的アセット（css/js/画像/フォント）は除外、PDF等の文書はクロールせずクロール報告の
+  `documents` に surface する。
+- `investment_assistant.edinet` にEDINET APIクライアントとXBRL CSV抽出を置き、配当系指標を
+  `financials.csv` に正規化する。
+- 取得処理の単体テストでは実ネットワークを呼ばず、fake transport / fakeクライアントを使う。
 
 ### Phase 3: RAG
 

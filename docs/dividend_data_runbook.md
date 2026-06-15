@@ -59,6 +59,25 @@ investment-assistant crawl \
 investment-assistant rag-stats
 ```
 
+## See it work offline (no network, no key)
+
+```bash
+investment-assistant demo          # or: python -m investment_assistant.demo
+```
+
+Drives the real CLI paths with injected fakes through the whole chain — IR
+crawl (fixture HTML) → RAG search → EDINET ingest (fake API) → `financials.csv`
+→ dividend simulator + after-tax reverse calc — so you can confirm the pipeline
+end to end before running it for real.
+
+## Crawler note: PDFs and assets
+
+The crawler classifies each discovered link: HTML **pages** are crawled, static
+**assets** (css/js/images/fonts) are dropped, and **documents** (PDF 決算短信 /
+有価証券報告書 / Excel) are surfaced under `documents` in the crawl report instead
+of being fetched and mis-parsed as HTML. Use that list to pull the source PDFs
+out of band if you need them.
+
 ## Feeding the simulator
 
 The simulator/API read `financials_csv` (default
