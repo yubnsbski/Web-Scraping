@@ -4106,6 +4106,10 @@ function ScrapeTab({
   const [edinetYears, setEdinetYears] = useState(0);
   const [edinetOutputDir, setEdinetOutputDir] = useState("local_docs/edinet");
   const [edinetApiKeyInput, setEdinetApiKeyInput] = useState("");
+  const [tsePrimeRegistryPath, setTsePrimeRegistryPath] = useState(
+    "local_docs/edinet/source_registry_tse_prime_edinet.yaml",
+  );
+  const [tsePrimeMaxTargets, setTsePrimeMaxTargets] = useState(2000);
   const [manualFinancialsCsv, setManualFinancialsCsv] = useState(SAMPLE_FINANCIALS_CSV);
   const [manualFinancialsOutputPath, setManualFinancialsOutputPath] =
     useState(financialsCsvPath);
@@ -4119,6 +4123,7 @@ function ScrapeTab({
   const financialsState = useAsync<Json>();
   const jpxListedState = useAsync<Json>();
   const jpxDownloadState = useAsync<Json>();
+  const primeRegistryState = useAsync<Json>();
 
   useEffect(() => {
     setManualFinancialsOutputPath(financialsCsvPath);
@@ -4217,6 +4222,60 @@ function ScrapeTab({
         db_path: dbPath,
         index_after_fetch: true,
       });
+      const csvPath = String(
+        result.financials_csv ?? `${edinetOutputDir.replace(/[\\/]$/, "")}/financials.csv`,
+      );
+      if (result.financials_updated !== false) {
+        onFinancialsCsvPathChange(csvPath);
+        onFinancialsDataUpdated();
+        setManualFinancialsOutputPath(csvPath);
+      }
+      await edinetStatusState.run(() => api<Json>("/api/edinet/status"));
+      return result;
+    });
+
+  const generatePrimeRegistry = () =>
+    primeRegistryState.run(async () => {
+      const result = await api<Json>("/api/financials/prime-registry", {
+        jpx_listed_path: jpxListedOutputPath,
+        registry_path: tsePrimeRegistryPath,
+        max_targets: tsePrimeMaxTargets,
+        max_periods: 1,
+        save: true,
+      });
+      if (result.registry_path) {
+        const nextPath = String(result.registry_path);
+        setTsePrimeRegistryPath(nextPath);
+        setEdinetRegistry(nextPath);
+      }
+      return result;
+    });
+
+  const runPrimeFinancialsRefresh = (days = edinetDays, years = edinetYears) =>
+    edinetState.run(async () => {
+      if (edinetApiKeyInput.trim()) {
+        await edinetStatusState.run(() =>
+          api<Json>("/api/edinet/api-key", {
+            api_key: edinetApiKeyInput.trim(),
+          }),
+        );
+      }
+      const result = await runJob("/api/financials/prime-refresh-async", {
+        jpx_listed_path: jpxListedOutputPath,
+        registry_path: tsePrimeRegistryPath,
+        max_targets: tsePrimeMaxTargets,
+        max_periods: 1,
+        days,
+        years: years > 0 ? years : undefined,
+        output_dir: edinetOutputDir,
+        db_path: dbPath,
+        index_after_fetch: true,
+      });
+      const registryPath = String(
+        (result.prime_registry as Json | undefined)?.registry_path ?? tsePrimeRegistryPath,
+      );
+      setTsePrimeRegistryPath(registryPath);
+      setEdinetRegistry(registryPath);
       const csvPath = String(
         result.financials_csv ?? `${edinetOutputDir.replace(/[\\/]$/, "")}/financials.csv`,
       );
@@ -4582,6 +4641,21 @@ function ScrapeTab({
           <Field label="EDINET registry（YAML）">
             <input value={edinetRegistry} onChange={(e) => setEdinetRegistry(e.target.value)} />
           </Field>
+          <Field label="東証プライムregistry">
+            <input
+              value={tsePrimeRegistryPath}
+              onChange={(e) => setTsePrimeRegistryPath(e.target.value)}
+            />
+          </Field>
+          <Field label="東証プライム対象上限">
+            <input
+              type="number"
+              min={1}
+              max={2500}
+              value={tsePrimeMaxTargets}
+              onChange={(e) => setTsePrimeMaxTargets(Number(e.target.value))}
+            />
+          </Field>
           <Field label="出力ディレクトリ">
             <input value={edinetOutputDir} onChange={(e) => setEdinetOutputDir(e.target.value)} />
           </Field>
@@ -4610,11 +4684,24 @@ function ScrapeTab({
           >
             ワンクリック自動更新
           </button>
+          <button onClick={generatePrimeRegistry} disabled={primeRegistryState.loading}>
+            東証プライムregistry生成
+          </button>
+          <button
+            className="primary"
+            onClick={() => runPrimeFinancialsRefresh(7, 0)}
+            disabled={edinetState.loading}
+          >
+            東証プライム財務を自動更新
+          </button>
           <button onClick={() => runEdinetIngest()} disabled={edinetState.loading}>
             設定値で更新
           </button>
           <button onClick={() => runEdinetIngest(31, 1)} disabled={edinetState.loading}>
             1年分をバックフィル
+          </button>
+          <button onClick={() => runPrimeFinancialsRefresh(31, 1)} disabled={edinetState.loading}>
+            東証プライム1年バックフィル
           </button>
           <button
             onClick={() => void edinetStatusState.run(() => api<Json>("/api/edinet/status"))}
@@ -4623,6 +4710,17 @@ function ScrapeTab({
             キー状態を再確認
           </button>
         </div>
+        <Status loading={primeRegistryState.loading} error={primeRegistryState.error} />
+        {primeRegistryState.data && (
+          <div className="callout">
+            東証プライムregistry:{" "}
+            <span className="mono">{String(primeRegistryState.data.registry_path ?? "-")}</span>
+            <br />
+            対象: {String(primeRegistryState.data.count ?? 0)}社 / 東証プライム全体:{" "}
+            {String(primeRegistryState.data.total_prime_count ?? 0)}社
+            <p className="hint">{String(primeRegistryState.data.hint ?? "")}</p>
+          </div>
+        )}
         <Status loading={edinetStatusState.loading} error={edinetStatusState.error} />
         <Status loading={edinetState.loading} error={edinetState.error} />
         {edinetState.data && (

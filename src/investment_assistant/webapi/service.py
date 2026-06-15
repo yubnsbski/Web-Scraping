@@ -754,40 +754,26 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
         if isinstance(raw_prices, dict)
         else None
     )
-    financials_csv = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
-    if not Path(financials_csv).is_file():
-        return {
-            "available": False,
-            "universe": [],
-            "count": 0,
-            "source_ref": financials_csv,
-            "hint": (
-                "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
-                "サンプルデータに切り替えてください。"
-            ),
-            "auto_trading": False,
-            "call_real_api": False,
-        }
-    try:
-        universe = build_universe(
-            financials_csv,
-            prices=prices,
-            current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
-        )
-    except FileNotFoundError:
-        return {
-            "available": False,
-            "universe": [],
-            "count": 0,
-            "source_ref": financials_csv,
-            "hint": (
-                "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
-                "サンプルデータに切り替えてください。"
-            ),
-            "auto_trading": False,
-            "call_real_api": False,
-        }
     scope = str(body.get("scope") or "financials")
+    financials_csv = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
+    financials_available = Path(financials_csv).is_file()
+    financial_rows: list[dict[str, object]] = []
+    financials_error = ""
+    if financials_available:
+        try:
+            financial_rows = build_universe(
+                financials_csv,
+                prices=prices,
+                current_yields_csv=str(
+                    body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV
+                ),
+            )
+        except FileNotFoundError:
+            financials_available = False
+        except ValueError as exc:
+            financials_available = False
+            financials_error = str(exc)
+
     market = build_market_universe(
         financials_csv=financials_csv,
         jpx_listed_path=str(body.get("jpx_listed_path") or "local_docs/jpx/listed_issues.csv"),
@@ -801,36 +787,93 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
         for row in (raw_market_rows if isinstance(raw_market_rows, list) else [])
         if isinstance(row, dict)
     }
+    financial_by_ticker = {
+        str(row.get("ticker") or ""): row
+        for row in financial_rows
+        if isinstance(row, dict) and str(row.get("ticker") or "")
+    }
     enriched: list[dict[str, object]] = []
-    for row in universe:
-        ticker = str(row.get("ticker") or "")
+    for ticker in sorted(set(market_rows) | set(financial_by_ticker)):
+        row = financial_by_ticker.get(ticker)
         meta = market_rows.get(ticker, {})
         market_segment = (
             meta.get("market_segment_label")
             or meta.get("market_segment")
             or "未取込"
         )
+        base_row: dict[str, object] = (
+            dict(row)
+            if row is not None
+            else {
+                "ticker": ticker,
+                "name": meta.get("name") or "",
+                "price": None,
+                "dividend_latest": None,
+                "dividend_latest_edinet": None,
+                "dividend_conservative": None,
+                "yield_latest": None,
+                "yield_conservative": None,
+                "yield_basis": "manual_required",
+                "current_yield_reconciliation": None,
+                "safety": 0.0,
+                "band": None,
+                "periods": 0,
+            }
+        )
         enriched_row = {
-            **row,
+            **base_row,
             "market_segment": market_segment,
             "market_segment_raw": meta.get("market_segment_raw", ""),
             "market_segment_label": market_segment,
             "sector": meta.get("sector", ""),
             "is_prime": bool(meta.get("is_prime")),
             "is_nikkei225": bool(meta.get("is_nikkei225")),
-            "has_financials": True,
+            "has_financials": row is not None,
+            "selection_mode": "financials" if row is not None else "manual_input",
         }
         if _market_scope_matches(enriched_row, scope):
             enriched.append(enriched_row)
+    enriched.sort(
+        key=lambda row: (
+            0 if row.get("has_financials") else 1,
+            -_as_float(row.get("safety"), 0.0),
+            str(row.get("ticker") or ""),
+        )
+    )
+    market_hint = str(market.get("hint") or "")
+    normalized_scope = scope.strip().lower()
+    if not financials_available and normalized_scope in {
+        "financials",
+        "edinet",
+        "financials_available",
+    }:
+        market_hint = (
+            "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
+            "東証プライム財務の自動更新を実行してください。"
+        )
+    elif not financials_available and enriched:
+        market_hint = (
+            "財務データは未取得ですが、JPXの市場区分一覧から銘柄を選択できます。"
+            "配当・安全性は手入力、またはEDINET財務データ取得後に反映します。"
+        )
+    elif financials_error:
+        market_hint = f"{market_hint} 財務データの読込エラー: {financials_error}".strip()
     return {
-        "available": True,
+        "available": bool(enriched),
         "universe": enriched,
         "count": len(enriched),
         "scope": scope,
         "source_ref": financials_csv,
         "market_sources": market.get("sources"),
         "jpx_listed_available": market.get("jpx_listed_available"),
-        "hint": market.get("hint"),
+        "financials_available": financials_available,
+        "financials_count": len(financial_rows),
+        "market_count": len(market_rows),
+        "hint": market_hint
+        or (
+            "財務データがまだ作成されていません。DataタブでEDINET取得/手動保存を行うか、"
+            "JPX上場銘柄一覧を取得してください。"
+        ),
         "auto_trading": False,
         "call_real_api": False,
     }
@@ -1063,6 +1106,134 @@ def _jpx_listed_download_import(body: JsonDict) -> JsonDict:
         "auto_trading": False,
         "call_real_api": False,
     }
+
+
+def _financials_prime_registry(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+    from investment_assistant.investment.universe import (
+        DEFAULT_JPX_LISTED_ISSUES_PATH,
+        load_jpx_listed_issues,
+        source_manifest,
+    )
+
+    jpx_listed_path = str(body.get("jpx_listed_path") or DEFAULT_JPX_LISTED_ISSUES_PATH)
+    output_path = str(
+        body.get("registry_path") or "local_docs/edinet/source_registry_tse_prime_edinet.yaml"
+    )
+    max_targets = _as_int(body.get("max_targets"), 2000)
+    max_periods = max(_as_int(body.get("max_periods"), 1), 1)
+    issues = [issue for issue in load_jpx_listed_issues(jpx_listed_path) if issue.is_prime]
+    issues.sort(key=lambda issue: issue.code)
+    selected = issues[:max_targets] if max_targets > 0 else issues
+    if not selected:
+        return {
+            "available": False,
+            "saved": False,
+            "registry_path": output_path,
+            "jpx_listed_path": jpx_listed_path,
+            "count": 0,
+            "total_prime_count": 0,
+            "sources": source_manifest(),
+            "hint": (
+                "東証プライム銘柄が見つかりません。先にJPX公式の東証上場銘柄一覧を取得し、"
+                "市場区分データとして保存してください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+
+    registry_text = _edinet_registry_yaml(
+        selected,
+        max_periods=max_periods,
+        title="TSE Prime EDINET financials registry",
+    )
+    saved_path: str | None = None
+    if _as_bool(body.get("save"), True):
+        target = reject_path_traversal(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(registry_text, encoding="utf-8")
+        saved_path = str(target)
+    return {
+        "available": True,
+        "saved": saved_path is not None,
+        "registry_path": saved_path or output_path,
+        "jpx_listed_path": jpx_listed_path,
+        "count": len(selected),
+        "total_prime_count": len(issues),
+        "max_periods": max_periods,
+        "csv_text": registry_text,
+        "sample": [issue.to_dict() for issue in selected[:20]],
+        "sources": source_manifest(),
+        "hint": (
+            "東証プライム銘柄からEDINET取得用registryを生成しました。"
+            "このregistryを使って財務CSVを更新できます。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_prime_refresh(body: JsonDict) -> JsonDict:
+    registry = _financials_prime_registry(
+        {
+            **body,
+            "save": True,
+            "registry_path": body.get("registry_path")
+            or "local_docs/edinet/source_registry_tse_prime_edinet.yaml",
+        }
+    )
+    if not registry.get("available"):
+        return registry
+    result = _financials_refresh(
+        {
+            **body,
+            "registry_path": registry.get("registry_path"),
+        }
+    )
+    result["prime_registry"] = {
+        "registry_path": registry.get("registry_path"),
+        "count": registry.get("count"),
+        "total_prime_count": registry.get("total_prime_count"),
+        "jpx_listed_path": registry.get("jpx_listed_path"),
+    }
+    if result.get("financials_updated") is not False:
+        result["hint"] = (
+            "東証プライム銘柄registryを生成し、EDINET公式APIから財務データを更新しました。"
+            "以後の保有分析・候補抽出・シミュレーションは更新後CSVを参照します。"
+        )
+    return result
+
+
+def _financials_prime_refresh_async(body: JsonDict) -> JsonDict:
+    job_id = JOBS.start("financials-prime-refresh", lambda: _financials_prime_refresh(body))
+    return {"job_id": job_id, "status": "running", "kind": "financials-prime-refresh"}
+
+
+def _edinet_registry_yaml(
+    issues: list[Any],
+    *,
+    max_periods: int,
+    title: str,
+) -> str:
+    lines = [
+        f"# {title}",
+        "# Generated from JPX listed issue data. Used only for EDINET public API ingestion.",
+        "sources:",
+    ]
+    for issue in issues:
+        name = f"{issue.code}_{issue.name}".strip("_")
+        lines.extend(
+            [
+                f"  - name: {_yaml_scalar(name)}",
+                f"    ticker: {_yaml_scalar(issue.code)}",
+                f"    company: {_yaml_scalar(issue.name)}",
+                '    source_type: "public_api"',
+                '    provider: "edinet"',
+                "    allowed: true",
+                f"    max_periods: {max_periods}",
+            ]
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _market_prices(body: JsonDict) -> JsonDict:
@@ -2206,6 +2377,9 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/financials/status"): _financials_status,
     ("POST", "/api/financials/status"): _financials_status,
     ("POST", "/api/financials/import"): _financials_import,
+    ("POST", "/api/financials/prime-registry"): _financials_prime_registry,
+    ("POST", "/api/financials/prime-refresh"): _financials_prime_refresh,
+    ("POST", "/api/financials/prime-refresh-async"): _financials_prime_refresh_async,
     ("POST", "/api/financials/refresh"): _financials_refresh,
     ("POST", "/api/financials/refresh-async"): _financials_refresh_async,
     ("POST", "/api/financials/securities"): _financials_securities,

@@ -191,6 +191,84 @@ def test_financials_refresh_without_key_scrapes_only_official_pages(
     assert "EDINET API KEY" in payload["hint"]
 
 
+def test_prime_registry_generates_edinet_targets_from_jpx_listed(tmp_path: Path) -> None:
+    from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,7203,トヨタ自動車,プライム（内国株式）,輸送用機器\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+        "2026-05-31,9999,サンプルスタンダード,スタンダード（内国株式）,サービス業\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+    listed_path.write_text(listed, encoding="utf-8")
+    registry_path = tmp_path / "source_registry_tse_prime_edinet.yaml"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/prime-registry",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(registry_path),
+            "max_targets": 10,
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["count"] == 2
+    assert payload["total_prime_count"] == 2
+    assert registry_path.is_file()
+    targets = build_edinet_targets_from_registry(registry_path)
+    assert [target.ticker for target in targets] == ["7203", "8001"]
+    assert targets[0].company == "トヨタ自動車"
+
+
+def test_prime_refresh_generates_registry_and_delegates_to_financials_refresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.webapi import service
+
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+    listed_path.write_text(listed, encoding="utf-8")
+    registry_path = tmp_path / "prime.yaml"
+    captured: dict[str, object] = {}
+
+    def fake_refresh(body: dict[str, object]) -> dict[str, object]:
+        captured.update(body)
+        return {
+            "mode": "edinet_api",
+            "financials_updated": True,
+            "financials_csv": str(tmp_path / "edinet" / "financials.csv"),
+            "ingested_count": 1,
+            "targets_count": 1,
+        }
+
+    monkeypatch.setattr(service, "_financials_refresh", fake_refresh)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/prime-refresh",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(registry_path),
+            "output_dir": str(tmp_path / "edinet"),
+            "days": 7,
+        },
+    )
+
+    assert status == 200
+    assert payload["financials_updated"] is True
+    assert captured["registry_path"] == str(registry_path)
+    assert registry_path.is_file()
+    assert payload["prime_registry"]["count"] == 1
+
+
 def test_edinet_status_reads_local_dotenv_without_exposing_key(
     tmp_path: Path,
     monkeypatch,
@@ -342,7 +420,7 @@ def test_portfolio_universe_missing_csv_returns_empty_result(tmp_path: Path) -> 
     status, payload = handle_api(
         "POST",
         "/api/portfolio/universe",
-        {"financials_csv": str(missing)},
+        {"financials_csv": str(missing), "scope": "financials"},
     )
 
     assert status == 200
@@ -351,6 +429,42 @@ def test_portfolio_universe_missing_csv_returns_empty_result(tmp_path: Path) -> 
     assert payload["universe"] == []
     assert payload["source_ref"] == str(missing)
     assert "財務データ" in payload["hint"]
+
+
+def test_portfolio_universe_can_select_prime_rows_without_financials(
+    tmp_path: Path,
+) -> None:
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,8001,伊藤忠商事,プライム（内国株式）,卸売業\n"
+        "2026-05-31,9999,サンプルスタンダード,スタンダード（内国株式）,サービス業\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+    listed_path.write_text(listed, encoding="utf-8")
+    empty_registry = tmp_path / "nikkei.yaml"
+    empty_registry.write_text("sources: []\n", encoding="utf-8")
+
+    status, payload = handle_api(
+        "POST",
+        "/api/portfolio/universe",
+        {
+            "financials_csv": str(tmp_path / "missing-financials.csv"),
+            "jpx_listed_path": str(listed_path),
+            "nikkei225_registry": str(empty_registry),
+            "scope": "prime",
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["count"] == 1
+    assert payload["financials_available"] is False
+    assert payload["universe"][0]["ticker"] == "8001"
+    assert payload["universe"][0]["market_segment"] == "プライム（国内株式）"
+    assert payload["universe"][0]["has_financials"] is False
+    assert payload["universe"][0]["selection_mode"] == "manual_input"
+    assert payload["universe"][0]["yield_basis"] == "manual_required"
+    assert "JPX" in payload["hint"]
 
 
 def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> None:
