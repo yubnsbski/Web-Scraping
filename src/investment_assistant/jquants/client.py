@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -89,6 +90,38 @@ class JQuantsClient:
             "raw": payload,
         }
 
+    def _daily_bars_with_subscription_fallback(
+        self,
+        code: str,
+        *,
+        date: str | None,
+        from_date: str | None,
+        to_date: str | None,
+        lookback_days: int,
+    ) -> JsonDict:
+        try:
+            return self._daily_bars_for_code(
+                code,
+                date=date,
+                from_date=from_date,
+                to_date=to_date,
+            )
+        except JQuantsApiError as exc:
+            retry_window = None if date else _subscription_retry_window(str(exc), lookback_days)
+            if retry_window is None:
+                raise
+            retry_from, retry_to = retry_window
+            result = self._daily_bars_for_code(
+                code,
+                from_date=retry_from,
+                to_date=retry_to,
+            )
+            result["subscription_window_used"] = {
+                "from": retry_from,
+                "to": retry_to,
+            }
+            return result
+
     def fetch_latest_prices(
         self,
         tickers: Iterable[str],
@@ -113,11 +146,12 @@ class JQuantsClient:
                 result: JsonDict | None = None
                 for code in candidates:
                     try:
-                        result = self._daily_bars_for_code(
+                        result = self._daily_bars_with_subscription_fallback(
                             code,
                             date=date,
                             from_date=None if date else from_date.isoformat(),
                             to_date=None if date else today.isoformat(),
+                            lookback_days=lookback_days,
                         )
                         price, row_date = _latest_close(result["rows"])
                         if price is not None:
@@ -131,6 +165,11 @@ class JQuantsClient:
                 prices[ticker] = price
                 if row_date:
                     as_of[ticker] = row_date
+                if isinstance(result.get("subscription_window_used"), dict):
+                    window = result["subscription_window_used"]
+                    notes[ticker] = (
+                        f"subscription_window_used:{window.get('from')}~{window.get('to')}"
+                    )
                 if price is None:
                     notes[ticker] = "; ".join(errors) or "no_close_price_returned"
             except JQuantsApiError as exc:
@@ -175,11 +214,12 @@ class JQuantsClient:
             tried_codes[ticker] = list(candidates)
             for code in candidates:
                 try:
-                    result = self._daily_bars_for_code(
+                    result = self._daily_bars_with_subscription_fallback(
                         code,
                         date=date,
                         from_date=None if date else from_date.isoformat(),
                         to_date=None if date else today.isoformat(),
+                        lookback_days=lookback_days,
                     )
                 except JQuantsApiError as exc:
                     errors.append(f"{code}: {exc}")
@@ -200,6 +240,11 @@ class JQuantsClient:
                 ]
                 if normalized:
                     bar_facts.extend(normalized)
+                    if isinstance(result.get("subscription_window_used"), dict):
+                        window = result["subscription_window_used"]
+                        notes[ticker] = (
+                            f"subscription_window_used:{window.get('from')}~{window.get('to')}"
+                        )
                     break
                 errors.append(f"{code}: no_daily_bars_returned")
             if errors and not any(str(fact.ticker) == ticker for fact in bar_facts):
@@ -288,6 +333,18 @@ def _compact_date(value: str | None) -> str | None:
     if not text:
         return None
     return text.replace("-", "")
+
+
+def _subscription_retry_window(message: str, lookback_days: int) -> tuple[str, str] | None:
+    match = re.search(r"(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})", message)
+    if not match:
+        return None
+    try:
+        covered_to = datetime.fromisoformat(match.group(2)).date()
+    except ValueError:
+        return None
+    covered_from = covered_to - timedelta(days=max(lookback_days, 1))
+    return covered_from.isoformat(), covered_to.isoformat()
 
 
 def _extract_rows(payload: JsonDict) -> list[JsonDict]:

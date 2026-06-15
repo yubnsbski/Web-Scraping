@@ -327,6 +327,11 @@ const SAMPLE_JPX_LISTED_ISSUES_DATA =
   "2026-05-31,8306,三菱ＵＦＪフィナンシャル・グループ,プライム（国内株式）,銀行業\n" +
   "2026-05-31,9999,サンプルスタンダード,スタンダード（国内株式）,サービス業\n";
 
+const SAMPLE_YAHOO_PRICE_CSV =
+  "Symbol,Regular Market Price,Date,source_ref\n" +
+  "7203.T,2890,2026-03-24,Yahoo Finance manual check\n" +
+  "9433.T,4970,2026-03-24,Yahoo Finance manual check\n";
+
 const MARKET_SCOPE_OPTIONS = [
   { value: "prime", label: "東証プライム" },
   { value: "nikkei225", label: "日経225" },
@@ -4295,8 +4300,14 @@ function ScrapeTab({
   const [edinetApiKeyInput, setEdinetApiKeyInput] = useState("");
   const [jquantsApiKeyInput, setJquantsApiKeyInput] = useState("");
   const [jquantsContractAcknowledged, setJquantsContractAcknowledged] = useState(false);
+  const [jquantsPersistLocal, setJquantsPersistLocal] = useState(false);
   const [jquantsBarTickers, setJquantsBarTickers] = useState("9433,8306");
+  const [jquantsBarDate, setJquantsBarDate] = useState("");
   const [jquantsBarLookbackDays, setJquantsBarLookbackDays] = useState(30);
+  const [bulkBarsScope, setBulkBarsScope] = useState("prime");
+  const [bulkBarsMaxTickers, setBulkBarsMaxTickers] = useState(0);
+  const [yahooPriceCsv, setYahooPriceCsv] = useState(SAMPLE_YAHOO_PRICE_CSV);
+  const [yahooPriceInboxPath, setYahooPriceInboxPath] = useState("local_docs/market/yahoo_prices_inbox.csv");
   const [allDomesticRegistryPath, setAllDomesticRegistryPath] = useState(
     "local_docs/edinet/source_registry_all_domestic_edinet.yaml",
   );
@@ -4320,6 +4331,9 @@ function ScrapeTab({
   const edinetStatusState = useAsync<Json>();
   const jquantsStatusState = useAsync<Json>();
   const jquantsBarsState = useAsync<Json>();
+  const universeBarsState = useAsync<Json>();
+  const yahooPricesState = useAsync<Json>();
+  const yahooPricesFileState = useAsync<Json>();
   const financialsState = useAsync<Json>();
   const jpxListedState = useAsync<Json>();
   const jpxDownloadState = useAsync<Json>();
@@ -4592,6 +4606,7 @@ function ScrapeTab({
       api<Json>("/api/jquants/api-key", {
         api_key: jquantsApiKeyInput.trim() || undefined,
         contract_acknowledged: jquantsContractAcknowledged,
+        persist_local: jquantsPersistLocal,
       }),
     );
 
@@ -4610,8 +4625,49 @@ function ScrapeTab({
         tickers: splitTickerInput(jquantsBarTickers),
         provider_id: "jquants",
         runtime_mode: "production",
+        date: jquantsBarDate.trim() || undefined,
         lookback_days: jquantsBarLookbackDays,
         allow_cache_on_policy_block: true,
+      });
+      await refreshDataStatus();
+      return result;
+    });
+
+  const refreshUniverseBars = () =>
+    universeBarsState.run(async () => {
+      const result = await runJob("/api/market/bars/universe-async", {
+        scope: bulkBarsScope,
+        max_tickers: bulkBarsMaxTickers,
+        provider_id: "jquants",
+        runtime_mode: "production",
+        date: jquantsBarDate.trim() || undefined,
+        lookback_days: jquantsBarLookbackDays,
+        allow_cache_on_policy_block: true,
+        financials_csv: financialsCsvPath,
+        jpx_listed_path: jpxListedOutputPath,
+        company_master_path: companyMasterOutputPath,
+      });
+      await refreshDataStatus();
+      return result;
+    });
+
+  const importYahooPrices = () =>
+    yahooPricesState.run(async () => {
+      const result = await api<Json>("/api/market/prices/import", {
+        csv_text: yahooPriceCsv,
+        provider_id: "yahoo_finance_manual",
+        source_ref: "Yahoo Finance manual personal-use input",
+      });
+      await refreshDataStatus();
+      return result;
+    });
+
+  const importYahooPriceFile = () =>
+    yahooPricesFileState.run(async () => {
+      const result = await api<Json>("/api/market/prices/import-file", {
+        path: yahooPriceInboxPath,
+        provider_id: "yahoo_finance_manual",
+        allow_missing: true,
       });
       await refreshDataStatus();
       return result;
@@ -4959,8 +5015,8 @@ function ScrapeTab({
           <div>
             <h3>J-Quants（契約API）</h3>
             <p className="hint">
-              取得済みのAPI KEY / Refresh Tokenを、この実行中のバックエンドへ一時反映します。
-              入力値は画面表示・Git・CSVには保存しません。
+              取得済みのAPI KEY / Refresh Tokenを、この実行中のバックエンドへ反映します。
+              「このPCに保存」を選ぶとgitignore済みの .env.local にだけ保存し、毎日更新でも再利用できます。
             </p>
           </div>
           <span className={`badge ${jquantsStatusState.data?.api_key_configured ? "safe" : "warn"}`}>
@@ -4975,7 +5031,7 @@ function ScrapeTab({
           </p>
         </div>
         <div className="form">
-          <Field label="J-Quants API KEY / Refresh Token（一時入力・保存しない）">
+          <Field label="J-Quants API KEY / Refresh Token">
             <input
               type="password"
               value={jquantsApiKeyInput}
@@ -4995,6 +5051,17 @@ function ScrapeTab({
               <span>この端末での利用・商用利用・再配布範囲が契約上許可されている</span>
             </span>
           </label>
+          <label className="field check-field jquants-contract-field">
+            <span>キー保存</span>
+            <span className="check-row">
+              <input
+                type="checkbox"
+                checked={jquantsPersistLocal}
+                onChange={(e) => setJquantsPersistLocal(e.target.checked)}
+              />
+              <span>このPCの .env.local に保存して毎日7時更新に使う</span>
+            </span>
+          </label>
           <button onClick={applyJquantsApiKey} disabled={jquantsStatusState.loading}>
             J-Quants KEYを反映
           </button>
@@ -5011,6 +5078,12 @@ function ScrapeTab({
             KEY: {jquantsStatusState.data.api_key_configured ? "設定済み" : "未設定"} / 反映元:{" "}
             {edinetApiKeySourceLabel(jquantsStatusState.data.api_key_source)} / 契約確認:{" "}
             {jquantsStatusState.data.contract_acknowledged ? "済み" : "未確認"}
+            {jquantsStatusState.data.persisted_local ? (
+              <>
+                <br />
+                保存先: <span className="mono">{String(jquantsStatusState.data.persisted_path ?? ".env.local")}</span>
+              </>
+            ) : null}
             <br />
             provider: <span className="mono">jquants</span> / production:{" "}
             {jquantsStatusState.data.production_allowed ? "allowed" : "blocked"}
@@ -5018,6 +5091,14 @@ function ScrapeTab({
               <>
                 <br />
                 {String(jquantsPolicy.license_note)}
+              </>
+            ) : null}
+            {!jquantsStatusState.data.production_allowed ? (
+              <>
+                <br />
+                <span className="warn-text">
+                  株価が出ない場合は、KEY入力と契約確認チェックの両方を反映してください。
+                </span>
               </>
             ) : null}
           </div>
@@ -5052,7 +5133,7 @@ function ScrapeTab({
         <div className="subpanel csv-manual-panel">
           <h4>株価四本値・出来高を更新</h4>
           <p className="hint">
-            日次OHLCVを取得して、価格推移・出来高・調整後終値の要約に使います。売買推奨や自動売買は行いません。
+            日次OHLCVを取得して、価格推移・出来高・調整後終値の要約に使います。契約範囲外の日付は取得可能な範囲へ補正します。
           </p>
           <div className="form">
             <Field label="証券コード">
@@ -5060,6 +5141,13 @@ function ScrapeTab({
                 value={jquantsBarTickers}
                 onChange={(e) => setJquantsBarTickers(e.target.value)}
                 placeholder="9433, 8306"
+              />
+            </Field>
+            <Field label="基準日（任意）">
+              <input
+                type="date"
+                value={jquantsBarDate}
+                onChange={(e) => setJquantsBarDate(e.target.value)}
               />
             </Field>
             <Field label="取得日数">
@@ -5105,6 +5193,115 @@ function ScrapeTab({
                   ))}
                 </div>
               )}
+            </div>
+          )}
+          <div className="subpanel">
+            <h4>全株データを選択して更新</h4>
+            <p className="hint">
+              JPX上場一覧と日経225フラグから対象銘柄を展開し、OHLCVをまとめて取得します。0件上限なら選択範囲の全件です。
+            </p>
+            <div className="form">
+              <Field label="対象">
+                <select value={bulkBarsScope} onChange={(e) => setBulkBarsScope(e.target.value)}>
+                  <option value="nikkei225">日経225</option>
+                  <option value="prime">東証プライム</option>
+                  <option value="domestic_stocks">国内株式</option>
+                </select>
+              </Field>
+              <Field label="上限件数（0=全件）">
+                <input
+                  type="number"
+                  min={0}
+                  max={10000}
+                  value={bulkBarsMaxTickers}
+                  onChange={(e) => setBulkBarsMaxTickers(Number(e.target.value))}
+                />
+              </Field>
+              <button className="primary" onClick={refreshUniverseBars} disabled={universeBarsState.loading}>
+                選択範囲を一括更新
+              </button>
+            </div>
+            <Status loading={universeBarsState.loading} error={universeBarsState.error} />
+            {universeBarsState.data && (
+              <div className="callout">
+                対象: {String((universeBarsState.data.selection as Json | undefined)?.scope ?? bulkBarsScope)} / 選択:{" "}
+                {String((universeBarsState.data.selection as Json | undefined)?.selected_count ?? 0)} / 全体:{" "}
+                {String((universeBarsState.data.selection as Json | undefined)?.universe_total_count ?? 0)}
+                <br />
+                取得行数: {String((universeBarsState.data.bars as Json[] | undefined)?.length ?? 0)} / 保存:{" "}
+                {String((universeBarsState.data.bar_store as Json | undefined)?.saved ?? false)}
+                <br />
+                保存先:{" "}
+                <span className="mono">
+                  {String((universeBarsState.data.bar_store as Json | undefined)?.path ?? "local_docs/market/daily_bars.csv")}
+                </span>
+                {universeBarsState.data.provider_blocked ? (
+                  <>
+                    <br />
+                    <span className="warn-text">J-Quantsキーまたは契約確認が未設定です。保存済みデータだけを反映しました。</span>
+                  </>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="subpanel csv-manual-panel">
+          <h4>株価CSVをデータへ反映</h4>
+          <p className="hint">
+            個人利用で確認した価格CSVやコピーした表を貼ると、共通の価格データへ保存します。以後の保有分析・詳細・レポートが同じ価格を参照します。
+          </p>
+          <Field label="価格データ">
+            <textarea
+              rows={5}
+              value={yahooPriceCsv}
+              onChange={(e) => setYahooPriceCsv(e.target.value)}
+              placeholder="Symbol,Regular Market Price,Date"
+            />
+          </Field>
+          <div className="form">
+            <button className="primary" onClick={importYahooPrices} disabled={yahooPricesState.loading}>
+              価格データへ反映
+            </button>
+            <button onClick={() => setYahooPriceCsv(SAMPLE_YAHOO_PRICE_CSV)}>例に戻す</button>
+          </div>
+          <Status loading={yahooPricesState.loading} error={yahooPricesState.error} />
+          {yahooPricesState.data && (
+            <div className="callout">
+              反映件数: {String(yahooPricesState.data.count ?? 0)} / 総件数:{" "}
+              {String(yahooPricesState.data.total_count ?? 0)}
+              <br />
+              保存先: <span className="mono">{String(yahooPricesState.data.saved_path ?? "local_docs/market/current_prices.csv")}</span>
+              {Array.isArray(yahooPricesState.data.tickers) ? (
+                <>
+                  <br />
+                  銘柄: {(yahooPricesState.data.tickers as string[]).join(", ")}
+                </>
+              ) : null}
+            </div>
+          )}
+          <div className="form">
+            <Field label="毎日7時に見るファイル">
+              <input value={yahooPriceInboxPath} onChange={(e) => setYahooPriceInboxPath(e.target.value)} />
+            </Field>
+            <button onClick={importYahooPriceFile} disabled={yahooPricesFileState.loading}>
+              ファイルから反映
+            </button>
+          </div>
+          <p className="hint">
+            Yahoo Financeなどで確認した個人利用のCSVをこのパスに置くと、毎日7時の自動チェックでも同じ取り込みを使えます。
+          </p>
+          <Status loading={yahooPricesFileState.loading} error={yahooPricesFileState.error} />
+          {yahooPricesFileState.data && (
+            <div className="callout">
+              状態: {String(yahooPricesFileState.data.status ?? (yahooPricesFileState.data.available ? "imported" : "missing"))}
+              <br />
+              入力: <span className="mono">{String(yahooPricesFileState.data.input_path ?? yahooPriceInboxPath)}</span>
+              {yahooPricesFileState.data.available ? (
+                <>
+                  <br />
+                  反映件数: {String(yahooPricesFileState.data.count ?? 0)}
+                </>
+              ) : null}
             </div>
           )}
         </div>
@@ -6020,6 +6217,21 @@ function SimulateTab({
   const projection: Json = data?.projection ?? {};
   const showShares = weightMode === "shares";
   const showAmount = weightMode === "amount";
+  const priceMap = (priceResult?.prices ?? {}) as Record<string, number | null | undefined>;
+  const updatedPriceTickers = holdings
+    .map((holding) => holding.ticker)
+    .filter((ticker) => priceMap[ticker] != null);
+  const missingPriceTickers = priceResult
+    ? holdings
+        .map((holding) => holding.ticker)
+        .filter((ticker) => priceMap[ticker] == null)
+    : [];
+  const priceStore = (priceResult?.price_store ?? {}) as Json;
+  const cachedPriceTickers = [
+    ...((priceStore.cache_used as string[] | undefined) ?? []),
+    ...((priceStore.daily_bar_cache_used as string[] | undefined) ?? []),
+  ];
+  const providerBlocked = Boolean(priceResult?.provider_blocked);
 
   return (
     <section className="tool-section">
@@ -6112,10 +6324,29 @@ function SimulateTab({
       {priceResult?.error ? (
         <p className="status error">価格取得エラー: {String(priceResult.error)}</p>
       ) : priceResult ? (
-        <p className="callout">
-          価格取得元: <span className="mono">{String(priceResult.provider_id ?? priceProvider)}</span> /{" "}
-          {priceResult.as_of ? `基準日 ${Object.values(priceResult.as_of as Json).join(", ")}` : "基準日未取得"}
-        </p>
+        <div className={`callout price-result-card ${providerBlocked ? "warn-callout" : ""}`}>
+          <b>市場価格の反映</b>
+          <p>
+            反映 {updatedPriceTickers.length}/{holdings.length}銘柄 / 取得元{" "}
+            <span className="mono">{String(priceResult.provider_id ?? priceProvider)}</span> /{" "}
+            {priceResult.as_of ? `基準日 ${Object.values(priceResult.as_of as Json).join(", ")}` : "基準日未取得"}
+          </p>
+          {cachedPriceTickers.length > 0 && (
+            <p className="hint">保存済み価格を使用: {cachedPriceTickers.join(", ")}</p>
+          )}
+          {missingPriceTickers.length > 0 && (
+            <p className="status warn-text">
+              未反映: {missingPriceTickers.join(", ")}。DataタブでJ-Quants KEYと契約確認を反映し、
+              「OHLCVを更新」または価格CSVを登録してください。
+            </p>
+          )}
+          {providerBlocked && (
+            <p className="hint">
+              J-Quantsは本番モードで未許可です。API KEY登録に加えて「契約・利用条件を確認済み」をチェックすると、
+              実取得が有効になります。
+            </p>
+          )}
+        </div>
       ) : null}
 
       {universe.length === 0 && (

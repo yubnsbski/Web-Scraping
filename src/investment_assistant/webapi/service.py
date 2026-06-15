@@ -226,6 +226,7 @@ def _jquants_api_key_set(body: JsonDict) -> JsonDict:
     global _JQUANTS_API_KEY_RUNTIME_SET, _JQUANTS_CONTRACT_RUNTIME_ACK
 
     value = str(body.get("api_key") or body.get("refresh_token") or "").strip()
+    persist_local = _as_bool(body.get("persist_local"), False)
     if value:
         os.environ[_JQUANTS_REFRESH_TOKEN_ENV_VAR] = value
         os.environ[_JQUANTS_API_KEY_ENV_VAR] = value
@@ -233,11 +234,27 @@ def _jquants_api_key_set(body: JsonDict) -> JsonDict:
     if _as_bool(body.get("contract_acknowledged"), False):
         _mark_runtime_contracted_provider(_JQUANTS_PROVIDER_ID)
         _JQUANTS_CONTRACT_RUNTIME_ACK = True
+    persisted_path: str | None = None
+    if persist_local and value:
+        from investment_assistant.investment.provider_policy import CONTRACTED_PROVIDERS_ENV
+
+        providers = os.getenv(CONTRACTED_PROVIDERS_ENV, "")
+        persisted_path = _upsert_dotenv_values(
+            Path(".env.local"),
+            {
+                _JQUANTS_REFRESH_TOKEN_ENV_VAR: value,
+                _JQUANTS_API_KEY_ENV_VAR: value,
+                CONTRACTED_PROVIDERS_ENV: providers,
+            },
+        )
     status = _jquants_status({})
     status["request_api_key_applied"] = bool(value)
     status["request_contract_acknowledged"] = _as_bool(
         body.get("contract_acknowledged"), False
     )
+    status["persisted_local"] = bool(persisted_path)
+    if persisted_path:
+        status["persisted_path"] = persisted_path
     return status
 
 
@@ -2154,6 +2171,87 @@ def _market_prices(body: JsonDict) -> JsonDict:
     return result
 
 
+def _market_prices_import(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.provider_policy import provider_policy
+    from investment_assistant.portfolio.price_store import (
+        DEFAULT_CURRENT_PRICES_CSV,
+        MarketPriceFact,
+        load_current_prices,
+        merge_market_price_facts,
+        parse_current_prices_csv,
+        save_current_prices,
+    )
+
+    csv_text = str(body.get("csv_text") or "").strip()
+    if not csv_text:
+        raise ApiError("csv_text is required")
+    provider_id = str(body.get("provider_id") or "yahoo_finance_manual").strip()
+    source_ref = str(body.get("source_ref") or "Yahoo Finance manual input").strip()
+    path = Path(str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV))
+    parsed = list(parse_current_prices_csv(csv_text).values())
+    if provider_id or source_ref:
+        parsed = [
+            MarketPriceFact(
+                ticker=fact.ticker,
+                price=fact.price,
+                as_of=fact.as_of,
+                provider_id=provider_id or fact.provider_id,
+                source_ref=source_ref or fact.source_ref,
+                note=fact.note or "manual_price_import",
+            )
+            for fact in parsed
+        ]
+    if not parsed:
+        raise ApiError("no valid price rows found")
+    existing = load_current_prices(path)
+    merged = merge_market_price_facts(existing.values(), parsed)
+    saved_path = save_current_prices(merged, path)
+    return {
+        "available": True,
+        "count": len(parsed),
+        "tickers": [fact.ticker for fact in parsed],
+        "saved_path": saved_path,
+        "total_count": len(merged),
+        "provider_id": provider_id,
+        "provider_policy": provider_policy(provider_id, runtime_mode="production").to_dict(),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _market_prices_import_file(body: JsonDict) -> JsonDict:
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+    from investment_assistant.portfolio.price_store import (
+        DEFAULT_CURRENT_PRICES_CSV,
+        DEFAULT_YAHOO_PRICE_INBOX_CSV,
+    )
+
+    source_path = reject_path_traversal(
+        str(body.get("path") or body.get("input_path") or DEFAULT_YAHOO_PRICE_INBOX_CSV)
+    )
+    if not source_path.is_file():
+        if _as_bool(body.get("allow_missing"), True):
+            return {
+                "available": False,
+                "status": "missing",
+                "input_path": str(source_path),
+                "price_store_path": str(body.get("price_store_path") or DEFAULT_CURRENT_PRICES_CSV),
+                "provider_id": str(body.get("provider_id") or "yahoo_finance_manual"),
+                "auto_trading": False,
+                "call_real_api": False,
+            }
+        raise ApiError(f"price import file not found: {source_path}", status=404)
+
+    nested = dict(body)
+    nested["csv_text"] = source_path.read_text(encoding="utf-8-sig")
+    nested.setdefault("provider_id", "yahoo_finance_manual")
+    nested.setdefault("source_ref", str(source_path))
+    result = _market_prices_import(nested)
+    result["status"] = "imported"
+    result["input_path"] = str(source_path)
+    return result
+
+
 def _market_bars(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import (
         ensure_provider_allowed,
@@ -2214,6 +2312,86 @@ def _market_bars(body: JsonDict) -> JsonDict:
         )
     result["provider_policy"] = policy.to_dict()
     return result
+
+
+def _market_bars_universe(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment.universe import build_market_universe
+
+    scope = str(body.get("scope") or body.get("universe") or "prime")
+    max_tickers = _as_int(body.get("max_tickers"), 0)
+    limit = max_tickers if max_tickers > 0 else 10_000
+    universe = build_market_universe(
+        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        jpx_listed_path=str(body.get("jpx_listed_path") or "local_docs/jpx/listed_issues.csv"),
+        nikkei225_registry=str(
+            body.get("nikkei225_registry") or "examples/source_registry_nikkei225_edinet.yaml"
+        ),
+        query=str(body.get("query") or ""),
+        scope=scope,
+        limit=limit,
+    )
+    raw_securities = universe.get("securities")
+    rows = [
+        row
+        for row in (raw_securities if isinstance(raw_securities, list) else [])
+        if isinstance(row, dict) and str(row.get("ticker") or "").strip()
+    ]
+    tickers = [str(row.get("ticker")) for row in rows]
+    universe_total = _as_int(universe.get("total_count"), len(tickers))
+    jpx_listed_count = _as_int(universe.get("jpx_listed_count"), 0)
+    nikkei225_count = _as_int(universe.get("nikkei225_count"), 0)
+    financials_count = _as_int(universe.get("financials_count"), 0)
+    if not tickers:
+        return {
+            "available": False,
+            "scope": scope,
+            "selected_count": 0,
+            "universe_total_count": universe_total,
+            "hint": universe.get("hint") or "対象銘柄がありません。",
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+
+    selection = {
+        "scope": scope,
+        "selected_count": len(tickers),
+        "universe_total_count": universe_total,
+        "jpx_listed_count": jpx_listed_count,
+        "nikkei225_count": nikkei225_count,
+        "financials_count": financials_count,
+        "tickers_sample": tickers[:20],
+        "auto_trading": False,
+    }
+    if _as_bool(body.get("preview_only"), False):
+        return {
+            "available": True,
+            "selection": selection,
+            "tickers": tickers,
+            "sources": universe.get("sources"),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+
+    nested = dict(body)
+    nested["tickers"] = tickers
+    nested.setdefault("provider_id", _JQUANTS_PROVIDER_ID)
+    nested.setdefault("runtime_mode", "production")
+    nested.setdefault("allow_cache_on_policy_block", True)
+    result = _market_bars(nested)
+    result["selection"] = selection
+    return result
+
+
+def _market_bars_universe_async(body: JsonDict) -> JsonDict:
+    scope = str(body.get("scope") or body.get("universe") or "prime")
+    job_id = JOBS.start("market-bars-universe", lambda: _market_bars_universe(body))
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "kind": "market-bars-universe",
+        "scope": scope,
+        "auto_trading": False,
+    }
 
 
 def _apply_market_price_store(
@@ -3282,6 +3460,33 @@ def _ensure_env_from_dotenv(key: str) -> bool:
     return False
 
 
+def _upsert_dotenv_values(path: Path, values: dict[str, str]) -> str:
+    existing_lines: list[str] = []
+    if path.is_file():
+        existing_lines = path.read_text(encoding="utf-8").splitlines()
+    remaining = {key: value for key, value in values.items() if value.strip()}
+    out: list[str] = []
+    for line in existing_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out.append(line)
+            continue
+        name, _ = stripped.split("=", 1)
+        key = name.strip()
+        if key in remaining:
+            out.append(f'{key}="{_escape_dotenv_value(remaining.pop(key))}"')
+        else:
+            out.append(line)
+    for key in sorted(remaining):
+        out.append(f'{key}="{_escape_dotenv_value(remaining[key])}"')
+    path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+    return str(path)
+
+
+def _escape_dotenv_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _edinet_api_key_source(
     *,
     configured: bool,
@@ -3557,7 +3762,11 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/companies/status"): _companies_master_status,
     ("POST", "/api/companies/refresh"): _companies_master_refresh,
     ("POST", "/api/market/prices"): _market_prices,
+    ("POST", "/api/market/prices/import"): _market_prices_import,
+    ("POST", "/api/market/prices/import-file"): _market_prices_import_file,
     ("POST", "/api/market/bars"): _market_bars,
+    ("POST", "/api/market/bars/universe"): _market_bars_universe,
+    ("POST", "/api/market/bars/universe-async"): _market_bars_universe_async,
     ("POST", "/api/market/current-yields/import"): _market_current_yields_import,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,

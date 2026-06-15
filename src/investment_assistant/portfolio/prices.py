@@ -69,6 +69,8 @@ def fetch_prices(
         url = template.format(ticker=ticker.lower())
         try:
             prices[ticker] = parse_close(fetcher(url))
+            if prices[ticker] is None:
+                notes[ticker] = "no_close_price_returned"
         except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
             _logger.warning("price fetch failed ticker=%s error=%s", ticker, type(exc).__name__)
             prices[ticker] = None

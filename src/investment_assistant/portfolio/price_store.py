@@ -25,6 +25,7 @@ MARKET_PRICE_COLUMNS: tuple[str, ...] = (
 )
 
 DEFAULT_CURRENT_PRICES_CSV = Path("local_docs/market/current_prices.csv")
+DEFAULT_YAHOO_PRICE_INBOX_CSV = Path("local_docs/market/yahoo_prices_inbox.csv")
 
 
 @dataclass(frozen=True)
@@ -54,9 +55,8 @@ def load_current_prices(
 
 
 def parse_current_prices_csv(text: str) -> dict[str, MarketPriceFact]:
-    reader = csv.DictReader(io.StringIO(text))
     facts: dict[str, MarketPriceFact] = {}
-    for row in reader:
+    for row in _dict_rows(text):
         fact = market_price_fact_from_row(row)
         if fact is not None:
             facts[fact.ticker] = fact
@@ -64,14 +64,39 @@ def parse_current_prices_csv(text: str) -> dict[str, MarketPriceFact]:
 
 
 def market_price_fact_from_row(row: Mapping[str, object]) -> MarketPriceFact | None:
-    ticker = normalize_ticker(row.get("ticker") or row.get("code") or row.get("security_code"))
-    price = _positive_float(row.get("price") or row.get("current_price") or row.get("close"))
+    ticker = normalize_ticker(
+        row.get("ticker")
+        or row.get("code")
+        or row.get("security_code")
+        or row.get("symbol")
+        or row.get("Symbol")
+        or row.get("銘柄コード")
+        or row.get("コード")
+    )
+    price = _positive_float(
+        row.get("price")
+        or row.get("current_price")
+        or row.get("regularMarketPrice")
+        or row.get("Regular Market Price")
+        or row.get("last_price")
+        or row.get("Last Price")
+        or row.get("close")
+        or row.get("Close")
+        or row.get("現在値")
+        or row.get("終値")
+    )
     if not ticker or price is None:
         return None
     return MarketPriceFact(
         ticker=ticker,
         price=price,
-        as_of=_text(row.get("as_of") or row.get("date") or row.get("price_as_of")),
+        as_of=_text(
+            row.get("as_of")
+            or row.get("date")
+            or row.get("Date")
+            or row.get("price_as_of")
+            or row.get("timestamp")
+        ),
         provider_id=_text(row.get("provider_id") or row.get("provider")) or "user_csv",
         source_ref=_text(row.get("source_ref") or row.get("source") or row.get("url")),
         note=_text(row.get("note")),
@@ -150,7 +175,10 @@ def facts_from_price_response(
 
 
 def normalize_ticker(value: object) -> str:
-    return str(value or "").strip().upper()
+    text = str(value or "").strip().upper()
+    if text.endswith(".T"):
+        return text[:-2]
+    return text
 
 
 def _positive_float(value: object) -> float | None:
@@ -175,3 +203,15 @@ def _text(value: object) -> str:
 
 def _format_number(value: float) -> str:
     return str(int(value)) if value == int(value) else str(round(value, 6))
+
+
+def _dict_rows(text: str) -> list[dict[str, str]]:
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+    sample = cleaned[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
+    except csv.Error:
+        dialect = csv.excel_tab if "\t" in sample else csv.excel
+    return list(csv.DictReader(io.StringIO(cleaned), dialect=dialect))

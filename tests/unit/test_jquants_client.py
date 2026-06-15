@@ -77,6 +77,38 @@ def test_fetch_latest_prices_falls_back_to_visible_four_digit_code() -> None:
     assert result["as_of"] == {"9433": "2026-06-12"}
 
 
+def test_fetch_latest_prices_retries_inside_subscription_window() -> None:
+    tried: list[dict[str, str]] = []
+
+    def fake_fetch(
+        path: str,
+        params: Mapping[str, str],
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:
+        _ = path, headers
+        tried.append(dict(params))
+        if params.get("to") != "20260324":
+            raise JQuantsApiError(
+                "Your subscription covers the following dates: 2024-03-24 ~ 2026-03-24."
+            )
+        return {
+            "bars": [
+                {"Code": "72030", "Date": "2026-03-24", "Close": 2890},
+            ],
+        }
+
+    client = JQuantsClient(api_key="unit-key", fetch_json=fake_fetch)
+
+    result = client.fetch_latest_prices(["7203"], lookback_days=5)
+
+    assert tried[0]["code"] == "72030"
+    assert tried[1]["from"] == "20260319"
+    assert tried[1]["to"] == "20260324"
+    assert result["prices"] == {"7203": 2890.0}
+    assert result["as_of"] == {"7203": "2026-03-24"}
+    assert "subscription_window_used" in result["notes"]["7203"]  # type: ignore[index]
+
+
 def test_fetch_daily_bars_returns_normalized_ohlcv_summary() -> None:
     captured: dict[str, object] = {}
 
@@ -127,3 +159,43 @@ def test_fetch_daily_bars_returns_normalized_ohlcv_summary() -> None:
     summary = result["summary"]["tickers"]["9433"]  # type: ignore[index]
     assert summary["latest_close"] == 5000.0
     assert summary["return_pct"] == 0.603622
+
+
+def test_fetch_daily_bars_retries_inside_subscription_window() -> None:
+    tried: list[dict[str, str]] = []
+
+    def fake_fetch(
+        path: str,
+        params: Mapping[str, str],
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:
+        _ = path, headers
+        tried.append(dict(params))
+        if params.get("to") != "20260324":
+            raise JQuantsApiError(
+                "Your subscription covers the following dates: 2024-03-24 ~ 2026-03-24."
+            )
+        return {
+            "data": [
+                {
+                    "Date": "2026-03-24",
+                    "Code": "94330",
+                    "O": 4800,
+                    "H": 5010,
+                    "L": 4790,
+                    "C": 4970,
+                    "Vo": 1200000,
+                    "AdjC": 4970,
+                },
+            ],
+        }
+
+    client = JQuantsClient(api_key="unit-key", fetch_json=fake_fetch)
+
+    result = client.fetch_daily_bars(["9433"], lookback_days=7)
+
+    assert tried[1]["from"] == "20260317"
+    assert tried[1]["to"] == "20260324"
+    assert len(result["bars"]) == 1
+    assert result["bars"][0]["date"] == "2026-03-24"
+    assert "subscription_window_used" in result["notes"]["9433"]  # type: ignore[index]

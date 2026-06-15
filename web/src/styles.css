@@ -664,6 +664,15 @@ button:disabled {
   background: rgba(245, 158, 11, 0.1);
 }
 
+.price-result-card {
+  display: grid;
+  gap: 6px;
+}
+
+.price-result-card p {
+  margin: 0;
+}
+
 .workflow {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

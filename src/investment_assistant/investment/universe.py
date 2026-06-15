@@ -359,6 +359,12 @@ def _in_scope(row: dict[str, object], scope: str) -> bool:
         return bool(row.get("is_prime"))
     if normalized in {"nikkei225", "nikkei_225", "n225"}:
         return bool(row.get("is_nikkei225"))
+    if normalized in {"domestic", "domestic_stock", "domestic_stocks", "japan_stocks"}:
+        segment = " ".join(
+            str(row.get(key) or "")
+            for key in ("market_segment", "market_segment_raw", "market_segment_label")
+        ).lower()
+        return "国内株式" in segment or "内国株式" in segment or "domestic stock" in segment
     if normalized in {"financials", "edinet", "financials_available"}:
         return bool(row.get("has_financials"))
     return True

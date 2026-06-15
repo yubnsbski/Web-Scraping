@@ -159,6 +159,39 @@ def test_jquants_contract_ack_unlocks_provider_policy(monkeypatch) -> None:
     assert ledger["providers"][0]["runtime_decision"] == "allowed"
 
 
+def test_jquants_api_key_can_be_persisted_to_local_dotenv(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.webapi import service
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(service, "_JQUANTS_API_KEY_RUNTIME_SET", False)
+    monkeypatch.setattr(service, "_JQUANTS_CONTRACT_RUNTIME_ACK", False)
+    monkeypatch.delenv("JQUANTS_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("JQUANTS_API_KEY", raising=False)
+    monkeypatch.delenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", raising=False)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/jquants/api-key",
+        {
+            "api_key": "unit-test-jquants-token",
+            "contract_acknowledged": True,
+            "persist_local": True,
+        },
+    )
+
+    dotenv = (tmp_path / ".env.local").read_text(encoding="utf-8")
+    assert status == 200
+    assert payload["persisted_local"] is True
+    assert payload["persisted_path"] == ".env.local"
+    assert "unit-test-jquants-token" not in json.dumps(payload, ensure_ascii=False)
+    assert 'JQUANTS_API_KEY="unit-test-jquants-token"' in dotenv
+    assert 'JQUANTS_REFRESH_TOKEN="unit-test-jquants-token"' in dotenv
+    assert 'INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS="jquants"' in dotenv
+
+
 def test_financials_refresh_with_edinet_key_updates_structured_csv(
     monkeypatch,
     tmp_path: Path,
@@ -1014,6 +1047,33 @@ def test_market_universe_includes_prime_non_nikkei_without_financials(tmp_path: 
     assert rows["8001"]["is_nikkei225"] is False
     assert rows["8001"]["has_financials"] is False
     assert rows["8001"]["market_segment"] == "プライム（国内株式）"
+
+
+def test_market_universe_domestic_stocks_excludes_etf_and_reit(tmp_path: Path) -> None:
+    listed = (
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,7203,トヨタ自動車,プライム（国内株式）,輸送用機器\n"
+        "2026-05-31,1306,ETFサンプル,ETF・ETN,ETF\n"
+        "2026-05-31,8951,REITサンプル,REIT・ベンチャーファンド,REIT\n"
+    )
+    listed_path = tmp_path / "listed_issues.csv"
+    listed_path.write_text(listed, encoding="utf-8")
+
+    status, universe = handle_api(
+        "POST",
+        "/api/market/universe",
+        {
+            "financials_csv": str(tmp_path / "missing.csv"),
+            "jpx_listed_path": str(listed_path),
+            "nikkei225_registry": str(tmp_path / "missing_nikkei.yaml"),
+            "scope": "domestic_stocks",
+            "limit": 10,
+        },
+    )
+
+    assert status == 200
+    assert [item["ticker"] for item in universe["securities"]] == ["7203"]
+    assert universe["total_count"] == 1
 
 
 def test_financials_securities_can_search_jpx_prime_rows_without_financials(
@@ -2042,6 +2102,80 @@ def test_market_prices_saves_and_reuses_local_price_store(
     assert "using_cached_price" in cached["notes"]["9433"]
 
 
+def test_market_prices_import_accepts_yahoo_style_paste(tmp_path: Path) -> None:
+    store_path = tmp_path / "current_prices.csv"
+    csv_text = (
+        "Symbol\tRegular Market Price\tDate\tsource_ref\n"
+        "7203.T\t2890\t2026-03-24\tYahoo Finance manual check\n"
+        "9433.T\t4970\t2026-03-24\tYahoo Finance manual check\n"
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices/import",
+        {
+            "csv_text": csv_text,
+            "provider_id": "yahoo_finance_manual",
+            "price_store_path": str(store_path),
+        },
+    )
+
+    saved = store_path.read_text(encoding="utf-8")
+    assert status == 200
+    assert payload["count"] == 2
+    assert payload["tickers"] == ["7203", "9433"]
+    assert payload["provider_policy"]["production_allowed"] is True
+    assert payload["auto_trading"] is False
+    assert payload["call_real_api"] is False
+    assert "7203,2890" in saved
+    assert "9433,4970" in saved
+    assert ".T" not in saved
+
+
+def test_market_prices_import_file_reads_daily_inbox(tmp_path: Path) -> None:
+    store_path = tmp_path / "current_prices.csv"
+    inbox = tmp_path / "yahoo_prices_inbox.csv"
+    inbox.write_text(
+        "Symbol,Regular Market Price,Date\n"
+        "7203.T,2890,2026-03-24\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices/import-file",
+        {
+            "path": str(inbox),
+            "price_store_path": str(store_path),
+        },
+    )
+
+    assert status == 200
+    assert payload["status"] == "imported"
+    assert payload["input_path"] == str(inbox)
+    assert payload["tickers"] == ["7203"]
+    assert "7203,2890" in store_path.read_text(encoding="utf-8")
+
+
+def test_market_prices_import_file_can_report_missing_inbox(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/prices/import-file",
+        {
+            "path": str(missing),
+            "allow_missing": True,
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is False
+    assert payload["status"] == "missing"
+    assert payload["input_path"] == str(missing)
+    assert payload["auto_trading"] is False
+
+
 def test_market_prices_falls_back_to_daily_bars_when_current_price_is_missing(
     tmp_path: Path,
     monkeypatch,
@@ -2162,6 +2296,95 @@ def test_market_bars_uses_jquants_and_saves_daily_ohlcv(
     assert payload["summary"]["tickers"]["9433"]["latest_close"] == 5000.0
     assert store_path.is_file()
     assert "5000" in price_store_path.read_text(encoding="utf-8")
+
+
+def test_market_bars_universe_selects_prime_and_saves_ohlcv(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from investment_assistant.jquants.client import JQuantsClient
+
+    monkeypatch.setenv("JQUANTS_API_KEY", "unit-key")
+    monkeypatch.setenv("INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS", "jquants")
+    listed_path = tmp_path / "listed_issues.csv"
+    listed_path.write_text(
+        "日付,コード,銘柄名,市場・商品区分,33業種区分\n"
+        "2026-05-31,7203,トヨタ自動車,プライム（国内株式）,輸送用機器\n"
+        "2026-05-31,9433,KDDI,プライム（国内株式）,情報・通信業\n"
+        "2026-05-31,9999,標準サンプル,スタンダード（国内株式）,サービス業\n",
+        encoding="utf-8",
+    )
+    nikkei_path = tmp_path / "nikkei.yaml"
+    nikkei_path.write_text("sources: []\n", encoding="utf-8")
+    bar_store_path = tmp_path / "daily_bars.csv"
+    price_store_path = tmp_path / "current_prices.csv"
+
+    def fake_bars(
+        self: JQuantsClient,
+        tickers: list[str],
+        *,
+        date: str | None = None,
+        lookback_days: int = 30,
+    ) -> dict[str, object]:
+        _ = self, date, lookback_days
+        assert tickers == ["7203", "9433"]
+        return {
+            "bars": [
+                {
+                    "ticker": "7203",
+                    "date": "2026-03-24",
+                    "open": 3321.0,
+                    "high": 3336.0,
+                    "low": 3258.0,
+                    "close": 3271.0,
+                    "volume": 16565700.0,
+                    "adjusted_close": 3271.0,
+                    "provider_id": "jquants",
+                },
+                {
+                    "ticker": "9433",
+                    "date": "2026-03-24",
+                    "open": 2679.5,
+                    "high": 2701.0,
+                    "low": 2669.5,
+                    "close": 2677.5,
+                    "volume": 7094500.0,
+                    "adjusted_close": 2677.5,
+                    "provider_id": "jquants",
+                },
+            ],
+            "summary": {},
+            "notes": {},
+            "source": "unit-jquants-bars",
+            "provider_id": "jquants",
+            "auto_trading": False,
+            "call_real_api": True,
+        }
+
+    monkeypatch.setattr(JQuantsClient, "fetch_daily_bars", fake_bars)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/bars/universe",
+        {
+            "scope": "prime",
+            "jpx_listed_path": str(listed_path),
+            "nikkei225_registry": str(nikkei_path),
+            "financials_csv": str(tmp_path / "missing_financials.csv"),
+            "bar_store_path": str(bar_store_path),
+            "price_store_path": str(price_store_path),
+            "runtime_mode": "production",
+        },
+    )
+
+    assert status == 200
+    assert payload["selection"]["scope"] == "prime"
+    assert payload["selection"]["selected_count"] == 2
+    assert payload["selection"]["universe_total_count"] == 2
+    assert payload["bar_store"]["saved"] is True
+    assert payload["bar_store"]["price_sync"]["tickers"] == ["7203", "9433"]
+    assert "7203" in bar_store_path.read_text(encoding="utf-8")
+    assert "2677.5" in price_store_path.read_text(encoding="utf-8")
 
 
 def test_market_bars_can_use_cache_when_provider_is_policy_blocked(

@@ -420,6 +420,16 @@ def test_fetch_prices_with_injected_fetch() -> None:
     assert prices["8306"] == 123.0 and prices["9432"] == 123.0
 
 
+def test_fetch_prices_records_missing_close_note() -> None:
+    def fake(url: str) -> str:
+        _ = url
+        return "Symbol,Date,Time,Open,High,Low,Close,Volume\nX.JP,N/D,N/D,N/D,N/D,N/D,N/D,N/D\n"
+
+    out = fetch_prices(["7203"], fetch=fake)
+    assert out["prices"]["7203"] is None  # type: ignore[index]
+    assert out["notes"]["7203"] == "no_close_price_returned"  # type: ignore[index]
+
+
 def test_fetch_prices_records_errors() -> None:
     def boom(url: str) -> str:
         raise RuntimeError("net")

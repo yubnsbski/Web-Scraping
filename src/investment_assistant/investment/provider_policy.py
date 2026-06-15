@@ -9,13 +9,21 @@ from dataclasses import asdict, dataclass
 RUNTIME_MODE_ENV = "INVESTMENT_ASSISTANT_RUNTIME_MODE"
 CONTRACTED_PROVIDERS_ENV = "INVESTMENT_ASSISTANT_CONTRACTED_PROVIDERS"
 
-_ALWAYS_ALLOWED = {"edinet", "manual", "user_csv", "user_input", "contracted"}
+_ALWAYS_ALLOWED = {
+    "edinet",
+    "manual",
+    "user_csv",
+    "user_input",
+    "yahoo_finance_manual",
+    "contracted",
+}
 _DEFAULT_LEDGER_PROVIDERS = (
     "edinet",
     "user_csv",
     "manual",
     "stooq_public_csv",
     "yfinance",
+    "yahoo_finance_manual",
     "jquants",
     "alpha_vantage",
     "contracted",
@@ -45,6 +53,11 @@ _PROVIDER_METADATA: dict[str, dict[str, str]] = {
         "category": "market_data_library",
         "primary_use": "Research and prototype market data",
         "recommended_use": "development_only",
+    },
+    "yahoo_finance_manual": {
+        "category": "user_supplied_market_data",
+        "primary_use": "User-entered Yahoo Finance quote CSV for personal local use",
+        "recommended_use": "manual_single_user_only",
     },
     "jquants": {
         "category": "market_data_api",
