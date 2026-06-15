@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from typing import Literal
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 from investment_assistant.ingestion.html_extract import extract_text_from_html
@@ -88,7 +89,7 @@ DOCUMENT_EXTENSIONS: tuple[str, ...] = (
 )
 
 
-def link_kind(url: str) -> str:
+def link_kind(url: str) -> Literal["page", "document", "asset"]:
     """Classify a link as ``"page"``, ``"document"`` (PDF/Excel/…) or ``"asset"``.
 
     Based on the URL path extension, so the frontier can crawl only HTML pages,

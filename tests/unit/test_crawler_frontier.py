@@ -131,3 +131,33 @@ def test_crawl_surfaces_pdf_documents_and_skips_assets() -> None:
     assert report.documents[0]["anchor_text"] == "2024年3月期 決算短信"
     # The HTML dividend page is still crawled and kept.
     assert any(p.url == "https://www.mufg.jp/ir/dividend/" for p in report.target_pages)
+
+
+def test_documents_surface_even_when_page_link_budget_is_full() -> None:
+    # max_links_per_page=1: the high-scoring HTML page fills the page budget, but
+    # a lower-ranked PDF must still be surfaced (recording is not page-budgeted).
+    pages = {
+        "https://www.mufg.jp/ir/": (
+            '<a href="/ir/dividend/">配当方針 株主還元 配当性向</a>'
+            '<a href="/ir/kessan_tanshin.pdf">決算短信</a>'
+        ),
+        "https://www.mufg.jp/ir/dividend/": _DIVIDEND_HTML,
+    }
+
+    def fetch(url: str) -> FetchedPage:
+        return FetchedPage(url=url, allowed=True, html=pages.get(url, ""))
+
+    report = crawl(
+        _policy(),
+        start_url="https://www.mufg.jp/ir/",
+        fetch=fetch,  # type: ignore[arg-type]
+        max_links_per_page=1,
+    )
+
+    # The single page-link slot is spent on the dividend page...
+    assert "https://www.mufg.jp/ir/dividend/" in [p.url for p in report.target_pages]
+    # ...yet the PDF is still surfaced (it would be dropped if the old top-of-loop
+    # `added >= max_links_per_page` break still gated document recording).
+    assert [d["url"] for d in report.documents] == [
+        "https://www.mufg.jp/ir/kessan_tanshin.pdf"
+    ]

@@ -105,6 +105,7 @@ def crawl(
     start = policy.normalize_url(start_url)
     queue: deque[tuple[str, int]] = deque([(start, 0)])
     enqueued: set[str] = {start}
+    documents_seen: set[str] = set()
     report = CrawlReport(start_url=start)
 
     while queue:
@@ -146,6 +147,7 @@ def crawl(
             depth=depth,
             queue=queue,
             enqueued=enqueued,
+            documents_seen=documents_seen,
             report=report,
             max_links_per_page=max_links_per_page,
             min_link_score=min_link_score,
@@ -163,22 +165,25 @@ def _enqueue_promising_links(
     depth: int,
     queue: deque[tuple[str, int]],
     enqueued: set[str],
+    documents_seen: set[str],
     report: CrawlReport,
     max_links_per_page: int,
     min_link_score: float,
 ) -> None:
     added = 0
     for scored in rank_links(extract_links(page.html, page.url)):
-        if added >= max_links_per_page:
-            break
         if scored.score <= min_link_score:
             break  # ranked desc, so nothing below is promising either
         kind = link_kind(scored.url)
         if kind == "asset":
             continue  # never descend into css/js/images/fonts
         if kind == "document":
-            _record_document(report, scored)
-            continue  # PDFs etc. are terminal — surfaced, not crawled as HTML
+            # PDFs etc. are terminal — surfaced, not crawled as HTML. Recording
+            # is cheap (no fetch), so it is not bounded by the page-link budget.
+            _record_document(report, documents_seen, scored)
+            continue
+        if added >= max_links_per_page:
+            continue  # page budget full, but keep scanning for documents
         decision = policy.evaluate_url(scored.url, depth=depth + 1)
         if not decision.allowed or decision.url in enqueued:
             continue
@@ -187,11 +192,14 @@ def _enqueue_promising_links(
         added += 1
 
 
-def _record_document(report: CrawlReport, scored: ScoredLink) -> None:
+def _record_document(
+    report: CrawlReport, documents_seen: set[str], scored: ScoredLink
+) -> None:
     """Record a promising non-HTML document link once (dedup by URL)."""
 
-    if any(doc.get("url") == scored.url for doc in report.documents):
+    if scored.url in documents_seen:
         return
+    documents_seen.add(scored.url)
     report.documents.append(
         {"url": scored.url, "anchor_text": scored.anchor_text, "score": scored.score}
     )

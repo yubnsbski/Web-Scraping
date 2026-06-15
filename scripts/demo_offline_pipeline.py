@@ -205,7 +205,11 @@ def main() -> int:
             holdings=holdings,
             financials_csv=csv_path,
         )
-        tgt = plan["target"]  # type: ignore[index]
+        tgt = plan.get("target")
+        if not tgt:
+            print(f"  reverse calc: unavailable ({plan.get('reason', 'no data')})")
+            print("\nOK — full pipeline ran offline (crawl + RAG + EDINET + simulator).")
+            return 0
         reach = "reachable" if tgt["reachable"] else "unreachable"
         print(f"  reverse calc: 手取り {_yen(tgt['target_annual_dividend'])}/yr "
               f"-> 必要予算 {_yen(tgt['required_budget'])} ({reach})")
