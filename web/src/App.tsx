@@ -58,6 +58,8 @@ const CANDIDATE_SCREEN_PRESETS_STORAGE_KEY =
   "investment_assistant.candidate_screen_presets.v1";
 const FINANCIALS_CSV_STORAGE_KEY =
   "investment_assistant.financials_csv_path.v1";
+const EXPERIENCE_MODE_STORAGE_KEY =
+  "investment_assistant.experience_mode.v1";
 const AI_CHAT_TARGET_SOURCE_STORAGE_KEY =
   "investment_assistant.ai_chat.target_source.v1";
 const AI_CHAT_SELECTED_TICKER_STORAGE_KEY =
@@ -102,6 +104,30 @@ const TABS = [
   { id: "answer", label: "AIチャット" },
   { id: "evidence", label: "根拠" },
 ] as const;
+
+type ExperienceMode = "simple" | "analyst" | "operator";
+
+const EXPERIENCE_MODES: {
+  id: ExperienceMode;
+  label: string;
+  body: string;
+}[] = [
+  {
+    id: "simple",
+    label: "かんたん",
+    body: "初回・スマホ向け",
+  },
+  {
+    id: "analyst",
+    label: "分析",
+    body: "比較と試算を広げる",
+  },
+  {
+    id: "operator",
+    label: "データ運用",
+    body: "取得・根拠・AIまで見る",
+  },
+];
 
 const HERO_CARDS = [
   { label: "1", value: "データ", desc: "財務・市場区分を準備" },
@@ -417,8 +443,17 @@ const DISCLOSURE_AUTO_SOURCES = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+const NAV_TABS_BY_MODE: Record<ExperienceMode, TabId[]> = {
+  simple: ["dashboard", "data", "holdings", "candidates", "report"],
+  analyst: ["dashboard", "data", "holdings", "candidates", "simulate", "detail", "report"],
+  operator: ["dashboard", "data", "holdings", "candidates", "simulate", "report", "detail", "answer", "evidence"],
+};
+
 export function App() {
   const [tab, setTab] = useState<TabId>("dashboard");
+  const [experienceMode, setExperienceMode] = useState<ExperienceMode>(() =>
+    readExperienceMode(EXPERIENCE_MODE_STORAGE_KEY, "simple"),
+  );
   const [financialsCsvPath, setFinancialsCsvPath] = useState(() =>
     readLocalStorageString(FINANCIALS_CSV_STORAGE_KEY, DEFAULT_FINANCIALS_PATH),
   );
@@ -438,6 +473,11 @@ export function App() {
   useEffect(() => {
     writeLocalStorageString(FINANCIALS_CSV_STORAGE_KEY, financialsCsvPath);
   }, [financialsCsvPath]);
+  useEffect(() => {
+    writeLocalStorageString(EXPERIENCE_MODE_STORAGE_KEY, experienceMode);
+  }, [experienceMode]);
+  const visibleTabIds = new Set<TabId>([...NAV_TABS_BY_MODE[experienceMode], tab]);
+  const visibleTabs = TABS.filter((item) => visibleTabIds.has(item.id));
   return (
     <div className="app">
       <header className="terminal-hero">
@@ -466,8 +506,13 @@ export function App() {
         ))}
       </section>
 
+      <ExperienceModeSwitch
+        value={experienceMode}
+        onChange={setExperienceMode}
+      />
+
       <nav className="tabs" aria-label="主要ナビゲーション">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.id}
             className={t.id === tab ? "tab active" : "tab"}
@@ -487,6 +532,7 @@ export function App() {
       />
       <CommandCenter
         currentTab={tab}
+        experienceMode={experienceMode}
         financialsCsvPath={financialsCsvPath}
         onNavigate={setTab}
       />
@@ -576,8 +622,38 @@ function useAsync<T>() {
   return { loading, error, data, run };
 }
 
+function ExperienceModeSwitch(props: {
+  value: ExperienceMode;
+  onChange: (value: ExperienceMode) => void;
+}) {
+  return (
+    <section className="experience-switch" aria-label="操作モード">
+      <div>
+        <p className="eyebrow">操作モード</p>
+        <b>画面の密度を選ぶ</b>
+      </div>
+      <div className="experience-options" role="radiogroup" aria-label="操作モードを選択">
+        {EXPERIENCE_MODES.map((mode) => (
+          <button
+            key={mode.id}
+            type="button"
+            className={mode.id === props.value ? "experience-option active" : "experience-option"}
+            role="radio"
+            aria-checked={mode.id === props.value}
+            onClick={() => props.onChange(mode.id)}
+          >
+            <b>{mode.label}</b>
+            <span>{mode.body}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function CommandCenter(props: {
   currentTab: TabId;
+  experienceMode: ExperienceMode;
   financialsCsvPath: string;
   onNavigate: (tab: TabId) => void;
 }) {
@@ -608,6 +684,27 @@ function CommandCenter(props: {
   const missingFinancials = datasetStatus(byKey.financials) !== "ready";
   const missingMarket = datasetStatus(byKey.market_prices) !== "ready";
   const missingBars = datasetStatus(byKey.daily_bars) !== "ready";
+  const modeText =
+    props.experienceMode === "simple"
+      ? "かんたん"
+      : props.experienceMode === "analyst"
+        ? "分析"
+        : "データ運用";
+  const commandActions =
+    props.experienceMode === "simple"
+      ? COMMAND_ACTIONS
+      : props.experienceMode === "analyst"
+        ? [
+            ...COMMAND_ACTIONS.slice(0, 3),
+            { id: "simulate" as const, step: "4", title: "試算", body: "価格と配当を検算する" },
+            { id: "report" as const, step: "5", title: "根拠出力", body: "計算式と免責を残す" },
+          ]
+        : [
+            ...COMMAND_ACTIONS.slice(0, 1),
+            { id: "detail" as const, step: "2", title: "詳細確認", body: "銘柄ごとの根拠を見る" },
+            { id: "answer" as const, step: "3", title: "AI整理", body: "根拠付きで質問する" },
+            { id: "evidence" as const, step: "4", title: "根拠検索", body: "RAGと演算子を確認する" },
+          ];
   const next =
     missingFinancials
       ? {
@@ -640,7 +737,7 @@ function CommandCenter(props: {
   return (
     <section className="command-center" aria-label="次に進むための司令塔">
       <div className="command-lead">
-        <p className="eyebrow">次の一手</p>
+        <p className="eyebrow">次の一手 / {modeText}</p>
         <h2>{next.title}</h2>
         <p>{next.body}</p>
         <div className="command-actions">
@@ -680,7 +777,7 @@ function CommandCenter(props: {
       </div>
 
       <div className="command-flow" aria-label="主要操作">
-        {COMMAND_ACTIONS.map((action) => (
+        {commandActions.map((action) => (
           <button
             key={action.id}
             className={action.id === props.currentTab ? "command-step active" : "command-step"}
@@ -759,6 +856,13 @@ function readLocalStorageString(key: string, fallback = ""): string {
   } catch {
     return fallback;
   }
+}
+
+function readExperienceMode(key: string, fallback: ExperienceMode): ExperienceMode {
+  const value = readLocalStorageString(key, fallback);
+  return value === "simple" || value === "analyst" || value === "operator"
+    ? value
+    : fallback;
 }
 
 function writeLocalStorageString(key: string, value: string): boolean {

@@ -340,6 +340,52 @@ button:hover:not(:disabled),
   background: rgba(15, 23, 42, 0.72);
 }
 
+.experience-switch {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+  gap: 12px;
+  align-items: center;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid rgba(142, 161, 189, 0.24);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.experience-switch b,
+.experience-option span {
+  display: block;
+}
+
+.experience-switch > div > b {
+  font-size: 15px;
+}
+
+.experience-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.experience-option {
+  min-height: 74px;
+  padding: 10px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.experience-option span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.experience-option.active {
+  border-color: rgba(56, 189, 248, 0.72);
+  background: rgba(56, 189, 248, 0.13);
+}
+
 .command-center {
   display: grid;
   grid-template-columns: minmax(260px, 1.1fr) minmax(220px, 0.9fr);
@@ -1838,6 +1884,25 @@ textarea { min-height: 140px; }
 
   .financials-source-actions button {
     min-width: 0;
+  }
+
+  .experience-switch,
+  .experience-options {
+    grid-template-columns: 1fr;
+  }
+
+  .experience-switch {
+    gap: 10px;
+    margin: 12px 0;
+    padding: 10px;
+  }
+
+  .experience-options {
+    gap: 7px;
+  }
+
+  .experience-option {
+    min-height: 58px;
   }
 
   .command-center {
