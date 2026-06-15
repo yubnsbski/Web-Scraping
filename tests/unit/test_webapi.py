@@ -843,6 +843,73 @@ def test_jpx_listed_import_and_market_universe_prime_scope(tmp_path: Path) -> No
     assert universe["call_real_api"] is False
 
 
+def test_companies_refresh_builds_company_master_from_jpx_listed(
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.investment.universe import ListedIssue, write_jpx_listed_issues
+
+    listed_path = tmp_path / "listed_issues.csv"
+    write_jpx_listed_issues(
+        [
+            ListedIssue("7203", "Toyota", "Prime Market (Domestic Stock)", "Transportation"),
+            ListedIssue("9999", "Standard Sample", "Standard Market (Domestic Stock)", "Services"),
+            ListedIssue("1306", "ETF Sample", "ETF・ETN", "ETF"),
+            ListedIssue("8951", "REIT Sample", "REIT・ベンチャーファンド", "REIT"),
+            ListedIssue("9998", "Foreign Sample", "Prime Market (Foreign Stock)", "Retail"),
+        ],
+        listed_path,
+    )
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "7203,Toyota,2024,1000,55,60,stable\n",
+        encoding="utf-8",
+    )
+    nikkei = tmp_path / "nikkei.yaml"
+    nikkei.write_text(
+        "sources:\n"
+        '  - name: "7203"\n'
+        '    ticker: "7203"\n'
+        '    company: "Toyota"\n'
+        '    source_type: "public_api"\n'
+        '    provider: "edinet"\n'
+        "    allowed: true\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "company_master.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/companies/refresh",
+        {
+            "jpx_listed_path": str(listed_path),
+            "financials_csv": str(financials),
+            "nikkei225_registry": str(nikkei),
+            "output_path": str(output_path),
+        },
+    )
+
+    assert status == 200
+    assert payload["available"] is True
+    assert payload["count"] == 5
+    assert payload["company_count"] == 3
+    assert payload["domestic_stock_count"] == 2
+    assert payload["financials_count"] == 1
+    assert payload["nikkei225_count"] == 1
+    assert output_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    rows = {str(row["ticker"]): row for row in payload["sample"]}
+    assert rows["7203"]["entity_type"] == "domestic_stock"
+    assert rows["7203"]["has_financials"] is True
+    assert rows["1306"]["entity_type"] == "etf_etn"
+    assert rows["8951"]["entity_type"] == "reit"
+
+    status, status_payload = handle_api("POST", "/api/companies/status", {"path": str(output_path)})
+    assert status == 200
+    assert status_payload["available"] is True
+    assert status_payload["count"] == 5
+    assert status_payload["company_count"] == 3
+
+
 def test_market_universe_includes_prime_non_nikkei_without_financials(tmp_path: Path) -> None:
     listed = (
         "日付,コード,銘柄名,市場・商品区分,33業種区分\n"

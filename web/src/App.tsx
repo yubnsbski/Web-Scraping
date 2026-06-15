@@ -4082,6 +4082,9 @@ function ScrapeTab({
   const [jpxListedText, setJpxListedText] = useState(SAMPLE_JPX_LISTED_ISSUES_DATA);
   const [jpxListedOutputPath, setJpxListedOutputPath] =
     useState("local_docs/jpx/listed_issues.csv");
+  const [companyMasterOutputPath, setCompanyMasterOutputPath] = useState(
+    "local_docs/company_master/company_master.csv",
+  );
   const sourceState = useAsync<Json>();
   const manualState = useAsync<Json>();
   const edinetState = useAsync<Json>();
@@ -4089,6 +4092,7 @@ function ScrapeTab({
   const financialsState = useAsync<Json>();
   const jpxListedState = useAsync<Json>();
   const jpxDownloadState = useAsync<Json>();
+  const companyMasterState = useAsync<Json>();
   const missingRegistryState = useAsync<Json>();
 
   useEffect(() => {
@@ -4320,6 +4324,21 @@ function ScrapeTab({
       }
       return result;
     });
+  const refreshCompanyMaster = () =>
+    companyMasterState.run(() =>
+      api<Json>("/api/companies/refresh", {
+        jpx_listed_path: jpxListedOutputPath,
+        financials_csv: financialsCsvPath,
+        output_path: companyMasterOutputPath,
+        refresh_jpx: false,
+      }),
+    );
+  const checkCompanyMasterStatus = () =>
+    companyMasterState.run(() =>
+      api<Json>("/api/companies/status", {
+        path: companyMasterOutputPath,
+      }),
+    );
 
   const applyEdinetApiKey = () =>
     edinetStatusState.run(() =>
@@ -4457,9 +4476,9 @@ function ScrapeTab({
       <div className="edinet-ingest">
         <div className="report-audit-head">
           <div>
-            <h3>市場区分データ（JPX公式）</h3>
+            <h3>会社情報マスター（JPX公式）</h3>
             <p className="hint">
-              東証プライムで銘柄を選択するためのデータです。価格や指数ウェイトは扱わず、市場区分と会社名だけを選択補助として使います。
+              JPX上場銘柄一覧から、証券コード・会社名・市場区分・業種・日経225/財務取得状況をまとめます。
             </p>
           </div>
           <span className="badge">JPX</span>
@@ -4467,7 +4486,7 @@ function ScrapeTab({
         <div className="callout">
           <b>公式ソース</b>
           <p className="hint">
-            JPXの東証上場銘柄一覧は毎月更新されます。公式ファイルは旧Excel形式のため、このアプリでは取得後にExcel等でCSV/TSVへ変換したデータを保存します。
+            会社情報は売買推奨ではなく、銘柄検索・東証プライム選択・未取得財務の補完対象を整理するための土台です。
           </p>
           <p>
             <a
@@ -4490,39 +4509,84 @@ function ScrapeTab({
           </p>
         </div>
         <div className="form">
-          <Field label="保存先 listed_issues">
+          <Field label="保存先 company_master">
             <input
-              value={jpxListedOutputPath}
-              onChange={(event) => setJpxListedOutputPath(event.target.value)}
+              value={companyMasterOutputPath}
+              onChange={(event) => setCompanyMasterOutputPath(event.target.value)}
             />
           </Field>
-          <button onClick={downloadOfficialJpxListedData} disabled={jpxDownloadState.loading}>
-            JPX公式データを取得して反映
-          </button>
-          <button onClick={loadJpxListedTemplate} disabled={jpxListedState.loading}>
-            入力テンプレート
-          </button>
-          <label className="button-like">
-            データを読み込む
-            <input type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" onChange={importJpxListedFile} />
-          </label>
           <button
             className="primary"
-            onClick={saveJpxListedData}
-            disabled={jpxListedState.loading || !jpxListedText.trim()}
+            onClick={refreshCompanyMaster}
+            disabled={companyMasterState.loading}
           >
-            保存して東証プライム選択に反映
+            会社情報を取得
           </button>
+          <button onClick={checkCompanyMasterStatus} disabled={companyMasterState.loading}>
+            状況確認
+          </button>
+          <details className="advanced-settings">
+            <summary>手動取込</summary>
+            <Field label="保存先 listed_issues">
+              <input
+                value={jpxListedOutputPath}
+                onChange={(event) => setJpxListedOutputPath(event.target.value)}
+              />
+            </Field>
+            <button onClick={downloadOfficialJpxListedData} disabled={jpxDownloadState.loading}>
+              JPX公式データを取得
+            </button>
+            <button onClick={loadJpxListedTemplate} disabled={jpxListedState.loading}>
+              入力テンプレート
+            </button>
+            <label className="button-like">
+              CSV/TSVを読み込む
+              <input
+                type="file"
+                accept=".csv,.tsv,text/csv,text/tab-separated-values"
+                onChange={importJpxListedFile}
+              />
+            </label>
+            <button
+              onClick={saveJpxListedData}
+              disabled={jpxListedState.loading || !jpxListedText.trim()}
+            >
+              保存
+            </button>
+            <Field label="市場区分データ">
+              <textarea
+                rows={8}
+                value={jpxListedText}
+                onChange={(event) => setJpxListedText(event.target.value)}
+              />
+            </Field>
+          </details>
         </div>
-        <Field label="市場区分データ">
-          <textarea
-            rows={8}
-            value={jpxListedText}
-            onChange={(event) => setJpxListedText(event.target.value)}
-          />
-        </Field>
+        <Status loading={companyMasterState.loading} error={companyMasterState.error} />
         <Status loading={jpxDownloadState.loading} error={jpxDownloadState.error} />
         <Status loading={jpxListedState.loading} error={jpxListedState.error} />
+        {companyMasterState.data && (
+          <div className="callout">
+            会社情報: {String(companyMasterState.data.count ?? 0)}件 / 会社:{" "}
+            {String(companyMasterState.data.company_count ?? 0)}件 / 国内株式:{" "}
+            {String(companyMasterState.data.domestic_stock_count ?? 0)}件 / 東証プライム:{" "}
+            {String(companyMasterState.data.prime_count ?? 0)}件 / 日経225:{" "}
+            {String(companyMasterState.data.nikkei225_count ?? 0)}件 / 財務あり:{" "}
+            {String(companyMasterState.data.financials_count ?? 0)}件
+            {companyMasterState.data.path ? (
+              <>
+                <br />
+                保存先: <span className="mono">{String(companyMasterState.data.path)}</span>
+              </>
+            ) : null}
+            {companyMasterState.data.hint ? (
+              <>
+                <br />
+                {String(companyMasterState.data.hint)}
+              </>
+            ) : null}
+          </div>
+        )}
         {jpxDownloadState.data && (
           <div className="callout">
             取得結果: <span className="mono">{String(jpxDownloadState.data.saved_path ?? "-")}</span>

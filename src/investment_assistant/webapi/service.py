@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import re
 import tempfile
@@ -1106,6 +1107,235 @@ def _jpx_listed_download_import(body: JsonDict) -> JsonDict:
         "auto_trading": False,
         "call_real_api": False,
     }
+
+
+def _companies_master_status(body: JsonDict) -> JsonDict:
+    path = Path(str(body.get("path") or "local_docs/company_master/company_master.csv"))
+    if not path.is_file():
+        return {
+            "available": False,
+            "path": str(path),
+            "count": 0,
+            "hint": "会社情報マスターがまだありません。Dataタブで会社情報を取得してください。",
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+    rows = _read_company_master_rows(path)
+    modified_at = datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
+    return {
+        "available": True,
+        "path": str(path),
+        "count": len(rows),
+        "company_count": sum(1 for row in rows if row.get("is_company") == "true"),
+        "domestic_stock_count": sum(
+            1 for row in rows if row.get("entity_type") == "domestic_stock"
+        ),
+        "prime_count": sum(1 for row in rows if row.get("is_prime") == "true"),
+        "nikkei225_count": sum(1 for row in rows if row.get("is_nikkei225") == "true"),
+        "financials_count": sum(1 for row in rows if row.get("has_financials") == "true"),
+        "modified_at": modified_at,
+        "sample": rows[:20],
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _companies_master_refresh(body: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.registry import build_edinet_targets_from_registry
+    from investment_assistant.ingestion.fetcher import reject_path_traversal
+    from investment_assistant.investment.universe import (
+        DEFAULT_JPX_LISTED_ISSUES_PATH,
+        DEFAULT_NIKKEI225_REGISTRY,
+        load_jpx_listed_issues,
+        source_manifest,
+    )
+
+    jpx_listed_path = str(body.get("jpx_listed_path") or DEFAULT_JPX_LISTED_ISSUES_PATH)
+    output_path = str(body.get("output_path") or "local_docs/company_master/company_master.csv")
+    financials_csv = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
+    nikkei225_registry = str(body.get("nikkei225_registry") or DEFAULT_NIKKEI225_REGISTRY)
+    jpx_refresh: JsonDict | None = None
+    if _as_bool(body.get("refresh_jpx"), False):
+        jpx_refresh = _jpx_listed_download_import(
+            {
+                "output_path": jpx_listed_path,
+                "save": True,
+            }
+        )
+
+    issues = load_jpx_listed_issues(jpx_listed_path)
+    if not issues:
+        return {
+            "available": False,
+            "saved": False,
+            "path": output_path,
+            "jpx_listed_path": jpx_listed_path,
+            "count": 0,
+            "jpx_refresh": jpx_refresh,
+            "sources": source_manifest(),
+            "hint": (
+                "JPX上場銘柄一覧が見つかりません。"
+                "先に公式データ取得またはCSV取込を行ってください。"
+            ),
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+
+    financial_periods = _financials_periods_by_ticker(financials_csv)
+    try:
+        nikkei225 = {
+            _normalize_ticker(target.ticker)
+            for target in build_edinet_targets_from_registry(nikkei225_registry)
+        }
+    except (OSError, ValueError):
+        nikkei225 = set()
+
+    rows = [
+        _company_master_row(
+            issue,
+            financial_periods=financial_periods,
+            nikkei225=nikkei225,
+        )
+        for issue in sorted(issues, key=lambda item: item.code)
+    ]
+    target = reject_path_traversal(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _write_company_master_rows(rows, target)
+    return {
+        "available": True,
+        "saved": True,
+        "path": str(target),
+        "jpx_listed_path": jpx_listed_path,
+        "financials_csv": financials_csv,
+        "nikkei225_registry": nikkei225_registry,
+        "count": len(rows),
+        "company_count": sum(1 for row in rows if row["is_company"]),
+        "domestic_stock_count": sum(
+            1 for row in rows if row["entity_type"] == "domestic_stock"
+        ),
+        "prime_count": sum(1 for row in rows if row["is_prime"]),
+        "nikkei225_count": sum(1 for row in rows if row["is_nikkei225"]),
+        "financials_count": sum(1 for row in rows if row["has_financials"]),
+        "jpx_refresh": jpx_refresh,
+        "sample": rows[:20],
+        "sources": source_manifest(),
+        "hint": (
+            "JPX公式の上場銘柄一覧を会社情報マスターとして保存しました。"
+            "売買推奨ではなく、銘柄検索・補完・レポートの基礎データとして使います。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_periods_by_ticker(financials_csv: str) -> dict[str, int]:
+    path = Path(financials_csv)
+    if not path.is_file():
+        return {}
+    periods: dict[str, set[int]] = {}
+    try:
+        for point in load_financials(path):
+            ticker = _normalize_ticker(point.ticker)
+            if ticker:
+                periods.setdefault(ticker, set()).add(point.fiscal_year)
+    except (OSError, ValueError):
+        return {}
+    return {ticker: len(years) for ticker, years in periods.items()}
+
+
+def _company_master_row(
+    issue: Any,
+    *,
+    financial_periods: dict[str, int],
+    nikkei225: set[str],
+) -> JsonDict:
+    ticker = _normalize_ticker(getattr(issue, "code", ""))
+    segment_raw = str(getattr(issue, "market_segment", "") or "")
+    segment = _display_market_segment(segment_raw)
+    entity_type = _company_entity_type(segment_raw)
+    periods = financial_periods.get(ticker, 0)
+    return {
+        "ticker": ticker,
+        "name": str(getattr(issue, "name", "") or ""),
+        "market_segment": segment,
+        "market_segment_raw": segment_raw,
+        "sector": str(getattr(issue, "sector", "") or ""),
+        "as_of": str(getattr(issue, "as_of", "") or ""),
+        "entity_type": entity_type,
+        "is_company": entity_type in {"domestic_stock", "foreign_stock"},
+        "is_domestic_stock": entity_type == "domestic_stock",
+        "is_prime": _is_prime_segment(segment_raw),
+        "is_standard": _is_standard_segment(segment_raw),
+        "is_growth": _is_growth_segment(segment_raw),
+        "is_nikkei225": ticker in nikkei225,
+        "has_financials": periods > 0,
+        "financial_periods": periods,
+        "source_ref": str(getattr(issue, "source_ref", "") or ""),
+    }
+
+
+def _company_entity_type(segment: str) -> str:
+    text = str(segment or "")
+    lowered = text.lower()
+    if "ETF" in text or "ETN" in text or "etf" in lowered or "etn" in lowered:
+        return "etf_etn"
+    if "REIT" in text or "reit" in lowered:
+        return "reit"
+    if "外国株式" in text or "foreign stock" in lowered:
+        return "foreign_stock"
+    if _is_domestic_stock_segment(text):
+        return "domestic_stock"
+    if "PRO Market" in text or "pro market" in lowered:
+        return "pro_market"
+    return "other"
+
+
+def _display_market_segment(segment: str) -> str:
+    return str(segment or "").replace("内国株式", "国内株式")
+
+
+_COMPANY_MASTER_COLUMNS = [
+    "ticker",
+    "name",
+    "market_segment",
+    "market_segment_raw",
+    "sector",
+    "as_of",
+    "entity_type",
+    "is_company",
+    "is_domestic_stock",
+    "is_prime",
+    "is_standard",
+    "is_growth",
+    "is_nikkei225",
+    "has_financials",
+    "financial_periods",
+    "source_ref",
+]
+
+
+def _write_company_master_rows(rows: list[JsonDict], path: Path) -> None:
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_COMPANY_MASTER_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    column: _company_master_csv_value(row.get(column))
+                    for column in _COMPANY_MASTER_COLUMNS
+                }
+            )
+
+
+def _read_company_master_rows(path: Path) -> list[JsonDict]:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _company_master_csv_value(value: object) -> object:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value
 
 
 def _financials_prime_registry(body: JsonDict) -> JsonDict:
@@ -2834,6 +3064,9 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/jpx-listed/import"): _jpx_listed_import,
     ("POST", "/api/market/jpx-listed/download"): _jpx_listed_download,
     ("POST", "/api/market/jpx-listed/download-import"): _jpx_listed_download_import,
+    ("GET", "/api/companies/status"): _companies_master_status,
+    ("POST", "/api/companies/status"): _companies_master_status,
+    ("POST", "/api/companies/refresh"): _companies_master_refresh,
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/market/current-yields/import"): _market_current_yields_import,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
