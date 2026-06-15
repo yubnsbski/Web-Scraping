@@ -3657,6 +3657,7 @@ function SimulateTab() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
+  const [priceProvider, setPriceProvider] = useState("stooq_public_csv");
   const { loading, error, data, run } = useAsync<Json>();
 
   useEffect(() => {
@@ -3678,7 +3679,7 @@ function SimulateTab() {
   const removeAt = (i: number) => setHoldings(holdings.filter((_, idx) => idx !== i));
 
   const fetchPrices = async (tickers: string[]): Promise<Record<string, number | null>> => {
-    const r = await api<Json>("/api/market/prices", { tickers });
+    const r = await api<Json>("/api/market/prices", { tickers, provider_id: priceProvider });
     return (r.prices ?? {}) as Record<string, number | null>;
   };
 
@@ -3798,6 +3799,12 @@ function SimulateTab() {
         <button onClick={addHolding} disabled={!pick}>
           ＋ 追加（手動）
         </button>
+        <Field label="価格ソース">
+          <select value={priceProvider} onChange={(e) => setPriceProvider(e.target.value)}>
+            <option value="stooq_public_csv">Stooq</option>
+            <option value="yfinance">Yahoo Finance</option>
+          </select>
+        </Field>
         <button onClick={() => void updatePrices()} disabled={busy || holdings.length === 0}>
           市場価格を更新
         </button>
