@@ -117,6 +117,10 @@ def ingest_targets(
 
     results: list[dict[str, object]] = []
     points: list[FinancialPoint] = []
+    # Per-ticker split-adjusted dividend maps from each run's newest filing, kept
+    # so the correction also reaches fiscal years that survive only in durable
+    # history (their filing files pruned) at merge time.
+    corrections: dict[str, dict[int, float]] = {}
     ingested = 0
     cached = 0
     for target in targets:
@@ -153,13 +157,20 @@ def ingest_targets(
         # split cannot leave a spurious cut/jump in the series.
         if newest_dividends:
             target_points = [_apply_dividend_correction(p, newest_dividends) for p in target_points]
+            corrections[target.ticker] = newest_dividends
         points.extend(target_points)
 
     deduped = dedupe_points(points)
     # Merge with the durable history so pruning bulky filing files never loses
-    # the (tiny) dividend record. This run's points win on overlap.
+    # the (tiny) dividend record. This run's points win on overlap; the split-
+    # adjusted correction is also applied to history-only years so a pruned
+    # pre-split value can't survive next to corrected post-split ones.
     csv_path = base_dir / FINANCIALS_CSV_NAME
-    merged = dedupe_points([*deduped, *_load_existing_points(csv_path)])
+    existing = [
+        _apply_dividend_correction(p, corrections.get(p.ticker, {}))
+        for p in _load_existing_points(csv_path)
+    ]
+    merged = dedupe_points([*deduped, *existing])
     merged, dividend_quality = normalize_dividend_points(merged)
     summary: dict[str, object] = {
         "output_dir": str(base_dir),

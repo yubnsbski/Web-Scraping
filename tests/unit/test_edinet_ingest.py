@@ -399,6 +399,46 @@ def test_ingest_corrects_obvious_dividend_unit_jump_without_summary(tmp_path: Pa
     assert quality["corrected_count"] == 1
 
 
+def test_split_correction_reaches_history_only_years(tmp_path: Path) -> None:
+    # FY2023 survives only in durable history as a pre-split ¥1700 value (its
+    # filing was pruned). This run fetches only the FY2024 filing, whose 5-year
+    # summary restates FY2023 split-adjusted to ¥170. The correction must reach
+    # the history-only year, not just this run's freshly-built points.
+    from investment_assistant.edinet.financials_bridge import write_financials_csv
+    from investment_assistant.financials import load_financials
+    from investment_assistant.financials.models import FinancialPoint
+
+    out_dir = tmp_path / "edinet"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_financials_csv(
+        [FinancialPoint("8306", "任天堂", 2023, 0.0, 60.0, 1700.0, "")],
+        out_dir / "financials.csv",
+    )
+
+    client = _FakeEdinetClient(
+        {"2026-06-08": [_mufg_doc("S100Y24", "2024-06-21 09:00")]},
+        archives={
+            "S100Y24": _csv_zip_with_summary(
+                "189", {"CurrentYearDuration": "189", "Prior1YearDuration": "170"}
+            )
+        },
+    )
+    target = EdinetTarget(
+        name="8306", ticker="8306", company="任天堂", doc_types=("120",), max_periods=1
+    )
+    ingest_targets(
+        client=client,  # type: ignore[arg-type]
+        targets=[target],
+        dates=["2026-06-08"],
+        output_dir=out_dir,
+    )
+
+    loaded = load_financials(out_dir / "financials.csv")
+    rows = {p.fiscal_year: p.dividend_per_share for p in loaded}
+    assert rows[2023] == 170.0  # corrected from the pre-split 1700, not left stale
+    assert rows[2024] == 189.0
+
+
 def test_financials_csv_is_durable_across_runs_after_pruning(tmp_path: Path) -> None:
     # The dividend record must survive retention pruning of the bulky filing
     # files: financials.csv accumulates history independently.

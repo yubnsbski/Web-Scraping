@@ -706,42 +706,41 @@ def _portfolio_dividends(body: JsonDict) -> JsonDict:
     return summarize_dividends(load_dividends(path))
 
 
-def _portfolio_simulate(body: JsonDict) -> JsonDict:
-    from investment_assistant.portfolio.simulator import simulate_portfolio
+def _portfolio_inputs(body: JsonDict) -> tuple[list[JsonDict], JsonDict]:
+    """Parse the holdings list and the strategy kwargs shared by simulate/target."""
 
     raw = body.get("holdings")
     holdings = [h for h in raw if isinstance(h, dict)] if isinstance(raw, list) else []
-    return simulate_portfolio(
-        budget=_as_float(body.get("budget"), 0.0),
-        holdings=holdings,
-        years=_as_int(body.get("years"), 10),
-        reinvest=_as_bool(body.get("reinvest"), True),
-        growth_rate=_as_float(body.get("growth_rate"), 0.0),
-        auto_weight=str(body.get("auto_weight") or "equal"),
-        optimization=str(body.get("optimization") or "none"),
-        dividend_basis=str(body.get("dividend_basis") or "conservative"),
-        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
-        current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
-    )
+    common: JsonDict = {
+        "years": _as_int(body.get("years"), 10),
+        "reinvest": _as_bool(body.get("reinvest"), True),
+        "growth_rate": _as_float(body.get("growth_rate"), 0.0),
+        "auto_weight": str(body.get("auto_weight") or "equal"),
+        "optimization": str(body.get("optimization") or "none"),
+        "dividend_basis": str(body.get("dividend_basis") or "conservative"),
+        "financials_csv": str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        "current_yields_csv": str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
+    }
+    return holdings, common
+
+
+def _portfolio_simulate(body: JsonDict) -> JsonDict:
+    from investment_assistant.portfolio.simulator import simulate_portfolio
+
+    holdings, common = _portfolio_inputs(body)
+    budget = _as_float(body.get("budget"), 0.0)
+    return simulate_portfolio(budget=budget, holdings=holdings, **common)
 
 
 def _portfolio_target(body: JsonDict) -> JsonDict:
     from investment_assistant.portfolio.simulator import plan_for_target_dividend
 
-    raw = body.get("holdings")
-    holdings = [h for h in raw if isinstance(h, dict)] if isinstance(raw, list) else []
+    holdings, common = _portfolio_inputs(body)
     return plan_for_target_dividend(
         target_annual_dividend=_as_float(body.get("target_annual_dividend"), 0.0),
         net_target=_as_bool(body.get("net_target"), False),
         holdings=holdings,
-        years=_as_int(body.get("years"), 10),
-        reinvest=_as_bool(body.get("reinvest"), True),
-        growth_rate=_as_float(body.get("growth_rate"), 0.0),
-        auto_weight=str(body.get("auto_weight") or "equal"),
-        optimization=str(body.get("optimization") or "none"),
-        dividend_basis=str(body.get("dividend_basis") or "conservative"),
-        financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
-        current_yields_csv=str(body.get("current_yields_csv") or DEFAULT_CURRENT_YIELDS_CSV),
+        **common,
     )
 
 

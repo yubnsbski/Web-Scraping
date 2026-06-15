@@ -102,7 +102,6 @@ class _Prepared:
     band: dict[str, float] | None
     lot: int
     safety: float
-    weight_hint: float
     shares_fixed: float
     amount_fixed: float
     nisa: bool
@@ -196,21 +195,10 @@ def simulate_portfolio(
     """
 
     budget = max(0.0, float(budget))
-    years = max(1, min(int(years), 50))
-    mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
-    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
-    basis = "latest" if dividend_basis == "latest" else "conservative"
-    by_ticker = _index_companies(load_comparison(financials_csv))
-    current_yields = load_current_yields(current_yields_csv)
-
-    prepared = [_prepare_holding(h, by_ticker, lot_default, current_yields) for h in holdings]
-    prepared = [h for h in prepared if h.price > 0]
+    mode, optimize, basis, years = _normalize(auto_weight, optimization, dividend_basis, years)
+    prepared = _prepare_universe(holdings, financials_csv, lot_default, current_yields_csv)
     if not prepared:
-        return {
-            "available": False,
-            "hint": "有効な銘柄（ticker と price>0）を1件以上入力してください。",
-            "disclaimer": DISCLAIMER,
-        }
+        return _unavailable()
 
     weights = _resolve_weights(prepared, mode)
     shares_list = _resolve_shares(prepared, weights, budget, mode, optimize, basis)
@@ -257,21 +245,10 @@ def plan_for_target_dividend(
     """
 
     target = max(0.0, float(target_annual_dividend))
-    years = max(1, min(int(years), 50))
-    mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
-    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
-    basis = "latest" if dividend_basis == "latest" else "conservative"
-    by_ticker = _index_companies(load_comparison(financials_csv))
-    current_yields = load_current_yields(current_yields_csv)
-
-    prepared = [_prepare_holding(h, by_ticker, lot_default, current_yields) for h in holdings]
-    prepared = [h for h in prepared if h.price > 0]
+    mode, optimize, basis, years = _normalize(auto_weight, optimization, dividend_basis, years)
+    prepared = _prepare_universe(holdings, financials_csv, lot_default, current_yields_csv)
     if not prepared:
-        return {
-            "available": False,
-            "hint": "有効な銘柄（ticker と price>0）を1件以上入力してください。",
-            "disclaimer": DISCLAIMER,
-        }
+        return _unavailable()
 
     shares_list, reachable = _target_shares(prepared, target, optimize, basis, net=net_target)
     invested = sum(shares * h.price for shares, h in zip(shares_list, prepared, strict=True))
@@ -331,17 +308,22 @@ def _target_shares(
     smallest = min(lot_dividend[i] for i in eligible)
     cap = min(int(target / smallest) + len(prepared) + 1, 500_000)
     achieved = 0.0
-    rotation = 0
-    for _ in range(cap):
-        if achieved >= target:
-            break
-        if optimize in ("dividend_max", "balanced"):
-            pick = max(eligible, key=lambda i: (_lot_score(prepared[i], optimize, basis)))
-        else:
-            pick = eligible[rotation % len(eligible)]
-            rotation += 1
-        shares[pick] += prepared[pick].lot
-        achieved += lot_dividend[pick]
+    if optimize in ("dividend_max", "balanced"):
+        # Per-yen score is static, so the best holding is fixed — buy it
+        # repeatedly until the target is met (least budget to reach the goal).
+        best = max(eligible, key=lambda i: _lot_score(prepared[i], optimize, basis))
+        for _ in range(cap):
+            if achieved >= target:
+                break
+            shares[best] += prepared[best].lot
+            achieved += lot_dividend[best]
+    else:
+        for step in range(cap):
+            if achieved >= target:
+                break
+            pick = eligible[step % len(eligible)]  # round-robin for diversification
+            shares[pick] += prepared[pick].lot
+            achieved += lot_dividend[pick]
     return shares, achieved >= target
 
 
@@ -425,6 +407,39 @@ def _build_result(
     }
 
 
+def _normalize(
+    auto_weight: str, optimization: str, dividend_basis: str, years: int
+) -> tuple[str, str, str, int]:
+    """Validate the strategy knobs shared by both simulator entry points."""
+
+    mode = auto_weight if auto_weight in _AUTO_WEIGHT_MODES else "equal"
+    optimize = optimization if optimization in _OPTIMIZATION_MODES else "none"
+    basis = "latest" if dividend_basis == "latest" else "conservative"
+    return mode, optimize, basis, max(1, min(int(years), 50))
+
+
+def _prepare_universe(
+    holdings: list[dict[str, object]],
+    financials_csv: str | Path,
+    lot_default: int,
+    current_yields_csv: str | Path | None = DEFAULT_CURRENT_YIELDS_CSV,
+) -> list[_Prepared]:
+    """Load financials and build priced holdings, dropping any without a price."""
+
+    by_ticker = _index_companies(load_comparison(financials_csv))
+    current_yields = load_current_yields(current_yields_csv)
+    prepared = [_prepare_holding(h, by_ticker, lot_default, current_yields) for h in holdings]
+    return [h for h in prepared if h.price > 0]
+
+
+def _unavailable() -> dict[str, object]:
+    return {
+        "available": False,
+        "hint": "有効な銘柄（ticker と price>0）を1件以上入力してください。",
+        "disclaimer": DISCLAIMER,
+    }
+
+
 def _index_companies(comparison: dict[str, object] | None) -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
     if comparison:
@@ -490,7 +505,6 @@ def _prepare_holding(
         band=band,
         lot=lot,
         safety=estimate_safety(company),
-        weight_hint=_num(holding.get("weight")),
         shares_fixed=_num(holding.get("shares")),
         amount_fixed=_num(holding.get("amount")),
         nisa=bool(holding.get("nisa")),
@@ -532,6 +546,14 @@ def _resolve_shares(
     if optimize != "none":
         return _optimize_shares(prepared, budget, optimize, basis)
     # Default: split the budget by weight and floor each holding to whole lots.
+    return _weighted_floor_shares(prepared, weights, budget)
+
+
+def _weighted_floor_shares(
+    prepared: list[_Prepared], weights: list[float], budget: float
+) -> list[int]:
+    """Split ``budget`` by ``weights`` and floor each holding to whole lots."""
+
     shares: list[int] = []
     for holding, weight in zip(prepared, weights, strict=True):
         lot_cost = holding.price * holding.lot
@@ -563,6 +585,12 @@ def _optimize_shares(
     shares = [0 for _ in prepared]
     remaining = budget
     scores = [_lot_score(h, optimize, basis) for h in prepared]
+    if max(scores, default=0.0) <= 0.0:
+        # No holding has a positive (conservative) dividend to maximise — e.g.
+        # every band lower clamped to 0. Deploy the budget evenly instead of
+        # returning an empty portfolio.
+        equal = [1.0 / len(prepared) for _ in prepared] if prepared else []
+        return _weighted_floor_shares(prepared, equal, budget)
     while True:
         affordable = [
             i for i, cost in enumerate(lot_costs) if 0 < cost <= remaining and scores[i] > 0
@@ -583,10 +611,14 @@ def _cash_min_shares(
     Lots cost ``price × lot`` (whole yen here), so the table is reduced by the
     gcd of the costs and budget before filling; above a cell cap we fall back to a
     largest-fit-then-fill greedy so an adversarial budget can't blow up runtime.
+
+    Costs are rounded *up* and the budget *down* so the integer knapsack can
+    never select a combination whose real (possibly fractional) cost exceeds the
+    budget — i.e. ``cash_left`` stays non-negative even with fractional prices.
     """
 
-    costs = [int(round(c)) for c in lot_costs]
-    budget_int = int(budget)
+    costs = [math.ceil(c) for c in lot_costs]
+    budget_int = math.floor(budget)
     positive = [c for c in costs if c > 0]
     if not positive or budget_int < min(positive):
         return [0 for _ in prepared]

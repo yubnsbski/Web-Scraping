@@ -132,6 +132,43 @@ def test_simulator_prefers_current_yield_overlay_for_prediction(tmp_path: Path) 
     assert projection["nominal"][0] == 8000  # type: ignore[index]
 
 
+def test_cash_min_never_overspends_with_fractional_price() -> None:
+    # Fractional prices make lot cost non-integer; cash_min must round costs up /
+    # budget down so the real invested can never exceed the budget (cash_left>=0).
+    out = simulate_portfolio(
+        budget=2_000,
+        holdings=[{"ticker": "A", "price": 1000.4, "lot": 1, "dividend_per_share": 40}],
+        optimization="cash_min",
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+    )
+    summary = out["summary"]
+    assert summary["cash_left"] >= 0  # type: ignore[index]
+    assert summary["invested"] <= 2_000  # type: ignore[index]
+
+
+def test_dividend_max_deploys_budget_when_conservative_dps_zero(tmp_path: Path) -> None:
+    # A hard-cut history (100 -> 0 -> 50) makes the conservative band lower 0, so
+    # the dividend_max score is 0. The optimiser must still deploy the budget
+    # (even split) instead of returning an empty portfolio.
+    csv = _csv(
+        tmp_path,
+        "9999,Vol,2022,100,50,100,記載なし\n9999,Vol,2023,100,50,0,記載なし\n"
+        "9999,Vol,2024,100,50,50,記載なし\n",
+    )
+    out = simulate_portfolio(
+        budget=1_000_000,
+        holdings=[{"ticker": "9999", "price": 1000}],
+        optimization="dividend_max",
+        dividend_basis="conservative",  # band lower clamps to 0
+        financials_csv=str(csv),
+    )
+    alloc = out["allocations"][0]  # type: ignore[index]
+    assert alloc["dividend_per_share"] == 0.0  # conservative band lower clamps to 0
+    assert alloc["shares"] == 1000  # budget still deployed (even split fallback)
+    assert out["summary"]["invested"] == 1_000_000  # type: ignore[index]
+
+
 def test_build_universe_sorts_by_safety(tmp_path: Path) -> None:
     csv = _csv(
         tmp_path,
