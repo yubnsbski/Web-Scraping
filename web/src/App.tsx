@@ -354,6 +354,9 @@ const FUND_CSV_COLUMNS = [
   "diversification_score",
 ] as const;
 
+const HOLDING_FILE_ACCEPT =
+  ".csv,.tsv,.html,.htm,.pdf,text/csv,text/tab-separated-values,text/html,application/pdf";
+
 const DEFAULT_HOLDING_DRAFT: CsvDraft = {
   asset_type: "stock",
   ticker_or_fund_code: "7203",
@@ -791,7 +794,8 @@ function appendCsvDraft(
 }
 
 function downloadTextFile(filename: string, text: string, type = "text/csv"): void {
-  const blob = new Blob([text], { type: `${type};charset=utf-8` });
+  const normalizedText = type === "text/csv" && !text.startsWith("\ufeff") ? `\ufeff${text}` : text;
+  const blob = new Blob([normalizedText], { type: `${type};charset=utf-8` });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -804,7 +808,7 @@ function downloadTextFile(filename: string, text: string, type = "text/csv"): vo
 
 async function readCsvFileText(file: File): Promise<string> {
   const buffer = await file.arrayBuffer();
-  for (const encoding of ["utf-8", "shift_jis"]) {
+  for (const encoding of ["utf-8", "shift_jis", "euc-jp"]) {
     try {
       return new TextDecoder(encoding, { fatal: true }).decode(buffer);
     } catch {
@@ -812,6 +816,18 @@ async function readCsvFileText(file: File): Promise<string> {
     }
   }
   return new TextDecoder("utf-8").decode(buffer);
+}
+
+async function readFileAsBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...Array.from(chunk));
+  }
+  return btoa(binary);
 }
 
 function jsonText(value: unknown): string {
@@ -1842,9 +1858,19 @@ function HoldingsTab({
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
-    void readCsvFileText(file).then((text) => {
-      setCsv(text);
-      setValidationActionMessage(`Loaded ${file.name}. Validate before import or analysis.`);
+    void importState.run(async () => {
+      const converted = await api<Json>("/api/holdings/file/convert", {
+        filename: file.name,
+        content_type: file.type,
+        content_base64: await readFileAsBase64(file),
+      });
+      setCsv(String(converted.csv_text ?? ""));
+      setValidationActionMessage(
+        converted.valid === true
+          ? `${file.name} をCSVとして読み取りました。必要に応じて内容を確認して分析できます。`
+          : `${file.name} を読み取りましたが、保有データとして不足があります。検証結果を確認してください。`,
+      );
+      return converted;
     });
   };
   const downloadHoldingCsv = () => downloadTextFile("investment_holdings.csv", csv);
@@ -1926,7 +1952,7 @@ function HoldingsTab({
           <button onClick={addHoldingDraftRow}>手入力行を追加</button>
           <label className="button-like">
             ファイル取込
-            <input type="file" accept=".csv,text/csv" onChange={importHoldingFile} />
+            <input type="file" accept={HOLDING_FILE_ACCEPT} onChange={importHoldingFile} />
           </label>
           <button onClick={downloadHoldingCsv}>データを出力</button>
           <button onClick={downloadHoldingImportJson} disabled={!importState.data}>

@@ -3,6 +3,7 @@
 from investment_assistant.investment.analysis import analyze_portfolio
 from investment_assistant.investment.candidates import screen_candidates
 from investment_assistant.investment.detail import build_investment_detail
+from investment_assistant.investment.file_import import convert_holding_file_payload
 from investment_assistant.investment.loader import (
     fund_profile_csv_template,
     fund_profiles_from_payload,
@@ -20,6 +21,7 @@ __all__ = [
     "audit_investment_report",
     "build_investment_detail",
     "build_investment_monthly_report",
+    "convert_holding_file_payload",
     "fund_profile_csv_template",
     "fund_profiles_from_payload",
     "holding_csv_template",

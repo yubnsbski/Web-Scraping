@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from investment_assistant.rag.chunker import chunk_text, load_document
@@ -904,6 +905,69 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     )
     assert status == 200
     assert guided_import["input_warnings"] == []
+
+    csv_bytes = (
+        "asset_type,ticker_or_fund_code,name,quantity,avg_cost\n"
+        "stock,9433,ＫＤＤＩ,100,2400\n"
+    ).encode("cp932")
+    status, converted_csv = handle_api(
+        "POST",
+        "/api/holdings/file/convert",
+        {
+            "filename": "holdings.csv",
+            "content_type": "text/csv",
+            "content_base64": base64.b64encode(csv_bytes).decode("ascii"),
+        },
+    )
+    assert status == 200
+    assert converted_csv["valid"] is True
+    assert converted_csv["detected_encoding"] == "cp932"
+    assert converted_csv["holdings"][0]["ticker_or_fund_code"] == "9433"
+    assert converted_csv["holdings"][0]["name"] == "ＫＤＤＩ"
+
+    html_table = """
+    <html><body><table>
+      <tr><th>asset_type</th><th>ticker_or_fund_code</th><th>name</th><th>quantity</th><th>avg_cost</th></tr>
+      <tr><td>stock</td><td>9433</td><td>KDDI</td><td>100</td><td>2400</td></tr>
+    </table></body></html>
+    """
+    status, converted_html = handle_api(
+        "POST",
+        "/api/holdings/file/convert",
+        {
+            "filename": "holdings.html",
+            "content_type": "text/html",
+            "content_base64": base64.b64encode(html_table.encode("utf-8")).decode("ascii"),
+        },
+    )
+    assert status == 200
+    assert converted_html["valid"] is True
+    assert converted_html["detected_format"] == "html"
+    assert "ticker_or_fund_code" in converted_html["csv_text"]
+    assert converted_html["holdings"][0]["name"] == "KDDI"
+
+    pdf_bytes = (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<<>>\nstream\n"
+        b"BT\n"
+        b"(asset_type,ticker_or_fund_code,name,quantity,avg_cost) Tj\n"
+        b"(stock,9433,KDDI,100,2400) Tj\n"
+        b"ET\n"
+        b"endstream\nendobj\n%%EOF\n"
+    )
+    status, converted_pdf = handle_api(
+        "POST",
+        "/api/holdings/file/convert",
+        {
+            "filename": "holdings.pdf",
+            "content_type": "application/pdf",
+            "content_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+        },
+    )
+    assert status == 200
+    assert converted_pdf["valid"] is True
+    assert converted_pdf["detected_format"] == "pdf"
+    assert converted_pdf["holdings"][0]["ticker_or_fund_code"] == "9433"
 
     status, analysis = handle_api(
         "POST",

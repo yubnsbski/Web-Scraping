@@ -399,7 +399,7 @@ def load_funds_csv_text(text: str) -> list[FundProfile]:
 
 
 def _read_rows(text: str, *, required: tuple[str, ...]) -> list[dict[str, str]]:
-    reader = csv.DictReader(io.StringIO(text.strip().lstrip("\ufeff")))
+    reader = _dict_reader(text)
     field_map = _csv_field_map(reader.fieldnames or [])
     fieldnames = set(field_map.values())
     missing = [column for column in required if column not in fieldnames]
@@ -438,8 +438,17 @@ def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | Non
 
 
 def _csv_fieldnames(text: str) -> set[str]:
-    reader = csv.DictReader(io.StringIO(text.strip().lstrip("\ufeff")))
+    reader = _dict_reader(text)
     return set(_csv_field_map(reader.fieldnames or []).values())
+
+
+def _dict_reader(text: str) -> csv.DictReader[str]:
+    cleaned = text.strip().lstrip("\ufeff")
+    try:
+        dialect = csv.Sniffer().sniff(cleaned[:4096], delimiters=",\t;")
+    except csv.Error:
+        dialect = csv.excel
+    return csv.DictReader(io.StringIO(cleaned), dialect=dialect)
 
 
 def _csv_field_map(fieldnames: Sequence[str | None]) -> dict[str, str]:

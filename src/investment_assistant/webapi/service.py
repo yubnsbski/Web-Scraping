@@ -1428,6 +1428,12 @@ def _holdings_validate(body: JsonDict) -> JsonDict:
     return validate_holdings_payload(body)
 
 
+def _holdings_file_convert(body: JsonDict) -> JsonDict:
+    from investment_assistant.investment import convert_holding_file_payload
+
+    return convert_holding_file_payload(body)
+
+
 def _holdings_template(body: JsonDict) -> JsonDict:
     from investment_assistant.investment import holding_csv_template
 
@@ -2181,6 +2187,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,
     ("POST", "/api/holdings/validate"): _holdings_validate,
+    ("POST", "/api/holdings/file/convert"): _holdings_file_convert,
     ("POST", "/api/holdings/template"): _holdings_template,
     ("POST", "/api/funds/validate"): _funds_validate,
     ("POST", "/api/funds/template"): _funds_template,
