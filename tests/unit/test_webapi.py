@@ -487,6 +487,110 @@ def test_missing_refresh_delegates_only_missing_targets(
     assert [target.ticker for target in targets] == ["9999"]
 
 
+def test_missing_sources_plan_includes_non_edinet_evidence_sources(tmp_path: Path) -> None:
+    from investment_assistant.investment.universe import ListedIssue, write_jpx_listed_issues
+
+    listed_path = tmp_path / "listed_issues.csv"
+    write_jpx_listed_issues(
+        [
+            ListedIssue("7203", "Toyota", "Prime Market (Domestic Stock)", "Transportation"),
+            ListedIssue("9999", "Standard Sample", "Standard Market (Domestic Stock)", "Services"),
+        ],
+        listed_path,
+    )
+    base_registry_path = tmp_path / "all_domestic.yaml"
+    status, _ = handle_api(
+        "POST",
+        "/api/financials/listed-registry",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(base_registry_path),
+            "max_targets": 0,
+        },
+    )
+    assert status == 200
+
+    financials_csv = tmp_path / "financials.csv"
+    financials_csv.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "7203,Toyota,2025,100,55,75,stable\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/missing-sources",
+        {
+            "registry_path": str(base_registry_path),
+            "financials_csv": str(financials_csv),
+            "missing_registry_path": str(tmp_path / "missing.yaml"),
+            "max_targets": 0,
+        },
+    )
+
+    assert status == 200
+    assert payload["mode"] == "source_agnostic_missing_plan"
+    assert payload["registry"]["missing_count"] == 1
+    source_names = {source["name"] for source in payload["sources"]}
+    assert {"tdnet_missing_financials", "jpx_listing_evidence"} <= source_names
+    evidence_names = {source["name"] for source in payload["evidence_sources"]}
+    assert {"TDnet", "JPX", "issuer_ir_pdf_html"} <= evidence_names
+
+
+def test_missing_auto_refresh_without_edinet_key_uses_official_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.investment.universe import ListedIssue, write_jpx_listed_issues
+    from investment_assistant.webapi import service
+
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    listed_path = tmp_path / "listed_issues.csv"
+    write_jpx_listed_issues(
+        [ListedIssue("9999", "Standard Sample", "Standard Market (Domestic Stock)", "Services")],
+        listed_path,
+    )
+    base_registry_path = tmp_path / "all_domestic.yaml"
+    status, _ = handle_api(
+        "POST",
+        "/api/financials/listed-registry",
+        {
+            "jpx_listed_path": str(listed_path),
+            "registry_path": str(base_registry_path),
+            "max_targets": 0,
+        },
+    )
+    assert status == 200
+    captured: dict[str, object] = {}
+
+    def fake_fetch_job_auto(body: dict[str, object]) -> dict[str, object]:
+        captured.update(body)
+        return {
+            "status": "completed",
+            "allowed_sources_count": len(body.get("sources", [])),
+        }
+
+    monkeypatch.setattr(service, "_fetch_job_auto", fake_fetch_job_auto)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/missing-auto-refresh",
+        {
+            "registry_path": str(base_registry_path),
+            "financials_csv": str(tmp_path / "financials.csv"),
+            "missing_registry_path": str(tmp_path / "missing.yaml"),
+            "max_targets": 1,
+            "index_after_fetch": False,
+        },
+    )
+
+    assert status == 200
+    assert payload["source_strategy"] == "official_disclosure_rag"
+    assert payload["evidence_updated"] is True
+    assert payload["financials_updated"] is False
+    assert len(captured["sources"]) == 2
+
+
 def test_edinet_status_reads_local_dotenv_without_exposing_key(
     tmp_path: Path,
     monkeypatch,

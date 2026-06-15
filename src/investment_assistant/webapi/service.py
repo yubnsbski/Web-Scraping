@@ -1394,6 +1394,190 @@ def _financials_missing_refresh_async(body: JsonDict) -> JsonDict:
     return {"job_id": job_id, "status": "running", "kind": "financials-missing-refresh"}
 
 
+def _financials_missing_sources(body: JsonDict) -> JsonDict:
+    missing = _financials_missing_registry(
+        {
+            **body,
+            "save": _as_bool(body.get("save_registry"), True),
+        }
+    )
+    sample = missing.get("sample")
+    sample_targets = (
+        [item for item in sample if isinstance(item, dict)]
+        if isinstance(sample, list)
+        else []
+    )
+    output_dir = str(body.get("evidence_output_dir") or "local_docs/disclosure")
+    sources = _missing_official_evidence_sources(
+        sample_targets,
+        output_dir=output_dir,
+        preview_chars=_as_int(body.get("preview_chars"), 800),
+    )
+    return {
+        "available": bool(missing.get("available")),
+        "mode": "source_agnostic_missing_plan",
+        "registry": missing,
+        "sources": sources,
+        "sources_count": len(sources),
+        "structured_sources": [
+            {
+                "name": "EDINET API",
+                "role": "structured_financial_csv",
+                "requires_api_key": True,
+                "status": "preferred_for_deterministic_metrics",
+            },
+            {
+                "name": "user_financial_csv",
+                "role": "structured_financial_csv",
+                "requires_api_key": False,
+                "status": "manual_or_verified_import",
+            },
+        ],
+        "evidence_sources": [
+            {
+                "name": "TDnet",
+                "role": "official_disclosure_rag",
+                "structured_csv": False,
+            },
+            {
+                "name": "JPX",
+                "role": "market_segment_and_listing_evidence",
+                "structured_csv": False,
+            },
+            {
+                "name": "issuer_ir_pdf_html",
+                "role": "manual_url_or_file_evidence",
+                "structured_csv": False,
+            },
+        ],
+        "manual_inputs": {
+            "csv": "Dataタブの手動EDINET財務データに貼り付け/保存",
+            "pdf_html": "URL取得またはテキスト化してRAG登録",
+        },
+        "hint": (
+            "補完元はEDINETだけに限定しません。"
+            "数値CSVはEDINET APIまたは確認済みCSVで補完し、"
+            "TDnet/JPX/企業IR/PDF/HTMLはRAG根拠として補完します。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_missing_evidence_refresh(body: JsonDict) -> JsonDict:
+    plan = _financials_missing_sources(body)
+    sources = plan.get("sources")
+    source_list = (
+        [item for item in sources if isinstance(item, dict)]
+        if isinstance(sources, list)
+        else []
+    )
+    if not source_list:
+        return {
+            **plan,
+            "status": "blocked",
+            "evidence_updated": False,
+            "financials_updated": False,
+            "hint": "非EDINET補完に使える公式ソースがありません。補完元を確認してください。",
+        }
+    fetch_result = _fetch_job_auto(
+        {
+            "sources": source_list,
+            "db_path": str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
+            "index_path": str(body.get("index_path") or "local_docs"),
+            "index_after_fetch": _as_bool(body.get("index_after_fetch"), True),
+        }
+    )
+    return {
+        **plan,
+        "mode": "official_disclosure_rag",
+        "status": fetch_result.get("status"),
+        "evidence_updated": fetch_result.get("status") == "completed",
+        "financials_updated": False,
+        "fetch": fetch_result,
+        "hint": (
+            "EDINETに限らず、TDnet/JPXなど公式開示ソースをRAG根拠として取得しました。"
+            "構造化財務CSVの補完は、EDINET APIまたは確認済みCSV取込で行ってください。"
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _financials_missing_evidence_refresh_async(body: JsonDict) -> JsonDict:
+    job_id = JOBS.start(
+        "financials-missing-evidence-refresh",
+        lambda: _financials_missing_evidence_refresh(body),
+    )
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "kind": "financials-missing-evidence-refresh",
+    }
+
+
+def _financials_missing_auto_refresh(body: JsonDict) -> JsonDict:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    _ensure_env_from_dotenv(API_KEY_ENV_VAR)
+    if os.getenv(API_KEY_ENV_VAR, "").strip():
+        result = _financials_missing_refresh(body)
+        result["fallback_sources_available"] = True
+        result["source_strategy"] = "structured_edinet_api"
+        return result
+
+    result = _financials_missing_evidence_refresh(body)
+    result["source_strategy"] = "official_disclosure_rag"
+    return result
+
+
+def _financials_missing_auto_refresh_async(body: JsonDict) -> JsonDict:
+    job_id = JOBS.start(
+        "financials-missing-auto-refresh",
+        lambda: _financials_missing_auto_refresh(body),
+    )
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "kind": "financials-missing-auto-refresh",
+    }
+
+
+def _missing_official_evidence_sources(
+    sample_targets: list[JsonDict],
+    *,
+    output_dir: str,
+    preview_chars: int,
+) -> list[JsonDict]:
+    tickers = [str(item.get("ticker") or "").strip() for item in sample_targets]
+    companies = [
+        str(item.get("company") or item.get("name") or "").strip()
+        for item in sample_targets
+    ]
+    query_tail = " ".join([*tickers[:20], *companies[:10]]).strip()
+    base = Path(output_dir)
+    return [
+        {
+            "name": "tdnet_missing_financials",
+            "url": "https://www.release.tdnet.info/inbs/I_main_00.html",
+            "output_path": str(base / "missing_tdnet_disclosures.txt"),
+            "query_hint": f"TDnet 決算短信 配当 修正 {query_tail}".strip(),
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": preview_chars,
+        },
+        {
+            "name": "jpx_listing_evidence",
+            "url": "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html",
+            "output_path": str(base / "missing_jpx_listing_evidence.txt"),
+            "query_hint": f"JPX 上場銘柄一覧 市場区分 {query_tail}".strip(),
+            "extract_text": True,
+            "include_metadata": True,
+            "preview_chars": preview_chars,
+        },
+    ]
+
+
 def _financials_existing_tickers(financials_csv: str) -> set[str]:
     path = Path(financials_csv)
     if not path.is_file():
@@ -2685,6 +2869,15 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/financials/missing-registry"): _financials_missing_registry,
     ("POST", "/api/financials/missing-refresh"): _financials_missing_refresh,
     ("POST", "/api/financials/missing-refresh-async"): _financials_missing_refresh_async,
+    ("POST", "/api/financials/missing-sources"): _financials_missing_sources,
+    ("POST", "/api/financials/missing-evidence-refresh"): _financials_missing_evidence_refresh,
+    ("POST", "/api/financials/missing-evidence-refresh-async"): (
+        _financials_missing_evidence_refresh_async
+    ),
+    ("POST", "/api/financials/missing-auto-refresh"): _financials_missing_auto_refresh,
+    ("POST", "/api/financials/missing-auto-refresh-async"): (
+        _financials_missing_auto_refresh_async
+    ),
     ("POST", "/api/financials/refresh"): _financials_refresh,
     ("POST", "/api/financials/refresh-async"): _financials_refresh_async,
     ("POST", "/api/financials/securities"): _financials_securities,

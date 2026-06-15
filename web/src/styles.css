@@ -301,7 +301,17 @@ button:hover:not(:disabled),
 
 .financials-source-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(5, auto);
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+  gap: 8px;
+  align-items: center;
+}
+
+.source-switcher {
+  align-self: stretch;
+}
+
+.source-switcher[open] {
+  display: flex;
   gap: 8px;
   align-items: center;
 }
@@ -677,6 +687,22 @@ details summary {
   color: var(--accent);
   font-size: 13px;
   font-weight: 700;
+}
+
+.advanced-settings {
+  flex-basis: 100%;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.advanced-settings summary {
+  margin-bottom: 10px;
+}
+
+.advanced-settings[open] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .kv {
