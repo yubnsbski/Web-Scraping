@@ -8,6 +8,7 @@ parsers.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from logging.handlers import RotatingFileHandler
@@ -19,6 +20,7 @@ from investment_assistant.observability import get_logger
 
 __all__ = [
     "DEFAULT_YAHOO_RATE_LIMIT_POLICY",
+    "MARKET_ROBOTS_BYPASS_ENV",
     "MarketFetchPolicy",
     "MarketFetchRunner",
     "MarketRateLimitError",
@@ -26,11 +28,13 @@ __all__ = [
     "fetch_once",
     "normalize_tickers",
     "render_csv",
+    "robots_bypass_enabled",
 ]
 
 Fetch = Callable[[str], str]
 Sleeper = Callable[[float], None]
 _logger = get_logger("portfolio.market_common")
+MARKET_ROBOTS_BYPASS_ENV = "MARKET_ALLOW_ROBOTS_BYPASS"
 
 
 class MarketRateLimitError(RuntimeError):
@@ -182,7 +186,18 @@ class MarketFetchRunner:
 def default_fetch(url: str) -> str:
     """Fetch a URL's body via the robots-respecting, rate-limited SafeFetcher."""
 
-    return SafeFetcher().fetch_document(url).html
+    return SafeFetcher().fetch_document(url, respect_robots=not robots_bypass_enabled()).html
+
+
+def robots_bypass_enabled() -> bool:
+    """Return whether personal-use market fetches may skip only robots.txt."""
+
+    return os.getenv(MARKET_ROBOTS_BYPASS_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def fetch_once(

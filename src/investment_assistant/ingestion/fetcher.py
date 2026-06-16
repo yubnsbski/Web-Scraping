@@ -172,16 +172,20 @@ class SafeFetcher:
             include_metadata=include_metadata,
         )
 
-    def fetch_document(self, url: str) -> FetchedDocument:
+    def fetch_document(self, url: str, *, respect_robots: bool = True) -> FetchedDocument:
         """Fetch a URL and return its full decoded body for crawling.
 
         Reuses the same robots check, cache, and rate limiting as :meth:`fetch`,
         but returns the complete decoded body (not a truncated preview) so the
         crawler can extract links from it.
+
+        ``respect_robots`` defaults to True. Market-data callers that have an
+        explicit personal-use reason may pass False to skip only the robots gate;
+        cache, rate limiting, timeout, and the configured User-Agent still apply.
         """
 
         decision = self.robots.can_fetch(url)
-        if not decision.allowed:
+        if respect_robots and not decision.allowed:
             return FetchedDocument(
                 url=url,
                 status_code=None,
