@@ -1358,96 +1358,105 @@ function ReportResult({ data }: { data: Json }) {
   const auditStatus = String(audit?.status ?? "未監査");
   const auditOk = auditStatus === "ok";
   return (
-    <ResultBlock title={String(data.title ?? "投資月次レポート")} meta={auditOk ? "監査OK" : auditStatus}>
-      <div className="detail-hero">
-        <DetailFact label="生成時刻" value={formatDateTime(data.generated_at)} />
-        <DetailFact label="候補" value={`${String(data.candidate_count ?? 0)}件`} />
-        <DetailFact label="根拠" value={`${evidence.length}件`} />
-        <DetailFact label="監査" value={auditOk ? "OK" : auditStatus} tone={auditOk ? "safe" : undefined} />
-      </div>
+    <div className="report-print-area">
+      <ResultBlock title={String(data.title ?? "投資月次レポート")} meta={auditOk ? "監査OK" : auditStatus}>
+        <div className="report-export">
+          <button className="primary" onClick={() => exportReportPdf(data)}>
+            PDF出力
+          </button>
+          <span>印刷画面で保存先にPDFを選ぶと、レポート本文だけを保存できます。</span>
+        </div>
 
-      {history && (
+        <div className="detail-hero">
+          <DetailFact label="生成時刻" value={formatDateTime(data.generated_at)} />
+          <DetailFact label="候補" value={`${String(data.candidate_count ?? 0)}件`} />
+          <DetailFact label="根拠" value={`${evidence.length}件`} />
+          <DetailFact label="監査" value={auditOk ? "OK" : auditStatus} tone={auditOk ? "safe" : undefined} />
+        </div>
+
+        {history && (
+          <section className="detail-section">
+            <h4>保存状態</h4>
+            <div className="detail-metrics">
+              <DetailFact label="レポートID" value={String(history.id ?? "-")} />
+              <DetailFact label="保存時刻" value={formatDateTime(history.saved_at)} />
+              <DetailFact label="整合性" value={String(history.integrity_status ?? "-")} />
+              <DetailFact label="ハッシュ" value={shortHash(history.report_hash)} />
+            </div>
+          </section>
+        )}
+
+        {sections.length > 0 && (
+          <section className="detail-section">
+            <h4>章立て</h4>
+            <div className="detail-notes">
+              {sections.map((section) => (
+                <article key={String(section.key ?? section.title)} className="detail-note">
+                  <b>{String(section.title ?? "章")}</b>
+                  <p>{String(section.body ?? "-")}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="detail-section">
-          <h4>保存状態</h4>
-          <div className="detail-metrics">
-            <DetailFact label="レポートID" value={String(history.id ?? "-")} />
-            <DetailFact label="保存時刻" value={formatDateTime(history.saved_at)} />
-            <DetailFact label="整合性" value={String(history.integrity_status ?? "-")} />
-            <DetailFact label="ハッシュ" value={shortHash(history.report_hash)} />
-          </div>
-        </section>
-      )}
-
-      {sections.length > 0 && (
-        <section className="detail-section">
-          <h4>章立て</h4>
-          <div className="detail-notes">
-            {sections.map((section) => (
-              <article key={String(section.key ?? section.title)} className="detail-note">
-                <b>{String(section.title ?? "章")}</b>
-                <p>{String(section.body ?? "-")}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="detail-section">
-        <h4>主要KPIと計算式</h4>
-        <SimpleTable
-          rows={kpis.map((kpi) => ({
-            ...kpi,
-            value: formatReportValue(kpi.value, kpi.value_format),
-            evidence_count: Array.isArray(kpi.evidence_keys) ? kpi.evidence_keys.length : 0,
-          }))}
-          columns={[
-            ["label", "項目"],
-            ["value", "値"],
-            ["formula", "計算式"],
-            ["evidence_count", "根拠数"],
-            ["last_updated", "更新"],
-          ]}
-        />
-      </section>
-
-      {evidence.length > 0 && (
-        <section className="detail-section">
-          <h4>根拠一覧</h4>
+          <h4>主要KPIと計算式</h4>
           <SimpleTable
-            rows={evidence.slice(0, 30)}
+            rows={kpis.map((kpi) => ({
+              ...kpi,
+              value: formatReportValue(kpi.value, kpi.value_format),
+              evidence_count: Array.isArray(kpi.evidence_keys) ? kpi.evidence_keys.length : 0,
+            }))}
             columns={[
-              ["claim_key", "根拠キー"],
-              ["source_type", "出所"],
-              ["source_ref", "参照"],
-              ["formula", "算出方法"],
+              ["label", "項目"],
+              ["value", "値"],
+              ["formula", "計算式"],
+              ["evidence_count", "根拠数"],
               ["last_updated", "更新"],
             ]}
           />
         </section>
-      )}
 
-      <section className="detail-section">
-        <h4>監査状態</h4>
-        {auditIssues.length > 0 ? (
-          <SimpleTable
-            rows={auditIssues}
-            columns={[
-              ["code", "コード"],
-              ["path", "場所"],
-              ["message", "内容"],
-            ]}
-          />
-        ) : (
-          <p className="notice safe">重要KPIの根拠と計算式を確認できました。</p>
+        {evidence.length > 0 && (
+          <section className="detail-section">
+            <h4>根拠一覧</h4>
+            <SimpleTable
+              rows={evidence.slice(0, 30)}
+              columns={[
+                ["claim_key", "根拠キー"],
+                ["source_type", "出所"],
+                ["source_ref", "参照"],
+                ["formula", "算出方法"],
+                ["last_updated", "更新"],
+              ]}
+            />
+          </section>
         )}
-      </section>
 
-      <section className="detail-boundary">
-        <b>免責</b>
-        <p>{String(data.disclaimer ?? "これは投資助言・売買推奨ではありません。最終判断はユーザーが行います。")}</p>
-      </section>
-      <JsonDetails data={data} />
-    </ResultBlock>
+        <section className="detail-section">
+          <h4>監査状態</h4>
+          {auditIssues.length > 0 ? (
+            <SimpleTable
+              rows={auditIssues}
+              columns={[
+                ["code", "コード"],
+                ["path", "場所"],
+                ["message", "内容"],
+              ]}
+            />
+          ) : (
+            <p className="notice safe">重要KPIの根拠と計算式を確認できました。</p>
+          )}
+        </section>
+
+        <section className="detail-boundary">
+          <b>免責</b>
+          <p>{String(data.disclaimer ?? "これは投資助言・売買推奨ではありません。最終判断はユーザーが行います。")}</p>
+        </section>
+        <JsonDetails data={data} />
+      </ResultBlock>
+    </div>
   );
 }
 
@@ -1720,6 +1729,27 @@ function formatReportValue(value: unknown, valueFormat: unknown): string {
   if (format === "percent") return percent(value);
   if (typeof value === "boolean") return value ? "はい" : "いいえ";
   return formatCell(value);
+}
+
+function exportReportPdf(data: Json): void {
+  const previousTitle = document.title;
+  let restored = false;
+  const restoreTitle = () => {
+    if (restored) return;
+    restored = true;
+    document.title = previousTitle;
+    window.removeEventListener("afterprint", restoreTitle);
+  };
+  document.title = reportPdfTitle(data);
+  window.addEventListener("afterprint", restoreTitle);
+  window.print();
+  window.setTimeout(restoreTitle, 5000);
+}
+
+function reportPdfTitle(data: Json): string {
+  const title = String(data.title ?? "投資月次レポート").replace(/[\\/:*?"<>|]/g, "-");
+  const generated = String(data.generated_at ?? "").slice(0, 10) || "report";
+  return `${title}-${generated}`;
 }
 
 function shortHash(value: unknown): string {

@@ -793,6 +793,23 @@ h3 {
   line-height: 1.5;
 }
 
+.report-export {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.report-export span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .result {
   display: grid;
   gap: 12px;
@@ -1039,5 +1056,87 @@ td {
 
   h1 {
     font-size: 22px;
+  }
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  body {
+    background: white;
+    color: #111827;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .report-print-area,
+  .report-print-area * {
+    visibility: visible;
+  }
+
+  .report-print-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    background: white;
+  }
+
+  .report-print-area .result {
+    gap: 10px;
+    padding: 0;
+    border-top: 0;
+  }
+
+  .report-print-area .result header {
+    display: grid;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .report-print-area .result header h3 {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  .report-export,
+  .report-print-area .json {
+    display: none !important;
+  }
+
+  .detail-hero,
+  .detail-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-fact,
+  .detail-note,
+  .detail-boundary,
+  .notice {
+    break-inside: avoid;
+    box-shadow: none;
+  }
+
+  .detail-section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .table-wrap {
+    overflow: visible;
+    break-inside: auto;
+  }
+
+  table {
+    min-width: 0;
+    font-size: 11px;
+  }
+
+  th,
+  td {
+    padding: 6px;
   }
 }
