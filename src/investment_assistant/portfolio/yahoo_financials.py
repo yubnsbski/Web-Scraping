@@ -126,7 +126,7 @@ def parse_yahoo_japan_quote_html(html_text: str) -> dict[str, object]:
         if text.startswith("時価総額"):
             value = _first_value_number(value_text)
             if value is not None:
-                metrics["market_cap"] = value * 1_000_000 if "百万円" in text else value
+                metrics["market_cap"] = _scale_market_cap(value, text)
     return {key: value for key, value in metrics.items() if value is not None}
 
 
@@ -242,3 +242,13 @@ def _valid_metric_value(key: str, value: float) -> bool:
     if key in {"per", "pbr", "eps"}:
         return value > 0
     return True
+
+
+def _scale_market_cap(value: float, text: str) -> float:
+    """Scale a 時価総額 figure to yen by its unit (百万円 = 1e6, 億円 = 1e8)."""
+
+    if "百万円" in text:
+        return value * 1_000_000
+    if "億円" in text:
+        return value * 100_000_000
+    return value
