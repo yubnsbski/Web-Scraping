@@ -3,6 +3,7 @@ import { api } from "./api";
 
 type Json = Record<string, any>;
 type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" | "chat";
+type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 
 const FINANCIALS_PATH = "examples/financials_sample.csv";
 
@@ -39,6 +40,11 @@ export function App() {
   const [analysis, setAnalysis] = useState<Json | null>(null);
   const [candidates, setCandidates] = useState<Json | null>(null);
   const [report, setReport] = useState<Json | null>(null);
+  const [detailRequest, setDetailRequest] = useState<DetailRequest>({
+    code: "8306",
+    assetType: "stock",
+    version: 0,
+  });
 
   const workState = useMemo(
     () => buildWorkState({ marketSnapshot, analysis, candidates, report }),
@@ -97,6 +103,10 @@ export function App() {
             financialsPath={financialsPath}
             setFinancialsPath={setFinancialsPath}
             onMarket={setMarketSnapshot}
+            onOpenDetail={(code) => {
+              setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
+              setTab("detail");
+            }}
           />
         )}
         {tab === "holdings" && (
@@ -120,6 +130,7 @@ export function App() {
             holdingsCsv={holdingsCsv}
             fundsCsv={fundsCsv}
             financialsPath={financialsPath}
+            detailRequest={detailRequest}
           />
         )}
         {tab === "report" && (
@@ -180,6 +191,7 @@ function DataUpdatePanel(props: {
   financialsPath: string;
   setFinancialsPath: (value: string) => void;
   onMarket: (value: Json) => void;
+  onOpenDetail: (code: string) => void;
 }) {
   const [mode, setMode] = useState<"financials" | "ohlcv" | "intraday" | "inbox">("financials");
   const [scope, setScope] = useState<"tickers" | "nikkei225" | "financials_csv">("tickers");
@@ -284,6 +296,7 @@ function DataUpdatePanel(props: {
         loading={financialsPreview.loading}
         error={financialsPreview.error}
         onRefresh={() => void refreshFinancialsPreview()}
+        onOpenDetail={props.onOpenDetail}
       />
       <EdinetAcquisitionPanel
         onFinished={refreshDataView}
@@ -645,9 +658,19 @@ function FinancialsPreviewPanel(props: {
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  onOpenDetail: (code: string) => void;
 }) {
+  const [query, setQuery] = useState("");
   const status = String(props.data?.status ?? "unknown");
   const rows = Array.isArray(props.data?.rows) ? (props.data.rows as Json[]) : [];
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredRows = normalizedQuery
+    ? rows.filter((row) =>
+        [row.ticker, row.name]
+          .map((value) => String(value ?? "").toLowerCase())
+          .some((value) => value.includes(normalizedQuery)),
+      )
+    : rows;
   const warnings = Array.isArray(props.data?.warnings) ? (props.data.warnings as unknown[]) : [];
   const years = Array.isArray(props.data?.fiscal_years) ? props.data.fiscal_years.map(String).join(", ") : "-";
   return (
@@ -678,25 +701,65 @@ function FinancialsPreviewPanel(props: {
               ))}
             </ul>
           )}
-          {rows.length > 0 ? (
-            <SimpleTable
-              rows={rows}
-              columns={[
-                ["ticker", "コード"],
-                ["name", "企業名"],
-                ["fiscal_year", "年度"],
-                ["operating_cf", "営業CF"],
-                ["equity_ratio", "自己資本比率"],
-                ["dividend_per_share", "1株配当"],
-                ["payout_policy", "メモ"],
-              ]}
-            />
+          {rows.length > 0 && (
+            <div className="inline-filter">
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="証券コード・企業名で検索"
+                aria-label="財務CSVを検索"
+              />
+              <span>{filteredRows.length}件表示</span>
+            </div>
+          )}
+          {filteredRows.length > 0 ? (
+            <FinancialsPreviewTable rows={filteredRows} onOpenDetail={props.onOpenDetail} />
           ) : (
             <p className="muted">表示できる財務データがありません。</p>
           )}
         </>
       )}
     </section>
+  );
+}
+
+function FinancialsPreviewTable(props: { rows: Json[]; onOpenDetail: (code: string) => void }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>コード</th>
+            <th>企業名</th>
+            <th>年度</th>
+            <th>営業CF</th>
+            <th>自己資本比率</th>
+            <th>1株配当</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.rows.slice(0, 100).map((row) => {
+            const code = String(row.ticker ?? "");
+            return (
+              <tr key={`${code}-${String(row.fiscal_year ?? "")}`}>
+                <td>{code || "-"}</td>
+                <td>{formatCell(row.name)}</td>
+                <td>{formatCell(row.fiscal_year)}</td>
+                <td>{formatCell(row.operating_cf)}</td>
+                <td>{formatCell(row.equity_ratio)}</td>
+                <td>{formatCell(row.dividend_per_share)}</td>
+                <td>
+                  <button className="table-action" disabled={!code} onClick={() => props.onOpenDetail(code)}>
+                    詳細
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -838,20 +901,33 @@ function ScreenPanel(props: {
   );
 }
 
-function DetailPanel(props: { holdingsCsv: string; fundsCsv: string; financialsPath: string }) {
-  const [code, setCode] = useState("8306");
-  const [assetType, setAssetType] = useState<"stock" | "fund">("stock");
+function DetailPanel(props: {
+  holdingsCsv: string;
+  fundsCsv: string;
+  financialsPath: string;
+  detailRequest: DetailRequest;
+}) {
+  const [code, setCode] = useState(props.detailRequest.code);
+  const [assetType, setAssetType] = useState<"stock" | "fund">(props.detailRequest.assetType);
   const state = useAsync<Json>();
-  const load = () =>
+  const load = (targetCode = code, targetAssetType = assetType) =>
     state.run(() =>
       api<Json>("/api/investment/detail", {
-        code,
-        asset_type: assetType,
+        code: targetCode,
+        asset_type: targetAssetType,
         csv_text: props.holdingsCsv,
         funds_csv_text: props.fundsCsv,
         financials_csv: props.financialsPath,
       }),
     );
+
+  useEffect(() => {
+    if (props.detailRequest.version <= 0) return;
+    setCode(props.detailRequest.code);
+    setAssetType(props.detailRequest.assetType);
+    void load(props.detailRequest.code, props.detailRequest.assetType);
+  }, [props.detailRequest.version]);
+
   return (
     <section className="screen">
       <ScreenTitle title="銘柄・投信詳細" body="保有、財務、投信プロファイルを1コードに集約して確認します。" />
