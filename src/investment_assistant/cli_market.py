@@ -12,6 +12,10 @@ from pathlib import Path
 
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.ingestion.fetcher import reject_path_traversal
+from investment_assistant.portfolio._market_common import (
+    DEFAULT_YAHOO_RATE_LIMIT_POLICY,
+    MarketFetchPolicy,
+)
 
 __all__ = ["run_market_ohlcv", "run_yahoo_intraday"]
 
@@ -74,6 +78,7 @@ def run_market_ohlcv(
     interval: str = "1d",
     output_dir: str | Path | None = None,
     fetch: Callable[[str], str] | None = None,
+    rate_limit_policy: MarketFetchPolicy | None = DEFAULT_YAHOO_RATE_LIMIT_POLICY,
 ) -> dict[str, object]:
     """Scrape daily OHLCV from Yahoo Finance for explicit tickers or a registry.
 
@@ -89,7 +94,13 @@ def run_market_ohlcv(
     if max_count and max_count > 0:
         resolved = resolved[:max_count]
 
-    result = fetch_ohlcv(resolved, range_=range_, interval=interval, fetch=fetch)
+    result = fetch_ohlcv(
+        resolved,
+        range_=range_,
+        interval=interval,
+        fetch=fetch,
+        rate_limit=rate_limit_policy,
+    )
     result["tickers_count"] = len(resolved)
     return _persist_or_inline(
         result, output_dir=output_dir, series_key="ohlcv", csv_writer=ohlcv_csv_text
@@ -103,6 +114,7 @@ def run_yahoo_intraday(
     max_count: int = 0,
     output_dir: str | Path | None = None,
     fetch: Callable[[str], str] | None = None,
+    rate_limit_policy: MarketFetchPolicy | None = DEFAULT_YAHOO_RATE_LIMIT_POLICY,
 ) -> dict[str, object]:
     """Scrape today's minute-bar series from Yahoo Finance Japan.
 
@@ -121,7 +133,7 @@ def run_yahoo_intraday(
     if max_count and max_count > 0:
         resolved = resolved[:max_count]
 
-    result = fetch_yahoo_intraday(resolved, fetch=fetch)
+    result = fetch_yahoo_intraday(resolved, fetch=fetch, rate_limit=rate_limit_policy)
     result["tickers_count"] = len(resolved)
     return _persist_or_inline(
         result, output_dir=output_dir, series_key="intraday", csv_writer=intraday_csv_text

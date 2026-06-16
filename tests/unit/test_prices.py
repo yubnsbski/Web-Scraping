@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from investment_assistant.portfolio._market_common import MarketFetchPolicy
 from investment_assistant.portfolio.prices import (
     PRICE_PROVIDER_ENV,
     fetch_prices,
@@ -75,3 +76,28 @@ def test_fetch_prices_provider_from_env(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert result["provider_id"] == "yfinance"
     assert result["prices"] == {"7203": 42.0}
+
+
+def test_fetch_prices_rate_limit_policy_retries_empty_response() -> None:
+    waits: list[float] = []
+    responses = ["", _yahoo_payload(regular=3010.0, closes=[3000.0])]
+    policy = MarketFetchPolicy(
+        min_interval_seconds=2.0,
+        retry_attempts=1,
+        retry_base_wait_seconds=10.0,
+        batch_size=10,
+        log_path=None,
+        sleeper=waits.append,
+    )
+
+    def fake_fetch(url: str) -> str:
+        _ = url
+        return responses.pop(0)
+
+    result = fetch_prices(["8306"], provider_id="yfinance", fetch=fake_fetch, rate_limit=policy)
+
+    assert result["prices"] == {"8306": 3010.0}
+    assert waits == [10.0, 2.0]
+    assert result["rate_limit"]["request_count"] == 2  # type: ignore[index]
+    assert result["rate_limit"]["retry_count"] == 1  # type: ignore[index]
+    assert result["rate_limit"]["rate_limit_count"] == 1  # type: ignore[index]

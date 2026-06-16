@@ -21,7 +21,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 
 from investment_assistant.observability import get_logger
-from investment_assistant.portfolio._market_common import default_fetch, render_csv
+from investment_assistant.portfolio._market_common import (
+    MarketFetchPolicy,
+    MarketFetchRunner,
+    default_fetch,
+    normalize_tickers,
+    render_csv,
+)
 
 _logger = get_logger("portfolio.yahoo_intraday")
 
@@ -120,6 +126,7 @@ def fetch_yahoo_intraday(
     tickers: Iterable[str],
     *,
     fetch: Callable[[str], str] | None = None,
+    rate_limit: MarketFetchPolicy | None = None,
 ) -> dict[str, object]:
     """Scrape today's minute series for each ticker (no implicit count cap).
 
@@ -127,31 +134,35 @@ def fetch_yahoo_intraday(
     """
 
     fetcher = fetch or default_fetch
+    runner = MarketFetchRunner(fetcher, policy=rate_limit, logger=_logger)
     series: dict[str, list[dict[str, object]]] = {}
     counts: dict[str, int] = {}
     notes: dict[str, str] = {}
-    for raw in tickers:
-        ticker = str(raw).strip()
-        if not ticker or ticker in series:
-            continue
-        url = INTRADAY_URL_TEMPLATE.format(ticker=ticker.lower())
-        try:
-            ticks = parse_yahoo_intraday(fetcher(url))
-        except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
-            _logger.warning("intraday fetch failed ticker=%s error=%s", ticker, type(exc).__name__)
-            series[ticker] = []
-            counts[ticker] = 0
-            notes[ticker] = type(exc).__name__
-            continue
-        series[ticker] = [asdict(tick) for tick in ticks]
-        counts[ticker] = len(ticks)
-    return {
+    for batch in runner.batches(normalize_tickers(tickers)):
+        for ticker in batch:
+            url = INTRADAY_URL_TEMPLATE.format(ticker=ticker.lower())
+            try:
+                ticks = parse_yahoo_intraday(runner.fetch_once(url, ticker=ticker))
+            except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
+                _logger.warning(
+                    "intraday fetch failed ticker=%s error=%s", ticker, type(exc).__name__
+                )
+                series[ticker] = []
+                counts[ticker] = 0
+                notes[ticker] = type(exc).__name__
+                continue
+            series[ticker] = [asdict(tick) for tick in ticks]
+            counts[ticker] = len(ticks)
+    result: dict[str, object] = {
         "provider_id": "yahoo_jp_intraday",
         "url_template": INTRADAY_URL_TEMPLATE,
         "intraday": series,
         "counts": counts,
         "notes": notes,
     }
+    if rate_limit is not None:
+        result["rate_limit"] = runner.summary()
+    return result
 
 
 def intraday_csv_text(ticks: Iterable[dict[str, object]]) -> str:

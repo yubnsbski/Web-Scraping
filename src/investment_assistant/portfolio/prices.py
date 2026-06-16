@@ -23,7 +23,12 @@ import os
 from collections.abc import Callable, Iterable
 
 from investment_assistant.observability import get_logger
-from investment_assistant.portfolio._market_common import default_fetch
+from investment_assistant.portfolio._market_common import (
+    MarketFetchPolicy,
+    MarketFetchRunner,
+    default_fetch,
+    normalize_tickers,
+)
 
 _logger = get_logger("portfolio.prices")
 
@@ -113,6 +118,7 @@ def fetch_prices(
     provider_id: str | None = None,
     fetch: Callable[[str], str] | None = None,
     url_template: str | None = None,
+    rate_limit: MarketFetchPolicy | None = None,
 ) -> dict[str, object]:
     """Fetch latest close prices for ``tickers`` (ticker -> price or None).
 
@@ -122,18 +128,25 @@ def fetch_prices(
     """
 
     fetcher = fetch or default_fetch
+    runner = MarketFetchRunner(fetcher, policy=rate_limit, logger=_logger)
     resolved_id, template, parser = _resolve_provider(provider_id, url_template)
     prices: dict[str, float | None] = {}
     notes: dict[str, str] = {}
-    for raw in tickers:
-        ticker = str(raw).strip()
-        if not ticker or ticker in prices:
-            continue
-        url = template.format(ticker=ticker.lower())
-        try:
-            prices[ticker] = parser(fetcher(url))
-        except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
-            _logger.warning("price fetch failed ticker=%s error=%s", ticker, type(exc).__name__)
-            prices[ticker] = None
-            notes[ticker] = type(exc).__name__
-    return {"prices": prices, "notes": notes, "source": template, "provider_id": resolved_id}
+    for batch in runner.batches(normalize_tickers(tickers)):
+        for ticker in batch:
+            url = template.format(ticker=ticker.lower())
+            try:
+                prices[ticker] = parser(runner.fetch_once(url, ticker=ticker))
+            except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
+                _logger.warning("price fetch failed ticker=%s error=%s", ticker, type(exc).__name__)
+                prices[ticker] = None
+                notes[ticker] = type(exc).__name__
+    result: dict[str, object] = {
+        "prices": prices,
+        "notes": notes,
+        "source": template,
+        "provider_id": resolved_id,
+    }
+    if rate_limit is not None:
+        result["rate_limit"] = runner.summary()
+    return result

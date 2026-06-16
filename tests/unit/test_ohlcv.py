@@ -5,6 +5,10 @@ from datetime import datetime
 from pathlib import Path
 
 from investment_assistant import cli
+from investment_assistant.portfolio._market_common import (
+    DEFAULT_YAHOO_RATE_LIMIT_POLICY,
+    MarketFetchPolicy,
+)
 from investment_assistant.portfolio.ohlcv import (
     fetch_ohlcv,
     ohlcv_csv_text,
@@ -76,6 +80,7 @@ def test_run_market_ohlcv_caps_universe_and_writes_csv(tmp_path: Path) -> None:
         max_count=2,
         output_dir=out,
         fetch=fake_fetch,
+        rate_limit_policy=DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None),
     )
 
     # max=2 caps the 3 requested tickers down to 2.
@@ -101,7 +106,10 @@ def test_run_market_ohlcv_expands_tickers_from_registry(tmp_path: Path) -> None:
     )
 
     result = cli.run_market_ohlcv(
-        registry_path=registry, max_count=0, fetch=lambda url: _payload(["2026-06-15"])
+        registry_path=registry,
+        max_count=0,
+        fetch=lambda url: _payload(["2026-06-15"]),
+        rate_limit_policy=DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None),
     )
 
     assert result["tickers_count"] == 2
@@ -114,3 +122,27 @@ def test_ohlcv_csv_text_renders_header_and_blank_nulls() -> None:
     assert lines[0] == "date,open,high,low,close,volume"
     # Missing/None fields render as empty cells, not "None".
     assert lines[1] == "2026-06-15,1.0,,,,"
+
+
+def test_fetch_ohlcv_rate_limit_policy_spaces_and_batches_requests() -> None:
+    waits: list[float] = []
+    seen: list[str] = []
+    policy = MarketFetchPolicy(
+        min_interval_seconds=2.0,
+        retry_attempts=0,
+        batch_size=2,
+        sleep_between_batches_seconds=30.0,
+        log_path=None,
+        sleeper=waits.append,
+    )
+
+    def fake_fetch(url: str) -> str:
+        seen.append(url)
+        return _payload(["2026-06-15"])
+
+    result = fetch_ohlcv(["8306", "7203", "9432"], fetch=fake_fetch, rate_limit=policy)
+
+    assert result["counts"] == {"8306": 1, "7203": 1, "9432": 1}
+    assert len(seen) == 3
+    assert waits == [2.0, 30.0, 2.0]
+    assert result["rate_limit"]["batch_pause_count"] == 1  # type: ignore[index]

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from investment_assistant import cli
+from investment_assistant.portfolio._market_common import DEFAULT_YAHOO_RATE_LIMIT_POLICY
 from investment_assistant.portfolio.yahoo_intraday import (
     extract_preloaded_state,
     fetch_yahoo_intraday,
@@ -76,7 +77,11 @@ def test_run_yahoo_intraday_caps_and_writes_csv(tmp_path: Path) -> None:
         return _page([_history("09:00", 100), _history("09:01", 101)])
 
     result = cli.run_yahoo_intraday(
-        tickers=["2914", "8306", "9934"], max_count=2, output_dir=out, fetch=fake_fetch
+        tickers=["2914", "8306", "9934"],
+        max_count=2,
+        output_dir=out,
+        fetch=fake_fetch,
+        rate_limit_policy=DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None),
     )
 
     assert result["tickers_count"] == 2
