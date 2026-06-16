@@ -49,3 +49,14 @@ def test_market_inbox_cli_reports_status(tmp_path: Path) -> None:
     path.write_text("ticker,close\n7203,3000\n", encoding="utf-8")
     result = cli.run_market_inbox(path=path)
     assert result["status"] == "present" and result["prices"] == {"7203": 3000.0}
+
+
+def test_market_inbox_api_route(tmp_path: Path) -> None:
+    from investment_assistant.webapi.service import handle_api
+
+    path = tmp_path / "inbox.csv"
+    path.write_text("symbol,close\n8306,1500\n", encoding="utf-8")
+    status, payload = handle_api("POST", "/api/market/inbox", {"path": str(path)})
+    assert status == 200
+    assert payload["status"] == "present"
+    assert payload["prices"] == {"8306": 1500.0}

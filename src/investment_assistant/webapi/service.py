@@ -641,6 +641,11 @@ def _market_intraday(body: JsonDict) -> JsonDict:
     return cli.run_yahoo_intraday(tickers=tickers)
 
 
+def _market_inbox(body: JsonDict) -> JsonDict:
+    raw_path = body.get("path")
+    return cli.run_market_inbox(path=str(raw_path) if raw_path else None)
+
+
 def _provider_policy_ledger(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import provider_policy_ledger
 
@@ -1352,6 +1357,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/prices"): _market_prices,
     ("POST", "/api/market/ohlcv"): _market_ohlcv,
     ("POST", "/api/market/intraday"): _market_intraday,
+    ("POST", "/api/market/inbox"): _market_inbox,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,
