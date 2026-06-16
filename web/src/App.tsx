@@ -1046,7 +1046,7 @@ function ReportPanel(props: {
         loading={state.loading || historyState.loading || loadState.loading}
         error={state.error || historyState.error || loadState.error}
       />
-      {historyState.data && <ReportHistoryTable data={historyState.data} onLoad={loadReport} />}
+      {historyState.data && <ReportHistoryTable data={historyState.data} onLoad={loadReport} onRefresh={refreshHistory} />}
       {displayReport && <ReportResult data={displayReport} />}
     </section>
   );
@@ -1375,8 +1375,57 @@ function DetailFact({ label, value, tone }: { label: string; value: string; tone
   );
 }
 
-function ReportHistoryTable({ data, onLoad }: { data: Json; onLoad: (reportId: string) => void }) {
+function ReportHistoryTable({
+  data,
+  onLoad,
+  onRefresh,
+}: {
+  data: Json;
+  onLoad: (reportId: string) => void;
+  onRefresh: () => Promise<Json | null>;
+}) {
   const rows = reportHistoryRows(data);
+  const [baseSelection, setBaseSelection] = useState("");
+  const [compareSelection, setCompareSelection] = useState("");
+  const verifyState = useAsync<Json>();
+  const deleteState = useAsync<Json>();
+  const compareState = useAsync<Json>();
+  const baseId = selectedReportId(baseSelection, rows, 0);
+  const compareId = selectedReportId(compareSelection, rows, 1);
+  const baseRow = reportHistoryRowById(rows, baseId);
+  const compareDisabled = !baseId || !compareId || baseId === compareId;
+  const verifySelected = () => {
+    if (!baseId) return;
+    void verifyState.run(() =>
+      api<Json>("/api/reports/investment-monthly/history/verify", {
+        report_id: baseId,
+      }),
+    );
+  };
+  const deleteSelected = async () => {
+    if (!baseId) return;
+    const label = baseRow ? `${formatDateTime(baseRow.saved_at)} ${String(baseRow.title ?? "")}` : baseId;
+    if (!window.confirm(`保存済みレポートを削除します。元に戻せません。\n\n${label}`)) return;
+    const result = await deleteState.run(() =>
+      api<Json>("/api/reports/investment-monthly/history/delete", {
+        report_id: baseId,
+      }),
+    );
+    if (result?.deleted) {
+      setBaseSelection("");
+      setCompareSelection("");
+      void onRefresh();
+    }
+  };
+  const compareSelected = () => {
+    if (compareDisabled) return;
+    void compareState.run(() =>
+      api<Json>("/api/reports/investment-monthly/history/compare", {
+        base_id: baseId,
+        compare_id: compareId,
+      }),
+    );
+  };
   if (rows.length === 0) {
     return (
       <section className="detail-section report-history">
@@ -1388,6 +1437,43 @@ function ReportHistoryTable({ data, onLoad }: { data: Json; onLoad: (reportId: s
   return (
     <section className="detail-section report-history" aria-label="レポート履歴">
       <h4>レポート履歴</h4>
+      <div className="history-toolbar">
+        <Field label="基準">
+          <select value={baseId} onChange={(event) => setBaseSelection(event.target.value)}>
+            {rows.map((row) => (
+              <option key={String(row.id)} value={String(row.id)}>
+                {historyOptionLabel(row)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="比較先">
+          <select value={compareId} onChange={(event) => setCompareSelection(event.target.value)}>
+            {rows.map((row) => (
+              <option key={String(row.id)} value={String(row.id)}>
+                {historyOptionLabel(row)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="history-actions">
+          <button onClick={verifySelected} disabled={!baseId}>
+            整合性確認
+          </button>
+          <button onClick={compareSelected} disabled={compareDisabled}>
+            比較
+          </button>
+          <button onClick={() => void deleteSelected()} disabled={!baseId}>
+            削除
+          </button>
+        </div>
+      </div>
+      <Status
+        loading={verifyState.loading || deleteState.loading || compareState.loading}
+        error={verifyState.error || deleteState.error || compareState.error}
+      />
+      {verifyState.data && <ReportHistoryVerification data={verifyState.data} />}
+      {compareState.data && <ReportHistoryComparison data={compareState.data} />}
       <div className="table-wrap">
         <table>
           <thead>
@@ -1408,8 +1494,15 @@ function ReportHistoryTable({ data, onLoad }: { data: Json; onLoad: (reportId: s
               const auditStatus = String(row.publish_audit_status ?? "unknown");
               const integrityStatus = String(row.integrity_status ?? "unknown");
               const ok = auditStatus === "ok" && integrityStatus === "ok";
+              const rowClass = [
+                "history-row",
+                ok ? "" : "warn",
+                reportId === baseId ? "selected" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
               return (
-                <tr key={reportId || String(row.saved_at)} className={ok ? undefined : "history-row warn"}>
+                <tr key={reportId || String(row.saved_at)} className={rowClass}>
                   <td>{formatDateTime(row.saved_at)}</td>
                   <td>
                     <b>{String(row.title ?? "投資月次レポート")}</b>
@@ -1437,6 +1530,54 @@ function ReportHistoryTable({ data, onLoad }: { data: Json; onLoad: (reportId: s
         </table>
       </div>
       <p className="muted">履歴から開いたレポートも、同じ根拠一覧とPDF出力を利用できます。</p>
+    </section>
+  );
+}
+
+function ReportHistoryVerification({ data }: { data: Json }) {
+  const ok = String(data.integrity_status ?? "") === "ok";
+  return (
+    <p className={ok ? "notice safe" : "notice"}>
+      整合性: {String(data.integrity_status ?? "-")} / 保存ハッシュ: {shortHash(data.report_hash)} / 再計算:{" "}
+      {shortHash(data.calculated_report_hash)}
+    </p>
+  );
+}
+
+function ReportHistoryComparison({ data }: { data: Json }) {
+  const metrics = Array.isArray(data.metrics) ? (data.metrics as Json[]) : [];
+  const evidence = asJson(data.evidence);
+  const base = asJson(data.base);
+  const compare = asJson(data.compare);
+  return (
+    <section className="detail-section history-comparison" aria-label="レポート比較結果">
+      <h4>比較結果</h4>
+      <div className="detail-metrics">
+        <DetailFact label="基準" value={formatDateTime(base?.saved_at)} />
+        <DetailFact label="比較先" value={formatDateTime(compare?.saved_at)} />
+        <DetailFact label="根拠 差分" value={historyEvidenceDeltaLabel(evidence)} />
+        <DetailFact label="自動売買" value={data.auto_trading ? "有効" : "なし"} tone={data.auto_trading ? undefined : "safe"} />
+      </div>
+      <SimpleTable
+        rows={metrics.map((metric) => ({
+          ...metric,
+          base_value: formatReportValue(metric.base_value, metric.value_format),
+          compare_value: formatReportValue(metric.compare_value, metric.value_format),
+          delta: formatReportDelta(metric.delta, metric.value_format),
+          delta_pct: formatReportDelta(metric.delta_pct, "percent"),
+          changed: metric.changed ? "変化あり" : "変化なし",
+        }))}
+        columns={[
+          ["label", "項目"],
+          ["base_value", "基準"],
+          ["compare_value", "比較"],
+          ["delta", "差分"],
+          ["delta_pct", "差分率"],
+          ["changed", "状態"],
+          ["formula", "計算式"],
+        ]}
+      />
+      <p className="muted">比較は保存済みレポートのKPI差分です。売買判断や予測ではありません。</p>
     </section>
   );
 }
@@ -1800,10 +1941,33 @@ function reportHistoryRows(data: Json | null): Json[] {
   return Array.isArray(data?.reports) ? (data.reports as Json[]) : [];
 }
 
+function selectedReportId(selection: string, rows: Json[], fallbackIndex: number): string {
+  if (rows.some((row) => String(row.id ?? "") === selection)) return selection;
+  return String(rows[fallbackIndex]?.id ?? rows[0]?.id ?? "");
+}
+
+function reportHistoryRowById(rows: Json[], reportId: string): Json | null {
+  return rows.find((row) => String(row.id ?? "") === reportId) ?? null;
+}
+
+function historyOptionLabel(row: Json): string {
+  const time = formatDateTime(row.saved_at);
+  const title = String(row.title ?? "投資月次レポート");
+  const value = yenWithZero(row.market_value);
+  return `${time} / ${title} / ${value}`;
+}
+
 function historyStatusLabel(auditStatus: string, integrityStatus: string): string {
   const audit = auditStatus === "ok" ? "監査OK" : `監査 ${auditStatus}`;
   const integrity = integrityStatus === "ok" ? "整合OK" : `整合 ${integrityStatus}`;
   return `${audit} / ${integrity}`;
+}
+
+function historyEvidenceDeltaLabel(evidence: Json | null): string {
+  if (!evidence) return "-";
+  const added = Array.isArray(evidence.added) ? evidence.added.length : 0;
+  const removed = Array.isArray(evidence.removed) ? evidence.removed.length : 0;
+  return `追加 ${added} / 削除 ${removed}`;
 }
 
 function yen(value: unknown): string {
@@ -1832,6 +1996,18 @@ function formatReportValue(value: unknown, valueFormat: unknown): string {
   if (format === "percent") return percent(value);
   if (typeof value === "boolean") return value ? "はい" : "いいえ";
   return formatCell(value);
+}
+
+function formatReportDelta(value: unknown, valueFormat: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  const prefix = numeric > 0 ? "+" : "";
+  const format = String(valueFormat ?? "");
+  if (format === "yen") return `${prefix}${yenWithZero(numeric)}`;
+  if (format === "percent") {
+    return `${prefix}${numeric.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}%`;
+  }
+  return `${prefix}${numeric.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}`;
 }
 
 function exportReportPdf(data: Json): void {

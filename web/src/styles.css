@@ -814,8 +814,32 @@ h3 {
   gap: 10px;
 }
 
+.history-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.history-actions button {
+  min-height: 42px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
 .history-row.warn td {
   background: #fff7ed;
+}
+
+.history-row.selected td {
+  background: #ecfdf5;
 }
 
 .history-sub {
@@ -824,6 +848,13 @@ h3 {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.history-comparison {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
 }
 
 .result {
@@ -1044,7 +1075,8 @@ td {
   .detail-actions,
   .edinet-grid,
   .edinet-head,
-  .edinet-summary {
+  .edinet-summary,
+  .history-toolbar {
     grid-template-columns: 1fr;
   }
 
