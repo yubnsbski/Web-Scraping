@@ -7,6 +7,8 @@ import { api } from "./api";
 type Json = Record<string, any>;
 
 type MarketDataPanelProps = {
+  // The caller's holdings tickers, used by the one-click auto-fetch + match.
+  holdingsTickers?: string[];
   // Apply imported/looked-up prices (ticker -> price) to the caller's holdings.
   onApplyPrices?: (prices: Record<string, number>) => void;
 };
@@ -29,6 +31,68 @@ function asPriceMap(prices: unknown): Record<string, number> {
     }
   }
   return out;
+}
+
+// --- One click: auto-fetch prices (inbox + live) and financials, match to holdings ---
+function OneClickSection({ holdingsTickers, onApplyPrices }: MarketDataPanelProps) {
+  const [busy, setBusy] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const tickers = holdingsTickers ?? [];
+
+  const run = async () => {
+    if (tickers.length === 0) return;
+    setBusy(true);
+    setError(null);
+    setSummary(null);
+    try {
+      const [inbox, fin] = await Promise.all([
+        api<Json>("/api/market/inbox", {}).catch(() => ({}) as Json),
+        api<Json>("/api/market/financials", { tickers }).catch(() => ({}) as Json),
+      ]);
+      const inboxPrices = asPriceMap(inbox?.prices);
+      const financials = (fin?.financials ?? {}) as Record<string, Record<string, unknown>>;
+
+      // Match by ticker: prefer the inbox price, fall back to the live quote price.
+      const matched: Record<string, number> = {};
+      for (const t of tickers) {
+        if (inboxPrices[t] != null) {
+          matched[t] = inboxPrices[t];
+        } else {
+          const live = Number(financials[t]?.price);
+          if (Number.isFinite(live) && live > 0) matched[t] = live;
+        }
+      }
+      if (onApplyPrices) onApplyPrices(matched);
+      setSummary(
+        `価格マッチ ${Object.keys(matched).length}/${tickers.length} 銘柄・財務 ${Object.keys(financials).length} 銘柄を反映しました。`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="subpanel">
+      <div className="section-head">
+        <h4>ワンクリック自動取得 ＆ マッチング</h4>
+        <span className="badge">{tickers.length}銘柄</span>
+      </div>
+      <p className="hint">
+        保有銘柄について、ファイル(inbox)とライブ取得から価格・財務情報をまとめて取得し、ティッカーで突合して保有へ反映します。
+      </p>
+      <div className="form">
+        <button className="primary" onClick={() => void run()} disabled={busy || tickers.length === 0}>
+          {busy ? "取得中…" : "ワンクリック取得＆反映"}
+        </button>
+      </div>
+      {error && <p className="status error">取得に失敗しました: {error}</p>}
+      {summary && <p className="status">{summary}</p>}
+    </div>
+  );
 }
 
 // --- File inbox: a manually exported CSV, no scraping (the 7:00 auto-check path) ---
@@ -353,12 +417,13 @@ function FinancialsSection() {
   );
 }
 
-export function MarketDataPanel({ onApplyPrices }: MarketDataPanelProps) {
+export function MarketDataPanel({ holdingsTickers, onApplyPrices }: MarketDataPanelProps) {
   return (
     <section className="tool-section">
       <div className="section-head">
         <h3>市場データ（Yahoo!ファイナンス）</h3>
       </div>
+      <OneClickSection holdingsTickers={holdingsTickers} onApplyPrices={onApplyPrices} />
       <InboxSection onApplyPrices={onApplyPrices} />
       <ScrapeSection />
       <FinancialsSection />

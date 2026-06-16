@@ -3812,6 +3812,7 @@ function SimulateTab() {
       </div>
 
       <MarketDataPanel
+        holdingsTickers={holdings.map((h) => h.ticker)}
         onApplyPrices={(pm) =>
           setHoldings((hs) =>
             hs.map((h) => {
