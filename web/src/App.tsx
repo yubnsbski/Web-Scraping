@@ -968,6 +968,14 @@ function ReportPanel(props: {
 }) {
   const [targetDividend, setTargetDividend] = useState("10000");
   const state = useAsync<Json>();
+  const candidateCount = Array.isArray(props.candidates?.results) ? props.candidates.results.length : 0;
+  const holdingRows = csvDataRows(props.holdingsCsv);
+  const preflight = reportPreflight({
+    candidateCount,
+    financialsPath: props.financialsPath,
+    holdingRows,
+    targetDividend,
+  });
   const create = async () => {
     const result = await state.run(() =>
       api<Json>("/api/reports/investment-monthly", {
@@ -983,6 +991,24 @@ function ReportPanel(props: {
   return (
     <section className="screen">
       <ScreenTitle title="投資レポート" body="保有状況、集中リスク、配当見込み、候補、根拠、免責をまとめます。" />
+      <section className="report-preflight" aria-label="生成前の確認">
+        <div className="detail-section">
+          <h4>使うデータ</h4>
+          <div className="detail-metrics">
+            <DetailFact label="保有明細" value={`${holdingRows}行`} />
+            <DetailFact label="財務CSV" value={shortPath(props.financialsPath) || "-"} />
+            <DetailFact label="候補" value={`${candidateCount}件`} />
+            <DetailFact label="保存" value="履歴に保存" tone="safe" />
+          </div>
+        </div>
+        {preflight.length > 0 && (
+          <div className="report-checks">
+            {preflight.map((item) => (
+              <p key={item}>{item}</p>
+            ))}
+          </div>
+        )}
+      </section>
       <div className="form-grid tight">
         <Field label="目標年間配当">
           <input value={targetDividend} onChange={(e) => setTargetDividend(e.target.value)} inputMode="numeric" />
@@ -1324,17 +1350,102 @@ function DetailFact({ label, value, tone }: { label: string; value: string; tone
 
 function ReportResult({ data }: { data: Json }) {
   const kpis = Array.isArray(data.kpis) ? data.kpis : [];
+  const sections = Array.isArray(data.sections) ? (data.sections as Json[]) : [];
+  const evidence = Array.isArray(data.evidence) ? (data.evidence as Json[]) : [];
+  const audit = asJson(data.publish_audit);
+  const auditIssues = Array.isArray(audit?.issues) ? (audit.issues as Json[]) : [];
+  const history = asJson(data.history);
+  const auditStatus = String(audit?.status ?? "未監査");
+  const auditOk = auditStatus === "ok";
   return (
-    <ResultBlock title="生成結果" meta={String(data.publish_audit?.status ?? "未監査")}>
-      <SimpleTable
-        rows={kpis}
-        columns={[
-          ["label", "項目"],
-          ["value", "値"],
-          ["formula", "計算式"],
-          ["last_updated", "更新"],
-        ]}
-      />
+    <ResultBlock title={String(data.title ?? "投資月次レポート")} meta={auditOk ? "監査OK" : auditStatus}>
+      <div className="detail-hero">
+        <DetailFact label="生成時刻" value={formatDateTime(data.generated_at)} />
+        <DetailFact label="候補" value={`${String(data.candidate_count ?? 0)}件`} />
+        <DetailFact label="根拠" value={`${evidence.length}件`} />
+        <DetailFact label="監査" value={auditOk ? "OK" : auditStatus} tone={auditOk ? "safe" : undefined} />
+      </div>
+
+      {history && (
+        <section className="detail-section">
+          <h4>保存状態</h4>
+          <div className="detail-metrics">
+            <DetailFact label="レポートID" value={String(history.id ?? "-")} />
+            <DetailFact label="保存時刻" value={formatDateTime(history.saved_at)} />
+            <DetailFact label="整合性" value={String(history.integrity_status ?? "-")} />
+            <DetailFact label="ハッシュ" value={shortHash(history.report_hash)} />
+          </div>
+        </section>
+      )}
+
+      {sections.length > 0 && (
+        <section className="detail-section">
+          <h4>章立て</h4>
+          <div className="detail-notes">
+            {sections.map((section) => (
+              <article key={String(section.key ?? section.title)} className="detail-note">
+                <b>{String(section.title ?? "章")}</b>
+                <p>{String(section.body ?? "-")}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="detail-section">
+        <h4>主要KPIと計算式</h4>
+        <SimpleTable
+          rows={kpis.map((kpi) => ({
+            ...kpi,
+            value: formatReportValue(kpi.value, kpi.value_format),
+            evidence_count: Array.isArray(kpi.evidence_keys) ? kpi.evidence_keys.length : 0,
+          }))}
+          columns={[
+            ["label", "項目"],
+            ["value", "値"],
+            ["formula", "計算式"],
+            ["evidence_count", "根拠数"],
+            ["last_updated", "更新"],
+          ]}
+        />
+      </section>
+
+      {evidence.length > 0 && (
+        <section className="detail-section">
+          <h4>根拠一覧</h4>
+          <SimpleTable
+            rows={evidence.slice(0, 30)}
+            columns={[
+              ["claim_key", "根拠キー"],
+              ["source_type", "出所"],
+              ["source_ref", "参照"],
+              ["formula", "算出方法"],
+              ["last_updated", "更新"],
+            ]}
+          />
+        </section>
+      )}
+
+      <section className="detail-section">
+        <h4>監査状態</h4>
+        {auditIssues.length > 0 ? (
+          <SimpleTable
+            rows={auditIssues}
+            columns={[
+              ["code", "コード"],
+              ["path", "場所"],
+              ["message", "内容"],
+            ]}
+          />
+        ) : (
+          <p className="notice safe">重要KPIの根拠と計算式を確認できました。</p>
+        )}
+      </section>
+
+      <section className="detail-boundary">
+        <b>免責</b>
+        <p>{String(data.disclaimer ?? "これは投資助言・売買推奨ではありません。最終判断はユーザーが行います。")}</p>
+      </section>
       <JsonDetails data={data} />
     </ResultBlock>
   );
@@ -1561,6 +1672,28 @@ function formatFreshness(item: Json): string {
   return [latest, age].filter(Boolean).join(" / ") || "-";
 }
 
+function csvDataRows(value: string): number {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return Math.max(0, lines.length - 1);
+}
+
+function reportPreflight(input: {
+  candidateCount: number;
+  financialsPath: string;
+  holdingRows: number;
+  targetDividend: string;
+}): string[] {
+  const warnings: string[] = [];
+  if (input.holdingRows === 0) warnings.push("保有明細が空です。レポート生成前に保有CSVを確認してください。");
+  if (!input.financialsPath.trim()) warnings.push("財務CSVパスが空です。根拠付きの財務章が薄くなります。");
+  if (input.candidateCount === 0) warnings.push("候補抽出結果がありません。候補章は空のまま生成されます。");
+  if ((Number(input.targetDividend) || 0) <= 0) warnings.push("目標年間配当が0です。逆算KPIは追加されません。");
+  return warnings;
+}
+
 function yen(value: unknown): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric === 0) return "-";
@@ -1579,6 +1712,25 @@ function assetTypeLabel(value: unknown): string {
   if (text === "fund") return "投資信託";
   if (text === "unknown" || text === "") return "未判定";
   return String(value);
+}
+
+function formatReportValue(value: unknown, valueFormat: unknown): string {
+  const format = String(valueFormat ?? "");
+  if (format === "yen") return yenWithZero(value);
+  if (format === "percent") return percent(value);
+  if (typeof value === "boolean") return value ? "はい" : "いいえ";
+  return formatCell(value);
+}
+
+function shortHash(value: unknown): string {
+  const text = String(value ?? "");
+  return text ? `${text.slice(0, 12)}...` : "-";
+}
+
+function yenWithZero(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return `${Math.round(numeric).toLocaleString("ja-JP")}円`;
 }
 
 function detailAssetType(value: unknown): "stock" | "fund" {
