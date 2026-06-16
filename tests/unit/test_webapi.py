@@ -85,6 +85,11 @@ def test_edinet_status_reports_api_key_and_registry_plan(
     assert status == 200
     assert missing_key["can_start"] is False
     assert missing_key["api_key_configured"] is False
+    assert missing_key["setup_guidance"]["env_var"] == API_KEY_ENV_VAR
+    assert missing_key["setup_guidance"]["example_line"] == (
+        f"{API_KEY_ENV_VAR}=<your-edinet-api-key>"
+    )
+    assert "dummy-key" not in str(missing_key["setup_guidance"])
 
     monkeypatch.setenv(API_KEY_ENV_VAR, "dummy-key")
     status, payload = handle_api(
