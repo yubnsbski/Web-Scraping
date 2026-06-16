@@ -905,6 +905,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/ohlcv"): market_api.market_ohlcv,
     ("POST", "/api/market/bars"): market_api.market_bars,
     ("POST", "/api/market/bars/universe"): market_api.market_bars_universe,
+    ("POST", "/api/market/financials"): market_api.market_financials,
     ("POST", "/api/market/intraday"): market_api.market_intraday,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): portfolio_api.portfolio_performance,

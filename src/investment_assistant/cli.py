@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant.cli_market import (
+    DEFAULT_YAHOO_FINANCIALS_PATH,
+)
+from investment_assistant.cli_market import (
+    run_market_financials as run_market_financials,
+)
+from investment_assistant.cli_market import (
     run_market_ohlcv as run_market_ohlcv,
 )
 from investment_assistant.cli_market import (
@@ -1315,6 +1321,16 @@ def main(argv: list[str] | None = None) -> int:
     ohlcv_parser.add_argument("--interval", default="1d")
     ohlcv_parser.add_argument("--output-dir", help="Write one <ticker>.csv per ticker here")
 
+    financials_parser = subparsers.add_parser(
+        "market-financials",
+        help="Fetch Yahoo Finance PER/PBR/yield/EPS/DPS/market cap",
+    )
+    financials_parser.add_argument("--tickers", help="Comma-separated tickers, e.g. 8306,7203")
+    financials_parser.add_argument("--registry", help="Source registry to expand into tickers")
+    financials_parser.add_argument("--max", type=int, default=0, help="Cap the universe (0=all)")
+    financials_parser.add_argument("--save", action="store_true", help="Write one CSV")
+    financials_parser.add_argument("--output", default=DEFAULT_YAHOO_FINANCIALS_PATH)
+
     intraday_parser = subparsers.add_parser(
         "market-intraday",
         help="Scrape today's minute-bar prices from Yahoo Finance Japan",
@@ -1529,6 +1545,17 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             range_=args.range,
             interval=args.interval,
             output_dir=args.output_dir,
+        )
+    if command == "market-financials":
+        financial_tickers = [
+            t.strip() for t in str(args.tickers or "").split(",") if t.strip()
+        ]
+        return run_market_financials(
+            tickers=financial_tickers or None,
+            registry_path=args.registry,
+            max_count=int(args.max),
+            save=bool(args.save),
+            output_path=args.output,
         )
     if command == "market-intraday":
         intraday_tickers = [t.strip() for t in str(args.tickers or "").split(",") if t.strip()]
