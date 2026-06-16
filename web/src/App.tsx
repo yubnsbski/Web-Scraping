@@ -1129,10 +1129,129 @@ function CandidateTable({ data }: { data: Json }) {
 }
 
 function DetailResult({ data }: { data: Json }) {
+  const holdingSummary = asJson(data.holding_summary);
+  const financials = asJson(data.financials);
+  const fundProfile = asJson(data.fund_profile);
+  const metrics = Array.isArray(data.metrics) ? (data.metrics as Json[]) : [];
+  const evidence = Array.isArray(data.evidence) ? (data.evidence as Json[]) : [];
+  const sections = Array.isArray(data.sections) ? (data.sections as Json[]) : [];
+  const available = Boolean(data.available);
+  const title = `${String(data.name ?? data.code ?? "詳細")} ${data.code ? `(${String(data.code)})` : ""}`.trim();
+
   return (
-    <ResultBlock title="詳細" meta={data.available ? "表示可能" : "未検出"}>
+    <ResultBlock title={title} meta={available ? "表示可能" : "未検出"}>
+      <div className="detail-hero">
+        <DetailFact label="コード" value={String(data.code ?? "-")} />
+        <DetailFact label="種別" value={assetTypeLabel(data.asset_type)} />
+        <DetailFact label="生成時刻" value={formatDateTime(data.generated_at)} />
+        <DetailFact label="自動売買" value={data.auto_trading ? "有効" : "なし"} tone={data.auto_trading ? undefined : "safe"} />
+      </div>
+
+      {!available && (
+        <p className="notice">
+          入力コードに一致する保有、財務データ、投信プロファイルが見つかりません。データ更新またはCSV入力を確認してください。
+        </p>
+      )}
+
+      {sections.length > 0 && (
+        <div className="detail-notes" aria-label="要点">
+          {sections.map((section) => (
+            <article key={String(section.key ?? section.title)} className="detail-note">
+              <b>{String(section.title ?? "要点")}</b>
+              <p>{String(section.body ?? "-")}</p>
+            </article>
+          ))}
+        </div>
+      )}
+
+      {holdingSummary && (
+        <section className="detail-section">
+          <h4>保有サマリー</h4>
+          <div className="detail-metrics">
+            <DetailFact label="評価額" value={yen(holdingSummary.market_value)} />
+            <DetailFact label="取得額" value={yen(holdingSummary.cost_basis)} />
+            <DetailFact label="評価損益" value={yen(holdingSummary.unrealized_pnl)} />
+            <DetailFact label="損益率" value={percent(holdingSummary.unrealized_pnl_pct)} />
+            <DetailFact label="年収入見込み" value={yen(holdingSummary.annual_income_estimate)} />
+            <DetailFact label="収入利回り" value={percent(holdingSummary.income_yield_pct)} />
+          </div>
+        </section>
+      )}
+
+      {metrics.length > 0 && (
+        <section className="detail-section">
+          <h4>主要指標と計算式</h4>
+          <SimpleTable
+            rows={metrics}
+            columns={[
+              ["label", "指標"],
+              ["value", "値"],
+              ["formula", "計算式"],
+              ["last_updated", "更新"],
+            ]}
+          />
+        </section>
+      )}
+
+      {financials && (
+        <section className="detail-section">
+          <h4>財務データ</h4>
+          <div className="detail-metrics">
+            <DetailFact label="企業名" value={String(financials.name ?? "-")} />
+            <DetailFact label="最新年度" value={String(financials.latest_fiscal_year ?? "-")} />
+            <DetailFact label="自己資本比率" value={percent(financials.latest_equity_ratio)} />
+            <DetailFact label="1株配当" value={yen(financials.latest_dividend_per_share)} />
+            <DetailFact label="営業CF傾向" value={String(financials.operating_cf_trend ?? "-")} />
+            <DetailFact label="減配年度" value={formatCell(financials.dividend_cut_years)} />
+          </div>
+        </section>
+      )}
+
+      {fundProfile && (
+        <section className="detail-section">
+          <h4>投信プロファイル</h4>
+          <div className="detail-metrics">
+            <DetailFact label="名称" value={String(fundProfile.name ?? "-")} />
+            <DetailFact label="資産クラス" value={String(fundProfile.asset_class ?? "-")} />
+            <DetailFact label="信託報酬" value={percent(fundProfile.expense_ratio)} />
+            <DetailFact label="分配方針" value={String(fundProfile.distribution_policy ?? "-")} />
+            <DetailFact label="NISA対象" value={formatCell(fundProfile.nisa_eligible)} />
+            <DetailFact label="分散度" value={formatCell(fundProfile.diversification_score)} />
+          </div>
+        </section>
+      )}
+
+      {evidence.length > 0 && (
+        <section className="detail-section">
+          <h4>根拠</h4>
+          <SimpleTable
+            rows={evidence}
+            columns={[
+              ["claim_key", "根拠キー"],
+              ["source_type", "出所"],
+              ["source_ref", "参照"],
+              ["formula", "算出方法"],
+              ["last_updated", "更新"],
+            ]}
+          />
+        </section>
+      )}
+
+      <section className="detail-boundary">
+        <b>非助言の境界</b>
+        <p>{String(data.non_advisory_boundary ?? data.disclaimer ?? "売買推奨・自動売買は行いません。最終判断はユーザーが行います。")}</p>
+      </section>
       <JsonDetails data={data} />
     </ResultBlock>
+  );
+}
+
+function DetailFact({ label, value, tone }: { label: string; value: string; tone?: "safe" }) {
+  return (
+    <div className={tone === "safe" ? "detail-fact safe" : "detail-fact"}>
+      <span>{label}</span>
+      <b>{value}</b>
+    </div>
   );
 }
 
@@ -1379,6 +1498,20 @@ function yen(value: unknown): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric === 0) return "-";
   return `${Math.round(numeric).toLocaleString("ja-JP")}円`;
+}
+
+function percent(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return `${numeric.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}%`;
+}
+
+function assetTypeLabel(value: unknown): string {
+  const text = String(value ?? "").toLowerCase();
+  if (text === "stock") return "国内株式";
+  if (text === "fund") return "投資信託";
+  if (text === "unknown" || text === "") return "未判定";
+  return String(value);
 }
 
 function formatCell(value: unknown): string {
