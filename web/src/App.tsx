@@ -131,6 +131,7 @@ export function App() {
             fundsCsv={fundsCsv}
             financialsPath={financialsPath}
             detailRequest={detailRequest}
+            onMove={setTab}
           />
         )}
         {tab === "report" && (
@@ -906,6 +907,7 @@ function DetailPanel(props: {
   fundsCsv: string;
   financialsPath: string;
   detailRequest: DetailRequest;
+  onMove: (tab: TabId) => void;
 }) {
   const [code, setCode] = useState(props.detailRequest.code);
   const [assetType, setAssetType] = useState<"stock" | "fund">(props.detailRequest.assetType);
@@ -948,7 +950,7 @@ function DetailPanel(props: {
         </button>
       </ActionRow>
       <Status loading={state.loading} error={state.error} />
-      {state.data && <DetailResult data={state.data} />}
+      {state.data && <DetailResult data={state.data} onMove={props.onMove} />}
     </section>
   );
 }
@@ -1128,7 +1130,7 @@ function CandidateTable({ data }: { data: Json }) {
   );
 }
 
-function DetailResult({ data }: { data: Json }) {
+function DetailResult({ data, onMove }: { data: Json; onMove: (tab: TabId) => void }) {
   const holdingSummary = asJson(data.holding_summary);
   const financials = asJson(data.financials);
   const fundProfile = asJson(data.fund_profile);
@@ -1137,6 +1139,13 @@ function DetailResult({ data }: { data: Json }) {
   const sections = Array.isArray(data.sections) ? (data.sections as Json[]) : [];
   const available = Boolean(data.available);
   const title = `${String(data.name ?? data.code ?? "詳細")} ${data.code ? `(${String(data.code)})` : ""}`.trim();
+  const primaryNext = !available ? "data" : holdingSummary ? "report" : "holdings";
+  const nextActions: Array<{ tab: TabId; label: string }> = [
+    { tab: "data", label: "データ更新" },
+    { tab: "holdings", label: "保有分析" },
+    { tab: "screen", label: "候補抽出" },
+    { tab: "report", label: "レポート" },
+  ];
 
   return (
     <ResultBlock title={title} meta={available ? "表示可能" : "未検出"}>
@@ -1240,6 +1249,21 @@ function DetailResult({ data }: { data: Json }) {
       <section className="detail-boundary">
         <b>非助言の境界</b>
         <p>{String(data.non_advisory_boundary ?? data.disclaimer ?? "売買推奨・自動売買は行いません。最終判断はユーザーが行います。")}</p>
+      </section>
+
+      <section className="detail-section">
+        <h4>次の作業</h4>
+        <div className="detail-actions">
+          {nextActions.map((action) => (
+            <button
+              key={action.tab}
+              className={action.tab === primaryNext ? "primary" : undefined}
+              onClick={() => onMove(action.tab)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
       </section>
       <JsonDetails data={data} />
     </ResultBlock>
