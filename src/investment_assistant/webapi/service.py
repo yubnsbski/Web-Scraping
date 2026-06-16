@@ -20,15 +20,10 @@ from investment_assistant.financials.evidence import (
     build_financial_evidence,
 )
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
-from investment_assistant.portfolio.loader import (
-    load_dividends,
-    load_performance,
-    summarize_dividends,
-    summarize_performance,
-)
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 from investment_assistant.webapi import investments as investment_api
 from investment_assistant.webapi import market as market_api
+from investment_assistant.webapi import portfolio as portfolio_api
 from investment_assistant.webapi import reports as report_api
 from investment_assistant.webapi.errors import ApiError
 from investment_assistant.webapi.jobs import JOBS
@@ -501,63 +496,6 @@ def _storage_prune(body: JsonDict) -> JsonDict:
     )
 
 
-def _portfolio_dividends(body: JsonDict) -> JsonDict:
-    path = str(body.get("path") or "examples/portfolio_dividends_sample.csv")
-    return summarize_dividends(load_dividends(path))
-
-
-def _portfolio_inputs(body: JsonDict) -> tuple[list[JsonDict], JsonDict]:
-    """Parse the holdings list and the strategy kwargs shared by simulate/target."""
-
-    raw = body.get("holdings")
-    holdings = [h for h in raw if isinstance(h, dict)] if isinstance(raw, list) else []
-    common: JsonDict = {
-        "years": _as_int(body.get("years"), 10),
-        "reinvest": _as_bool(body.get("reinvest"), True),
-        "growth_rate": _as_float(body.get("growth_rate"), 0.0),
-        "auto_weight": str(body.get("auto_weight") or "equal"),
-        "optimization": str(body.get("optimization") or "none"),
-        "dividend_basis": str(body.get("dividend_basis") or "conservative"),
-        "financials_csv": str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
-    }
-    return holdings, common
-
-
-def _portfolio_simulate(body: JsonDict) -> JsonDict:
-    from investment_assistant.portfolio.simulator import simulate_portfolio
-
-    holdings, common = _portfolio_inputs(body)
-    budget = _as_float(body.get("budget"), 0.0)
-    return simulate_portfolio(budget=budget, holdings=holdings, **common)
-
-
-def _portfolio_target(body: JsonDict) -> JsonDict:
-    from investment_assistant.portfolio.simulator import plan_for_target_dividend
-
-    holdings, common = _portfolio_inputs(body)
-    return plan_for_target_dividend(
-        target_annual_dividend=_as_float(body.get("target_annual_dividend"), 0.0),
-        net_target=_as_bool(body.get("net_target"), False),
-        holdings=holdings,
-        **common,
-    )
-
-
-def _portfolio_universe(body: JsonDict) -> JsonDict:
-    from investment_assistant.portfolio.simulator import build_universe
-
-    raw_prices = body.get("prices")
-    prices = (
-        {str(k): _as_float(v, 0.0) for k, v in raw_prices.items()}
-        if isinstance(raw_prices, dict)
-        else None
-    )
-    universe = build_universe(
-        str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV), prices=prices
-    )
-    return {"universe": universe, "count": len(universe)}
-
-
 def _provider_policy_ledger(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import provider_policy_ledger
 
@@ -571,11 +509,6 @@ def _provider_policy_ledger(body: JsonDict) -> JsonDict:
         runtime_mode=str(body.get("runtime_mode") or "development"),
         provider_ids=provider_ids,
     )
-
-
-def _portfolio_performance(body: JsonDict) -> JsonDict:
-    path = str(body.get("path") or "examples/portfolio_performance_sample.csv")
-    return summarize_performance(load_performance(path))
 
 
 def _financials_compare(body: JsonDict) -> JsonDict:
@@ -964,15 +897,15 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/scoring/stocks"): _scoring_stocks,
     ("POST", "/api/forecast/evaluate"): _forecast_evaluate,
     ("POST", "/api/forecast/predict"): _forecast_predict,
-    ("POST", "/api/portfolio/dividends"): _portfolio_dividends,
-    ("POST", "/api/portfolio/simulate"): _portfolio_simulate,
-    ("POST", "/api/portfolio/target"): _portfolio_target,
-    ("POST", "/api/portfolio/universe"): _portfolio_universe,
+    ("POST", "/api/portfolio/dividends"): portfolio_api.portfolio_dividends,
+    ("POST", "/api/portfolio/simulate"): portfolio_api.portfolio_simulate,
+    ("POST", "/api/portfolio/target"): portfolio_api.portfolio_target,
+    ("POST", "/api/portfolio/universe"): portfolio_api.portfolio_universe,
     ("POST", "/api/market/prices"): market_api.market_prices,
     ("POST", "/api/market/ohlcv"): market_api.market_ohlcv,
     ("POST", "/api/market/intraday"): market_api.market_intraday,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
-    ("POST", "/api/portfolio/performance"): _portfolio_performance,
+    ("POST", "/api/portfolio/performance"): portfolio_api.portfolio_performance,
     ("POST", "/api/holdings/import"): investment_api.holdings_import,
     ("POST", "/api/holdings/validate"): investment_api.holdings_validate,
     ("POST", "/api/holdings/template"): investment_api.holdings_template,
