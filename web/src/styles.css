@@ -679,6 +679,19 @@ h3 {
   gap: 12px;
 }
 
+.inline-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-filter span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .path-chip {
   display: block;
   overflow-wrap: anywhere;
@@ -788,6 +801,12 @@ td {
   overflow-wrap: anywhere;
 }
 
+.table-action {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 .json {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -861,7 +880,8 @@ td {
   .inventory-row,
   .refresh-action,
   .secret-row,
-  .job-result-grid {
+  .job-result-grid,
+  .inline-filter {
     display: grid;
     grid-template-columns: 1fr;
   }
