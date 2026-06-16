@@ -181,17 +181,23 @@ function DataUpdatePanel(props: {
   setFinancialsPath: (value: string) => void;
   onMarket: (value: Json) => void;
 }) {
-  const [mode, setMode] = useState<"financials" | "ohlcv" | "intraday">("financials");
+  const [mode, setMode] = useState<"financials" | "ohlcv" | "intraday" | "inbox">("financials");
   const [scope, setScope] = useState<"tickers" | "nikkei225" | "financials_csv">("tickers");
   const [tickers, setTickers] = useState("8306,9433,7203");
   const [range, setRange] = useState("1mo");
   const [maxCount, setMaxCount] = useState("20");
   const { loading, error, data, run } = useAsync<Json>();
   const tickerList = splitTickers(tickers);
-  const needsTickers = mode === "intraday" || scope === "tickers";
-  const canUseUniverse = mode !== "intraday";
+  const isInbox = mode === "inbox";
+  const needsTickers = !isInbox && (mode === "intraday" || scope === "tickers");
+  const canUseUniverse = !isInbox && mode !== "intraday";
 
   const update = async () => {
+    if (isInbox) {
+      const result = await run(() => api<Json>("/api/market/inbox", {}));
+      if (result) props.onMarket(result);
+      return;
+    }
     const endpoint =
       mode === "financials"
         ? "/api/market/financials"
@@ -219,6 +225,7 @@ function DataUpdatePanel(props: {
             <option value="financials">市場財務指標</option>
             <option value="ohlcv">株価四本値・出来高</option>
             <option value="intraday">当日分足</option>
+            <option value="inbox">ファイル取込（inbox）</option>
           </select>
         </Field>
         <Field label="対象">
@@ -471,6 +478,24 @@ function ChatPanel() {
 }
 
 function MarketResult({ data, mode }: { data: Json; mode: string }) {
+  if (mode === "inbox") {
+    const prices = (data.prices ?? {}) as Record<string, number>;
+    const rows = Object.entries(prices).map(([ticker, price]) => ({ ticker, price }));
+    return (
+      <ResultBlock
+        title="ファイル取込（inbox）"
+        meta={`状態: ${String(data.status ?? "-")} / ${String(data.tickers ?? 0)}銘柄 / 入力: ${String(data.path ?? "-")}`}
+      >
+        {rows.length > 0 ? (
+          <SimpleTable rows={rows} columns={[["ticker", "コード"], ["price", "価格"]]} />
+        ) : (
+          <p className="muted">
+            ファイルが見つかりません。Yahoo!ファイナンス等の個人利用CSVを表示中のパスに置いてください。
+          </p>
+        )}
+      </ResultBlock>
+    );
+  }
   if (mode === "financials") {
     const rows = Object.entries((data.financials ?? {}) as Record<string, Json>).map(([ticker, row]) => ({
       ticker,
