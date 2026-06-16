@@ -64,6 +64,31 @@ def market_inbox(body: JsonDict) -> JsonDict:
     return cli.run_market_inbox(path=str(raw_path) if raw_path else None)
 
 
+def market_financials(body: JsonDict) -> JsonDict:
+    tickers, runtime_mode = _market_universe(body)
+    _ensure_market_provider("yfinance", runtime_mode)
+    return cli.run_market_financials(tickers=tickers)
+
+
+def market_bars(body: JsonDict) -> JsonDict:
+    runtime_mode = _runtime_mode(body)
+    _ensure_market_provider("yfinance", runtime_mode)
+    raw_registry = body.get("registry")
+    return cli.run_market_bars(
+        tickers=_market_ticker_list(body) or None,
+        registry_path=str(raw_registry) if raw_registry else None,
+        max_count=_as_int(body.get("max"), 0),
+        save=bool(body.get("save")),
+    )
+
+
+def _as_int(value: object, default: int) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _market_ticker_list(body: JsonDict) -> list[str]:
     """Accept ``tickers`` as a list or a comma-separated string; trim blanks."""
 

@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant.cli_market import (
+    run_market_bars as run_market_bars,
+)
+from investment_assistant.cli_market import (
+    run_market_financials as run_market_financials,
+)
+from investment_assistant.cli_market import (
     run_market_inbox as run_market_inbox,
 )
 from investment_assistant.cli_market import (
@@ -1332,6 +1338,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     inbox_parser.add_argument("--path", help="Inbox CSV path (default local_docs/market/...)")
 
+    fin_parser = subparsers.add_parser(
+        "market-financials",
+        help="Fetch Yahoo!ファイナンス fundamentals (PER/PBR/yield/EPS/DPS/cap)",
+    )
+    fin_parser.add_argument("--tickers", help="Comma-separated tickers, e.g. 8306,7203")
+    fin_parser.add_argument("--registry", help="Source registry to expand into tickers")
+    fin_parser.add_argument("--max", type=int, default=0, help="Cap the universe (0=all)")
+
+    bars_parser = subparsers.add_parser(
+        "market-bars", help="Bulk-fetch daily OHLCV for a universe into one daily_bars CSV"
+    )
+    bars_parser.add_argument("--tickers", help="Comma-separated tickers")
+    bars_parser.add_argument("--registry", help="Source registry to expand into tickers")
+    bars_parser.add_argument("--max", type=int, default=0, help="Cap the universe (0=all)")
+    bars_parser.add_argument("--save", action="store_true", help="Write the daily_bars CSV")
+    bars_parser.add_argument("--output", help="Output CSV path (default local_docs/market/...)")
+
     gemini_live_parser = subparsers.add_parser("gemini-live")
     gemini_live_parser.add_argument("--prompt", required=True)
     gemini_live_parser.add_argument("--task-type", default="rag_answer")
@@ -1548,6 +1571,24 @@ def _dispatch(args: argparse.Namespace) -> object | None:
         )
     if command == "market-inbox":
         return run_market_inbox(path=args.path)
+    if command == "market-financials":
+        fin_tickers = [t.strip() for t in str(args.tickers or "").split(",") if t.strip()]
+        return run_market_financials(
+            tickers=fin_tickers or None,
+            registry_path=args.registry,
+            max_count=int(args.max),
+        )
+    if command == "market-bars":
+        bars_tickers = [t.strip() for t in str(args.tickers or "").split(",") if t.strip()]
+        bars_kwargs: dict[str, object] = {
+            "tickers": bars_tickers or None,
+            "registry_path": args.registry,
+            "max_count": int(args.max),
+            "save": bool(args.save),
+        }
+        if args.output:
+            bars_kwargs["output_path"] = args.output
+        return run_market_bars(**bars_kwargs)  # type: ignore[arg-type]
     if command == "gemini-live":
         if not args.call_real_api:
             print("Refusing to call Gemini API without --call-real-api.")
