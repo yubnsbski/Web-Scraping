@@ -71,10 +71,24 @@ def edinet_status(body: JsonDict) -> JsonDict:
     if max_periods > 0:
         payload["max_periods"] = max_periods
 
+    setup_guidance = {
+        "env_var": API_KEY_ENV_VAR,
+        "local_env_files": [".env.local", ".env"],
+        "example_line": f"{API_KEY_ENV_VAR}=<your-edinet-api-key>",
+        "restart_required": True,
+        "steps": [
+            "リポジトリ直下に .env.local を作成します。",
+            f"{API_KEY_ENV_VAR}=... を1行で追加します。",
+            "バックエンドを再起動すると、この画面でAPIキー検出済みになります。",
+        ],
+        "secret_policy": "APIキーの値は画面・ログ・API応答に表示しません。",
+    }
+
     return {
         "status": "ready" if can_start else "needs_setup",
         "api_key_configured": api_key_configured,
         "api_key_env_var": API_KEY_ENV_VAR,
+        "setup_guidance": setup_guidance,
         "registry_path": str(registry),
         "registry_exists": registry.exists(),
         "registry_error": registry_error,

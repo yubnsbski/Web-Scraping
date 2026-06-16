@@ -397,6 +397,8 @@ function EdinetAcquisitionPanel(props: {
   const plan = status.data;
   const warnings = Array.isArray(plan?.warnings) ? (plan.warnings as unknown[]) : [];
   const sampleTargets = Array.isArray(plan?.sample_targets) ? (plan.sample_targets as Json[]) : [];
+  const setup = asJson(plan?.setup_guidance);
+  const setupSteps = Array.isArray(setup?.steps) ? (setup.steps as unknown[]) : [];
   const jobResult = asJson(job?.result);
   const jobStatus = String(job?.status ?? "");
   const canStart = Boolean(plan?.can_start) && !start.loading && !jobId;
@@ -456,6 +458,21 @@ function EdinetAcquisitionPanel(props: {
             <li key={`${String(warning)}-${index}`}>{String(warning)}</li>
           ))}
         </ul>
+      )}
+      {plan && !plan.api_key_configured && setup && (
+        <div className="setup-guide">
+          <b>APIキー設定</b>
+          <p>バックエンドが {String(setup.env_var ?? "EDINET_API_KEY")} を読めると、取得を開始できます。</p>
+          <code>{String(setup.example_line ?? "EDINET_API_KEY=<your-edinet-api-key>")}</code>
+          {setupSteps.length > 0 && (
+            <ol>
+              {setupSteps.map((step, index) => (
+                <li key={`${String(step)}-${index}`}>{String(step)}</li>
+              ))}
+            </ol>
+          )}
+          <span>{String(setup.secret_policy ?? "APIキーの値は表示しません。")}</span>
+        </div>
       )}
       <ActionRow>
         <button className="primary" disabled={!canStart} onClick={() => void startIngest()}>

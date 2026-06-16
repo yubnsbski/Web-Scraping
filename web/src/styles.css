@@ -528,6 +528,47 @@ h3 {
   line-height: 1.5;
 }
 
+.setup-guide {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(185, 28, 28, 0.18);
+  border-radius: 8px;
+  background: #fffafa;
+}
+
+.setup-guide b {
+  font-size: 14px;
+}
+
+.setup-guide p,
+.setup-guide li,
+.setup-guide span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.setup-guide code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.setup-guide ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 22px;
+}
+
 .job-card {
   display: grid;
   gap: 4px;
