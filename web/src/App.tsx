@@ -423,6 +423,7 @@ function EdinetAcquisitionPanel(props: {
     : [];
   const jobResult = asJson(job?.result);
   const jobStatus = String(job?.status ?? "");
+  const jobSeconds = job?.duration_seconds ?? job?.elapsed_seconds;
   const canStart = Boolean(plan?.can_start) && !start.loading && !jobId;
 
   return (
@@ -536,14 +537,27 @@ function EdinetAcquisitionPanel(props: {
       </ActionRow>
       <Status loading={status.loading || start.loading || poll.loading} error={status.error || start.error || poll.error} />
       {job && (
-        <article className={`job-card ${jobStatus === "error" ? "error" : ""}`}>
-          <b>ジョブ: {jobStatus || "running"}</b>
-          <span>{String(job.job_id ?? "")}</span>
+        <article className={`job-card ${jobStatus === "error" ? "error" : jobStatus === "done" ? "done" : ""}`}>
+          <div className="job-card-head">
+            <b>{jobStatusLabel(jobStatus)}</b>
+            <span>{formatSeconds(jobSeconds)}</span>
+          </div>
+          <div className="job-meta">
+            <span>ID: {String(job.job_id ?? "")}</span>
+            <span>開始: {formatDateTime(job.started_at)}</span>
+            {job.finished_at && <span>終了: {formatDateTime(job.finished_at)}</span>}
+          </div>
+          {jobStatus === "running" && (
+            <p>EDINETの提出書類を検索・取得し、財務CSVとRAG用テキストを作成しています。</p>
+          )}
           {job.error && <p className="status error">{String(job.error)}</p>}
           {jobResult && (
-            <p>
-              取得 {String(jobResult.ingested_count ?? 0)}件 / 財務CSV {String(jobResult.financials_csv ?? "-")}
-            </p>
+            <div className="job-result-grid">
+              <span>取得件数</span>
+              <b>{String(jobResult.ingested_count ?? 0)}件</b>
+              <span>財務CSV</span>
+              <code>{String(jobResult.financials_csv ?? "-")}</code>
+            </div>
           )}
         </article>
       )}
@@ -1148,6 +1162,35 @@ function statusLabel(value: string): string {
     unknown: "未確認",
   };
   return labels[value] ?? value;
+}
+
+function jobStatusLabel(value: string): string {
+  if (value === "done") return "完了";
+  if (value === "error") return "失敗";
+  return "取得中";
+}
+
+function formatSeconds(value: unknown): string {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "経過 -";
+  const rounded = Math.max(0, Math.floor(seconds));
+  if (rounded < 60) return `経過 ${rounded}秒`;
+  const minutes = Math.floor(rounded / 60);
+  const rest = rounded % 60;
+  return `経過 ${minutes}分${rest.toString().padStart(2, "0")}秒`;
+}
+
+function formatDateTime(value: unknown): string {
+  if (!value) return "-";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("ja-JP", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
 }
 
 function statusTone(value: string): string {

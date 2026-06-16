@@ -49,7 +49,7 @@ class JobStore:
 
         with self._lock:
             job = self._jobs.get(job_id)
-            return dict(job) if job is not None else None
+            return _with_timing(dict(job)) if job is not None else None
 
     def _run(self, job_id: str, fn: Callable[[], JsonDict]) -> None:
         try:
@@ -79,3 +79,28 @@ class JobStore:
 
 # Process-wide store shared across request threads.
 JOBS = JobStore()
+
+
+def _with_timing(job: JsonDict) -> JsonDict:
+    started = _parse_timestamp(job.get("started_at"))
+    finished = _parse_timestamp(job.get("finished_at"))
+    if started is None:
+        return job
+
+    end = finished or datetime.now(UTC)
+    seconds = max(0.0, (end - started).total_seconds())
+    job["elapsed_seconds"] = round(seconds, 3)
+    job["duration_seconds"] = round(seconds, 3) if finished is not None else None
+    return job
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
