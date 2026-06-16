@@ -1583,6 +1583,9 @@ function ReportHistoryComparison({ data }: { data: Json }) {
 }
 
 function ReportResult({ data }: { data: Json }) {
+  const markdownState = useAsync<Json>();
+  const [markdownNotice, setMarkdownNotice] = useState("");
+  const [markdownActionError, setMarkdownActionError] = useState<string | null>(null);
   const kpis = Array.isArray(data.kpis) ? data.kpis : [];
   const sections = Array.isArray(data.sections) ? (data.sections as Json[]) : [];
   const evidence = Array.isArray(data.evidence) ? (data.evidence as Json[]) : [];
@@ -1591,15 +1594,67 @@ function ReportResult({ data }: { data: Json }) {
   const history = asJson(data.history);
   const auditStatus = String(audit?.status ?? "未監査");
   const auditOk = auditStatus === "ok";
+  const markdown = String(markdownState.data?.markdown ?? "");
+  const generateMarkdown = () => {
+    setMarkdownNotice("");
+    setMarkdownActionError(null);
+    return markdownState.run(() =>
+      api<Json>("/api/reports/investment-monthly/markdown", {
+        report: data,
+      }),
+    );
+  };
+  const markdownText = async () => {
+    if (markdown) return markdown;
+    const result = await generateMarkdown();
+    return String(result?.markdown ?? "");
+  };
+  const copyMarkdown = async () => {
+    setMarkdownNotice("");
+    setMarkdownActionError(null);
+    try {
+      const text = await markdownText();
+      if (!text) return;
+      await copyTextToClipboard(text);
+      setMarkdownNotice("Markdownをコピーしました。");
+    } catch (caught) {
+      setMarkdownActionError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+  const downloadMarkdown = async () => {
+    setMarkdownNotice("");
+    setMarkdownActionError(null);
+    try {
+      const text = await markdownText();
+      if (!text) return;
+      downloadTextFile(`${reportFileBaseName(data)}.md`, text, "text/markdown;charset=utf-8");
+      setMarkdownNotice("Markdownファイルを作成しました。");
+    } catch (caught) {
+      setMarkdownActionError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
   return (
     <div className="report-print-area">
       <ResultBlock title={String(data.title ?? "投資月次レポート")} meta={auditOk ? "監査OK" : auditStatus}>
         <div className="report-export">
-          <button className="primary" onClick={() => exportReportPdf(data)}>
-            PDF出力
-          </button>
-          <span>印刷画面で保存先にPDFを選ぶと、レポート本文だけを保存できます。</span>
+          <div className="report-export-actions">
+            <button className="primary" onClick={() => exportReportPdf(data)}>
+              PDF出力
+            </button>
+            <button onClick={() => void generateMarkdown()}>Markdown生成</button>
+            <button onClick={() => void copyMarkdown()}>コピー</button>
+            <button onClick={() => void downloadMarkdown()}>.md保存</button>
+          </div>
+          <span>PDFは印刷保存、Markdownはレビューや後編集に使えます。数値・根拠・免責を同じ内容で出力します。</span>
         </div>
+        <Status loading={markdownState.loading} error={markdownState.error || markdownActionError} />
+        {markdownNotice && <p className="notice safe">{markdownNotice}</p>}
+        {markdown && (
+          <details className="markdown-preview">
+            <summary>Markdownを確認</summary>
+            <pre>{markdown}</pre>
+          </details>
+        )}
 
         <div className="detail-hero">
           <DetailFact label="生成時刻" value={formatDateTime(data.generated_at)} />
@@ -2026,9 +2081,44 @@ function exportReportPdf(data: Json): void {
 }
 
 function reportPdfTitle(data: Json): string {
+  return reportFileBaseName(data);
+}
+
+function reportFileBaseName(data: Json): string {
   const title = String(data.title ?? "投資月次レポート").replace(/[\\/:*?"<>|]/g, "-");
   const generated = String(data.generated_at ?? "").slice(0, 10) || "report";
   return `${title}-${generated}`;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+function downloadTextFile(filename: string, text: string, type: string): void {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
 }
 
 function shortHash(value: unknown): string {

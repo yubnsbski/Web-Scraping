@@ -804,10 +804,49 @@ h3 {
   background: #fbfcfe;
 }
 
+.report-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.report-export-actions button {
+  min-height: 42px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
 .report-export span {
+  flex: 1 1 260px;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.markdown-preview {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.markdown-preview summary {
+  min-height: 40px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.markdown-preview pre {
+  max-height: 420px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .report-history {
@@ -1151,6 +1190,7 @@ td {
   }
 
   .report-export,
+  .markdown-preview,
   .report-print-area .json {
     display: none !important;
   }
