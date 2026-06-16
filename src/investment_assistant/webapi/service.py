@@ -652,6 +652,22 @@ def _market_financials(body: JsonDict) -> JsonDict:
     return cli.run_market_financials(tickers=tickers)
 
 
+def _market_bars(body: JsonDict) -> JsonDict:
+    runtime_mode = str(
+        body.get("runtime_mode")
+        or os.getenv("INVESTMENT_ASSISTANT_RUNTIME_MODE")
+        or "development"
+    )
+    _ensure_market_provider("yfinance", runtime_mode)
+    raw_registry = body.get("registry")
+    return cli.run_market_bars(
+        tickers=_market_ticker_list(body) or None,
+        registry_path=str(raw_registry) if raw_registry else None,
+        max_count=_as_int(body.get("max"), 0),
+        save=bool(body.get("save")),
+    )
+
+
 def _provider_policy_ledger(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import provider_policy_ledger
 
@@ -1365,6 +1381,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/intraday"): _market_intraday,
     ("POST", "/api/market/inbox"): _market_inbox,
     ("POST", "/api/market/financials"): _market_financials,
+    ("POST", "/api/market/bars"): _market_bars,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,

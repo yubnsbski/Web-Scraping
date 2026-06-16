@@ -17,14 +17,75 @@ from investment_assistant.portfolio._market_common import (
     DEFAULT_RATE_LIMIT,
     RateLimitPolicy,
     Sleeper,
+    render_csv,
 )
 
+DEFAULT_DAILY_BARS_PATH = "local_docs/market/yahoo_daily_bars.csv"
+_DAILY_BARS_FIELDS = ("ticker", "date", "open", "high", "low", "close", "volume")
+
 __all__ = [
+    "DEFAULT_DAILY_BARS_PATH",
+    "run_market_bars",
     "run_market_financials",
     "run_market_inbox",
     "run_market_ohlcv",
     "run_yahoo_intraday",
 ]
+
+
+def run_market_bars(
+    *,
+    tickers: list[str] | None = None,
+    registry_path: str | Path | None = None,
+    max_count: int = 0,
+    save: bool = False,
+    output_path: str | Path = DEFAULT_DAILY_BARS_PATH,
+    fetch: Callable[[str], str] | None = None,
+    rate_limit: RateLimitPolicy | None = DEFAULT_RATE_LIMIT,
+    sleeper: Sleeper = time.sleep,
+) -> dict[str, object]:
+    """Bulk-fetch daily OHLCV for a universe and flatten it into one bars table.
+
+    Expands ``tickers`` and/or ``registry_path`` (e.g. a Nikkei 225 / JPX EDINET
+    registry), capped by ``max_count`` (``0`` = all), fetches each ticker's daily
+    OHLCV (rate-limited), and aggregates every bar into rows ``(ticker, date,
+    open, high, low, close, volume)``. With ``save`` it writes a single
+    ``daily_bars`` CSV. Returns selection/row counts mirroring the bulk-update UI.
+    """
+
+    from investment_assistant.portfolio.ohlcv import fetch_ohlcv
+
+    resolved = _resolve_market_tickers(tickers, registry_path)
+    if max_count and max_count > 0:
+        resolved = resolved[:max_count]
+
+    result = fetch_ohlcv(resolved, fetch=fetch, rate_limit=rate_limit, sleeper=sleeper)
+    series = result.get("ohlcv", {})
+    rows: list[dict[str, object]] = []
+    matched = 0
+    if isinstance(series, dict):
+        for ticker, bars in series.items():
+            if bars:
+                matched += 1
+            for bar in bars:
+                rows.append({"ticker": ticker, **bar})
+
+    out: dict[str, object] = {
+        "provider_id": "yfinance",
+        "selected": len(resolved),
+        "matched_tickers": matched,
+        "rows": len(rows),
+        "saved": False,
+        "output_path": str(output_path),
+        "notes": result.get("notes", {}),
+    }
+    if save:
+        path = reject_path_traversal(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_csv(_DAILY_BARS_FIELDS, rows), encoding="utf-8")
+        out["saved"] = True
+        out["output_path"] = str(path)
+    return out
 
 
 def run_market_financials(

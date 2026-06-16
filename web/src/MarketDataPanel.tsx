@@ -417,6 +417,64 @@ function FinancialsSection() {
   );
 }
 
+// --- Bulk universe -> daily_bars: expand a registry, fetch OHLCV, aggregate one CSV ---
+function BulkBarsSection() {
+  const [registry, setRegistry] = useState("examples/source_registry_nikkei225_edinet.yaml");
+  const [max, setMax] = useState(0);
+  const [save, setSave] = useState(false);
+  const [data, setData] = useState<Json | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setData(
+        await api<Json>("/api/market/bars", { registry, max, save }),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="subpanel">
+      <div className="section-head">
+        <h4>全件一括取得（daily_bars）</h4>
+        <span className="badge">universe</span>
+      </div>
+      <p className="hint">
+        レジストリ（JPX/日経225）から対象銘柄を展開し、OHLCVをまとめて取得して1つのCSVに集約します。上限0=全件。robots/レート制限を尊重（個人利用はbypass可）。
+      </p>
+      <div className="form">
+        <Field label="対象（レジストリ）">
+          <input value={registry} onChange={(e) => setRegistry(e.target.value)} />
+        </Field>
+        <Field label="上限件数（0=全件）">
+          <input type="number" value={max} onChange={(e) => setMax(Number(e.target.value))} />
+        </Field>
+        <Field label="保存">
+          <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
+        </Field>
+        <button className="primary" onClick={() => void run()} disabled={loading}>
+          {loading ? "取得中…" : "一括取得"}
+        </button>
+      </div>
+      {error && <p className="status error">取得に失敗しました: {error}</p>}
+      {data && !loading && (
+        <p className="status">
+          選択: {String(data.selected ?? 0)} / マッチ: {String(data.matched_tickers ?? 0)} ／
+          取得行数: {String(data.rows ?? 0)} ／ 保存: {String(data.saved ?? false)}
+          {data.output_path ? ` ／ 保存先: ${String(data.output_path)}` : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function MarketDataPanel({ holdingsTickers, onApplyPrices }: MarketDataPanelProps) {
   return (
     <section className="tool-section">
@@ -425,6 +483,7 @@ export function MarketDataPanel({ holdingsTickers, onApplyPrices }: MarketDataPa
       </div>
       <OneClickSection holdingsTickers={holdingsTickers} onApplyPrices={onApplyPrices} />
       <InboxSection onApplyPrices={onApplyPrices} />
+      <BulkBarsSection />
       <ScrapeSection />
       <FinancialsSection />
     </section>
