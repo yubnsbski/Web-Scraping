@@ -19,6 +19,9 @@ from investment_assistant.cli_market import (
     run_market_financials as run_market_financials,
 )
 from investment_assistant.cli_market import (
+    run_market_inbox as run_market_inbox,
+)
+from investment_assistant.cli_market import (
     run_market_ohlcv as run_market_ohlcv,
 )
 from investment_assistant.cli_market import (
@@ -1340,6 +1343,11 @@ def main(argv: list[str] | None = None) -> int:
     intraday_parser.add_argument("--max", type=int, default=0, help="Cap the universe (0=all)")
     intraday_parser.add_argument("--output-dir", help="Write one <ticker>.csv per ticker here")
 
+    inbox_parser = subparsers.add_parser(
+        "market-inbox", help="Report the manually-dropped price CSV inbox status"
+    )
+    inbox_parser.add_argument("--path", help="Inbox CSV path (default local_docs/market/...)")
+
     gemini_live_parser = subparsers.add_parser("gemini-live")
     gemini_live_parser.add_argument("--prompt", required=True)
     gemini_live_parser.add_argument("--task-type", default="rag_answer")
@@ -1565,6 +1573,8 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             max_count=int(args.max),
             output_dir=args.output_dir,
         )
+    if command == "market-inbox":
+        return run_market_inbox(path=args.path)
     if command == "gemini-live":
         if not args.call_real_api:
             print("Refusing to call Gemini API without --call-real-api.")

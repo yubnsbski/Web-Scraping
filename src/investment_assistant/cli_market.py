@@ -23,11 +23,26 @@ DEFAULT_YAHOO_FINANCIALS_PATH = "local_docs/market/yahoo_financials.csv"
 __all__ = [
     "DEFAULT_YAHOO_FINANCIALS_PATH",
     "run_market_financials",
+    "run_market_inbox",
     "run_market_ohlcv",
     "run_yahoo_intraday",
 ]
 
 CsvWriter = Callable[[list[dict[str, object]]], str]
+
+
+def run_market_inbox(*, path: str | Path | None = None) -> dict[str, object]:
+    """Report the manually-dropped price-CSV inbox status (no network).
+
+    Backs both the UI's「ファイルから反映」action and the daily scheduled check.
+    """
+
+    from investment_assistant.portfolio.price_inbox import (
+        DEFAULT_INBOX_PATH,
+        inbox_status,
+    )
+
+    return inbox_status(path if path is not None else DEFAULT_INBOX_PATH)
 
 
 def _resolve_market_tickers(
