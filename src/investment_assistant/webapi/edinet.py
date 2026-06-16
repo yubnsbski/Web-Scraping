@@ -8,6 +8,7 @@ from typing import Any
 from investment_assistant.edinet.client import API_KEY_ENV_VAR
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.ingestion.fetcher import reject_path_traversal
+from investment_assistant.webapi.local_env import LOCAL_ENV_FILENAMES, LOCAL_ENV_ROOT_ENV
 
 JsonDict = dict[str, Any]
 
@@ -73,12 +74,14 @@ def edinet_status(body: JsonDict) -> JsonDict:
 
     setup_guidance = {
         "env_var": API_KEY_ENV_VAR,
-        "local_env_files": [".env.local", ".env"],
+        "local_env_files": list(LOCAL_ENV_FILENAMES),
+        "explicit_root_env": LOCAL_ENV_ROOT_ENV,
         "example_line": f"{API_KEY_ENV_VAR}=<your-edinet-api-key>",
         "restart_required": True,
         "steps": [
             "リポジトリ直下に .env.local を作成します。",
             f"{API_KEY_ENV_VAR}=... を1行で追加します。",
+            f"別の保存場所を使う場合は {LOCAL_ENV_ROOT_ENV} でディレクトリを指定します。",
             "バックエンドを再起動すると、この画面でAPIキー検出済みになります。",
         ],
         "secret_policy": "APIキーの値は画面・ログ・API応答に表示しません。",

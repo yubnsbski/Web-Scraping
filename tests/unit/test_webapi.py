@@ -62,6 +62,7 @@ def test_edinet_status_reports_api_key_and_registry_plan(
     monkeypatch, tmp_path: Path
 ) -> None:
     from investment_assistant.edinet.client import API_KEY_ENV_VAR
+    from investment_assistant.webapi.local_env import LOCAL_ENV_ROOT_ENV
 
     registry = tmp_path / "registry.yaml"
     registry.write_text(
@@ -86,6 +87,7 @@ def test_edinet_status_reports_api_key_and_registry_plan(
     assert missing_key["can_start"] is False
     assert missing_key["api_key_configured"] is False
     assert missing_key["setup_guidance"]["env_var"] == API_KEY_ENV_VAR
+    assert missing_key["setup_guidance"]["explicit_root_env"] == LOCAL_ENV_ROOT_ENV
     assert missing_key["setup_guidance"]["example_line"] == (
         f"{API_KEY_ENV_VAR}=<your-edinet-api-key>"
     )
