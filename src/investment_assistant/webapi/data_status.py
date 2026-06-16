@@ -92,12 +92,14 @@ def data_status(body: JsonDict) -> JsonDict:
         ),
     ]
 
-    summary = _summary(datasets)
+    actions = _refresh_actions(datasets)
+    summary = _summary(datasets, actions=actions)
     return {
         "status": summary["overall_status"],
         "checked_at": _now_iso(),
         "summary": summary,
         "datasets": datasets,
+        "actions": actions,
         "auto_trading": False,
         "call_real_api": False,
     }
@@ -318,7 +320,104 @@ def _count_lines(path: Path) -> int:
         return sum(1 for _ in handle)
 
 
-def _summary(datasets: list[JsonDict]) -> JsonDict:
+def _refresh_actions(datasets: list[JsonDict]) -> list[JsonDict]:
+    actions: list[JsonDict] = []
+    for item in datasets:
+        status = str(item.get("status") or "unknown")
+        if status == "ready":
+            continue
+        dataset_id = str(item.get("id") or "")
+        reason = _action_reason(status)
+        if dataset_id == "market_financials":
+            actions.append(
+                {
+                    "id": "refresh_market_financials",
+                    "dataset_id": dataset_id,
+                    "label": "市場財務指標を更新",
+                    "reason": reason,
+                    "action_type": "market_financials",
+                    "safe_to_run": True,
+                    "priority": 20,
+                }
+            )
+        elif dataset_id == "daily_bars":
+            actions.append(
+                {
+                    "id": "refresh_daily_bars",
+                    "dataset_id": dataset_id,
+                    "label": "株価四本値・出来高を更新",
+                    "reason": reason,
+                    "action_type": "daily_bars",
+                    "safe_to_run": True,
+                    "priority": 30,
+                }
+            )
+        elif dataset_id == "price_inbox":
+            actions.append(
+                {
+                    "id": "check_price_inbox",
+                    "dataset_id": dataset_id,
+                    "label": "手動価格CSVを確認",
+                    "reason": "CSVを配置した後に反映確認します。",
+                    "action_type": "price_inbox",
+                    "safe_to_run": True,
+                    "priority": 40,
+                }
+            )
+        elif dataset_id == "selected_financials":
+            actions.append(
+                {
+                    "id": "fix_selected_financials",
+                    "dataset_id": dataset_id,
+                    "label": "財務CSVパスを確認",
+                    "reason": reason,
+                    "action_type": "manual",
+                    "safe_to_run": False,
+                    "priority": 10,
+                }
+            )
+        elif dataset_id == "edinet_financials":
+            actions.append(
+                {
+                    "id": "prepare_edinet_financials",
+                    "dataset_id": dataset_id,
+                    "label": "EDINET財務を取得",
+                    "reason": "EDINET APIキーと対象範囲を確認してから取得します。",
+                    "action_type": "manual",
+                    "safe_to_run": False,
+                    "priority": 50,
+                }
+            )
+        elif dataset_id == "rag_db":
+            actions.append(
+                {
+                    "id": "build_rag_db",
+                    "dataset_id": dataset_id,
+                    "label": "RAG検索DBを構築",
+                    "reason": "根拠資料を登録してから検索DBを作ります。",
+                    "action_type": "manual",
+                    "safe_to_run": False,
+                    "priority": 60,
+                }
+            )
+
+    actions.sort(key=lambda action: int(action.get("priority", 999)))
+    return actions
+
+
+def _action_reason(status: str) -> str:
+    if status == "missing":
+        return "ファイルが未取得です。"
+    if status == "stale":
+        return "最終更新から時間が経っています。"
+    if status == "empty":
+        return "ファイルはありますがデータ行がありません。"
+    if status == "error":
+        return "読み取りエラーがあります。"
+    return "状態確認が必要です。"
+
+
+def _summary(datasets: list[JsonDict], *, actions: list[JsonDict]) -> JsonDict:
     counts: dict[str, int] = {}
     for item in datasets:
         status = str(item.get("status") or "unknown")
@@ -342,6 +441,8 @@ def _summary(datasets: list[JsonDict]) -> JsonDict:
         "stale_count": counts.get("stale", 0),
         "missing_count": counts.get("missing", 0),
         "error_count": counts.get("error", 0),
+        "action_count": len(actions),
+        "safe_action_count": sum(1 for action in actions if action.get("safe_to_run")),
     }
 
 
