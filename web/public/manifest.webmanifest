@@ -1,14 +1,14 @@
 {
-  "name": "Investment Assistant",
-  "short_name": "InvestAssist",
-  "description": "IR・EDINETを根拠にしたローカル投資リサーチ端末",
+  "name": "投資支援 Evidence Desk",
+  "short_name": "Evidence Desk",
+  "description": "データ更新、保有分析、候補抽出、根拠つきレポートを整理する非助言の投資支援ツール",
   "lang": "ja",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#070b12",
-  "theme_color": "#070b12",
+  "background_color": "#f6f7f9",
+  "theme_color": "#0f766e",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
     { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
