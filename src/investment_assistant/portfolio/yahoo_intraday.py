@@ -17,11 +17,20 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 
 from investment_assistant.observability import get_logger
-from investment_assistant.portfolio._market_common import default_fetch, render_csv
+from investment_assistant.portfolio._market_common import (
+    RateLimitPolicy,
+    Sleeper,
+    default_fetch,
+    fetch_once,
+    pause_after,
+    render_csv,
+    unique_tickers,
+)
 
 _logger = get_logger("portfolio.yahoo_intraday")
 
@@ -120,31 +129,37 @@ def fetch_yahoo_intraday(
     tickers: Iterable[str],
     *,
     fetch: Callable[[str], str] | None = None,
+    rate_limit: RateLimitPolicy | None = None,
+    sleeper: Sleeper = time.sleep,
 ) -> dict[str, object]:
     """Scrape today's minute series for each ticker (no implicit count cap).
 
     A single failing ticker is recorded in ``notes`` and never aborts the batch.
+    With ``rate_limit`` set, requests are spaced and retried with backoff to avoid
+    Yahoo 429s (the CLI/API supply a safe policy for large batches).
     """
 
     fetcher = fetch or default_fetch
+    resolved = unique_tickers(tickers)
+    total = len(resolved)
     series: dict[str, list[dict[str, object]]] = {}
     counts: dict[str, int] = {}
     notes: dict[str, str] = {}
-    for raw in tickers:
-        ticker = str(raw).strip()
-        if not ticker or ticker in series:
-            continue
+    for index, ticker in enumerate(resolved):
         url = INTRADAY_URL_TEMPLATE.format(ticker=ticker.lower())
         try:
-            ticks = parse_yahoo_intraday(fetcher(url))
+            body = fetch_once(fetcher, url, policy=rate_limit, sleeper=sleeper, logger=_logger)
+            ticks = parse_yahoo_intraday(body)
         except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
             _logger.warning("intraday fetch failed ticker=%s error=%s", ticker, type(exc).__name__)
             series[ticker] = []
             counts[ticker] = 0
             notes[ticker] = type(exc).__name__
-            continue
-        series[ticker] = [asdict(tick) for tick in ticks]
-        counts[ticker] = len(ticks)
+        else:
+            series[ticker] = [asdict(tick) for tick in ticks]
+            counts[ticker] = len(ticks)
+        if rate_limit is not None:
+            pause_after(index, total, policy=rate_limit, sleeper=sleeper)
     return {
         "provider_id": "yahoo_jp_intraday",
         "url_template": INTRADAY_URL_TEMPLATE,

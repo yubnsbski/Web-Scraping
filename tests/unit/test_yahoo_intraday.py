@@ -76,7 +76,8 @@ def test_run_yahoo_intraday_caps_and_writes_csv(tmp_path: Path) -> None:
         return _page([_history("09:00", 100), _history("09:01", 101)])
 
     result = cli.run_yahoo_intraday(
-        tickers=["2914", "8306", "9934"], max_count=2, output_dir=out, fetch=fake_fetch
+        tickers=["2914", "8306", "9934"], max_count=2, output_dir=out, fetch=fake_fetch,
+        sleeper=lambda _s: None,
     )
 
     assert result["tickers_count"] == 2

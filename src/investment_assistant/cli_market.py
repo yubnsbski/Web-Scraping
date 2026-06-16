@@ -7,11 +7,17 @@ public ``investment_assistant.cli.run_*`` API is unchanged.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.ingestion.fetcher import reject_path_traversal
+from investment_assistant.portfolio._market_common import (
+    DEFAULT_RATE_LIMIT,
+    RateLimitPolicy,
+    Sleeper,
+)
 
 __all__ = ["run_market_ohlcv", "run_yahoo_intraday"]
 
@@ -74,13 +80,16 @@ def run_market_ohlcv(
     interval: str = "1d",
     output_dir: str | Path | None = None,
     fetch: Callable[[str], str] | None = None,
+    rate_limit: RateLimitPolicy | None = DEFAULT_RATE_LIMIT,
+    sleeper: Sleeper = time.sleep,
 ) -> dict[str, object]:
     """Scrape daily OHLCV from Yahoo Finance for explicit tickers or a registry.
 
     Tickers come from ``tickers`` and/or every eligible entry in ``registry_path``
     (e.g. a Nikkei 225 / JPX EDINET registry). ``max_count`` caps the universe
-    (``0`` = all). With ``output_dir`` set, one ``<ticker>.csv`` is written per
-    ticker and the bulky inline series is omitted from the return value.
+    (``0`` = all). ``rate_limit`` (default: a safe policy) spaces and retries
+    requests to avoid 429s. With ``output_dir`` set, one ``<ticker>.csv`` is
+    written per ticker and the bulky inline series is omitted from the return.
     """
 
     from investment_assistant.portfolio.ohlcv import fetch_ohlcv, ohlcv_csv_text
@@ -89,7 +98,14 @@ def run_market_ohlcv(
     if max_count and max_count > 0:
         resolved = resolved[:max_count]
 
-    result = fetch_ohlcv(resolved, range_=range_, interval=interval, fetch=fetch)
+    result = fetch_ohlcv(
+        resolved,
+        range_=range_,
+        interval=interval,
+        fetch=fetch,
+        rate_limit=rate_limit,
+        sleeper=sleeper,
+    )
     result["tickers_count"] = len(resolved)
     return _persist_or_inline(
         result, output_dir=output_dir, series_key="ohlcv", csv_writer=ohlcv_csv_text
@@ -103,11 +119,14 @@ def run_yahoo_intraday(
     max_count: int = 0,
     output_dir: str | Path | None = None,
     fetch: Callable[[str], str] | None = None,
+    rate_limit: RateLimitPolicy | None = DEFAULT_RATE_LIMIT,
+    sleeper: Sleeper = time.sleep,
 ) -> dict[str, object]:
     """Scrape today's minute-bar series from Yahoo Finance Japan.
 
     Same universe expansion as :func:`run_market_ohlcv` (explicit ``tickers``
-    and/or a registry, capped by ``max_count`` where ``0`` = all). With
+    and/or a registry, capped by ``max_count`` where ``0`` = all). ``rate_limit``
+    (default: a safe policy) spaces and retries requests to avoid 429s. With
     ``output_dir`` set, one ``<ticker>.csv`` is written per ticker and the inline
     series is omitted from the return value.
     """
@@ -121,7 +140,9 @@ def run_yahoo_intraday(
     if max_count and max_count > 0:
         resolved = resolved[:max_count]
 
-    result = fetch_yahoo_intraday(resolved, fetch=fetch)
+    result = fetch_yahoo_intraday(
+        resolved, fetch=fetch, rate_limit=rate_limit, sleeper=sleeper
+    )
     result["tickers_count"] = len(resolved)
     return _persist_or_inline(
         result, output_dir=output_dir, series_key="intraday", csv_writer=intraday_csv_text

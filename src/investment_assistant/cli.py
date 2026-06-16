@@ -56,6 +56,10 @@ from investment_assistant.llm.gemini_client import TextGenerationClient
 from investment_assistant.observability import configure_logging
 from investment_assistant.orchestration.factory import build_orchestrator
 from investment_assistant.orchestration.orchestrator import OrchestrationConfig
+from investment_assistant.portfolio._market_common import (
+    DEFAULT_RATE_LIMIT,
+    RateLimitPolicy,
+)
 from investment_assistant.rag.answer import LocalRagAnswerClient, generate_rag_answer
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.embeddings import Embedder, resolve_embedder
@@ -1289,6 +1293,44 @@ def format_rag_search_job_table(
     return "\n\n".join(blocks)
 
 
+def _add_rate_limit_args(parser: argparse.ArgumentParser) -> None:
+    """Add safe-scrape pacing flags (defaults match the conservative policy)."""
+
+    default = DEFAULT_RATE_LIMIT
+    parser.add_argument(
+        "--sleep", type=float, default=default.sleep_between,
+        help="Seconds between requests (default %(default)s)",
+    )
+    parser.add_argument(
+        "--retries", type=int, default=default.max_retries,
+        help="Max attempts per ticker with backoff (default %(default)s)",
+    )
+    parser.add_argument(
+        "--retry-wait", type=float, default=default.retry_base_wait,
+        help="Base backoff seconds, grows per attempt (default %(default)s)",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=default.batch_size,
+        help="Rest after every N tickers (0=off)",
+    )
+    parser.add_argument(
+        "--batch-pause", type=float, default=default.sleep_between_batches,
+        help="Seconds to rest between batches (default %(default)s)",
+    )
+
+
+def _rate_limit_from_args(args: argparse.Namespace) -> RateLimitPolicy:
+    """Build a RateLimitPolicy from the pacing flags added by _add_rate_limit_args."""
+
+    return RateLimitPolicy(
+        sleep_between=float(args.sleep),
+        max_retries=int(args.retries),
+        retry_base_wait=float(args.retry_wait),
+        batch_size=int(args.batch_size),
+        sleep_between_batches=float(args.batch_pause),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI."""
 
@@ -1314,6 +1356,7 @@ def main(argv: list[str] | None = None) -> int:
     ohlcv_parser.add_argument("--range", default="1mo")
     ohlcv_parser.add_argument("--interval", default="1d")
     ohlcv_parser.add_argument("--output-dir", help="Write one <ticker>.csv per ticker here")
+    _add_rate_limit_args(ohlcv_parser)
 
     intraday_parser = subparsers.add_parser(
         "market-intraday",
@@ -1323,6 +1366,7 @@ def main(argv: list[str] | None = None) -> int:
     intraday_parser.add_argument("--registry", help="Source registry to expand into tickers")
     intraday_parser.add_argument("--max", type=int, default=0, help="Cap the universe (0=all)")
     intraday_parser.add_argument("--output-dir", help="Write one <ticker>.csv per ticker here")
+    _add_rate_limit_args(intraday_parser)
 
     gemini_live_parser = subparsers.add_parser("gemini-live")
     gemini_live_parser.add_argument("--prompt", required=True)
@@ -1529,6 +1573,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             range_=args.range,
             interval=args.interval,
             output_dir=args.output_dir,
+            rate_limit=_rate_limit_from_args(args),
         )
     if command == "market-intraday":
         intraday_tickers = [t.strip() for t in str(args.tickers or "").split(",") if t.strip()]
@@ -1537,6 +1582,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             registry_path=args.registry,
             max_count=int(args.max),
             output_dir=args.output_dir,
+            rate_limit=_rate_limit_from_args(args),
         )
     if command == "gemini-live":
         if not args.call_real_api:

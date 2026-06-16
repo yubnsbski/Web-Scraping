@@ -76,6 +76,7 @@ def test_run_market_ohlcv_caps_universe_and_writes_csv(tmp_path: Path) -> None:
         max_count=2,
         output_dir=out,
         fetch=fake_fetch,
+        sleeper=lambda _s: None,
     )
 
     # max=2 caps the 3 requested tickers down to 2.
@@ -101,7 +102,8 @@ def test_run_market_ohlcv_expands_tickers_from_registry(tmp_path: Path) -> None:
     )
 
     result = cli.run_market_ohlcv(
-        registry_path=registry, max_count=0, fetch=lambda url: _payload(["2026-06-15"])
+        registry_path=registry, max_count=0, fetch=lambda url: _payload(["2026-06-15"]),
+        sleeper=lambda _s: None,
     )
 
     assert result["tickers_count"] == 2
