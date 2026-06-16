@@ -1220,3 +1220,63 @@ def test_data_status_route_reports_local_inventory(tmp_path: Path) -> None:
     assert payload["auto_trading"] is False
     assert payload["call_real_api"] is False
     assert "POST /api/data/status" in available_routes()
+
+
+def test_financials_preview_route_shows_latest_company_rows(tmp_path: Path) -> None:
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2024,100,0.08,39,stable\n"
+        "8306,MUFG,2025,120,0.10,41,stable\n"
+        "9433,KDDI,2025,200,40.0,145,stable\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/preview",
+        {"financials_csv": str(financials), "limit": 1},
+    )
+
+    assert status == 200
+    assert payload["status"] == "ready"
+    assert payload["row_count"] == 3
+    assert payload["company_count"] == 2
+    assert payload["fiscal_years"] == [2025, 2024]
+    assert payload["rows"] == [
+        {
+            "ticker": "8306",
+            "name": "MUFG",
+            "fiscal_year": 2025,
+            "operating_cf": 120.0,
+            "equity_ratio": 10.0,
+            "dividend_per_share": 41.0,
+            "payout_policy": "stable",
+            "available_fields": {
+                "operating_cf": True,
+                "equity_ratio": True,
+                "dividend_per_share": True,
+            },
+        }
+    ]
+    assert payload["warnings"] == ["表示は先頭1件です。全体は2銘柄あります。"]
+    assert payload["auto_trading"] is False
+    assert payload["call_real_api"] is False
+    assert "POST /api/financials/preview" in available_routes()
+
+
+def test_financials_preview_route_handles_missing_csv(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.csv"
+
+    status, payload = handle_api(
+        "POST",
+        "/api/financials/preview",
+        {"financials_csv": str(missing)},
+    )
+
+    assert status == 200
+    assert payload["status"] == "missing"
+    assert payload["row_count"] == 0
+    assert payload["company_count"] == 0
+    assert payload["rows"] == []
+    assert payload["warnings"]

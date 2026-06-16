@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from investment_assistant.financials import load_financials
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
+from investment_assistant.financials.loader import DISCLAIMER
 from investment_assistant.ingestion.fetcher import reject_path_traversal
 from investment_assistant.portfolio.price_inbox import DEFAULT_INBOX_PATH
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
@@ -100,6 +102,85 @@ def data_status(body: JsonDict) -> JsonDict:
         "summary": summary,
         "datasets": datasets,
         "actions": actions,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def financials_preview(body: JsonDict) -> JsonDict:
+    """Return a compact, read-only preview of the selected financial CSV."""
+
+    path = _path_from_body(body, "financials_csv", str(DEFAULT_FINANCIALS_CSV))
+    limit = max(1, min(_as_int(body.get("limit"), 25), 200))
+    if not path.exists():
+        return {
+            "status": "missing",
+            "path": str(path),
+            "row_count": 0,
+            "company_count": 0,
+            "rows": [],
+            "warnings": ["財務CSVが見つかりません。EDINET取得またはCSVパスを確認してください。"],
+            "disclaimer": DISCLAIMER,
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+
+    try:
+        points = load_financials(path)
+    except (OSError, UnicodeError, ValueError, csv.Error) as exc:
+        return {
+            "status": "error",
+            "path": str(path),
+            "error": f"{type(exc).__name__}: {exc}",
+            "row_count": 0,
+            "company_count": 0,
+            "rows": [],
+            "warnings": ["財務CSVを読み取れません。列名・文字コード・数値形式を確認してください。"],
+            "disclaimer": DISCLAIMER,
+            "auto_trading": False,
+            "call_real_api": False,
+        }
+
+    latest_by_ticker: dict[str, JsonDict] = {}
+    fiscal_years: set[int] = set()
+    for point in points:
+        fiscal_years.add(point.fiscal_year)
+        current = latest_by_ticker.get(point.ticker)
+        if current is not None and int(current["fiscal_year"]) >= point.fiscal_year:
+            continue
+        latest_by_ticker[point.ticker] = {
+            "ticker": point.ticker,
+            "name": point.name,
+            "fiscal_year": point.fiscal_year,
+            "operating_cf": point.operating_cf,
+            "equity_ratio": point.equity_ratio,
+            "dividend_per_share": point.dividend_per_share,
+            "payout_policy": point.payout_policy,
+            "available_fields": {
+                "operating_cf": True,
+                "equity_ratio": True,
+                "dividend_per_share": True,
+            },
+        }
+
+    rows = sorted(latest_by_ticker.values(), key=lambda item: str(item["ticker"]))
+    status = "ready" if rows else "empty"
+    warnings: list[str] = []
+    if not rows:
+        warnings.append("財務CSVに表示できる銘柄行がありません。")
+    if len(rows) > limit:
+        warnings.append(f"表示は先頭{limit}件です。全体は{len(rows)}銘柄あります。")
+
+    return {
+        "status": status,
+        "path": str(path),
+        "row_count": len(points),
+        "company_count": len(rows),
+        "fiscal_years": sorted(fiscal_years, reverse=True)[:8],
+        "rows": rows[:limit],
+        "limit": limit,
+        "warnings": warnings,
+        "disclaimer": DISCLAIMER,
         "auto_trading": False,
         "call_real_api": False,
     }
@@ -450,6 +531,15 @@ def _path_from_body(body: JsonDict, key: str, default: str) -> Path:
     raw = body.get(key)
     path = str(raw).strip() if raw else default
     return reject_path_traversal(path)
+
+
+def _as_int(value: object, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _safe_sqlite_identifier(value: str) -> bool:
