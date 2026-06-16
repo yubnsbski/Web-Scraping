@@ -188,6 +188,7 @@ function DataUpdatePanel(props: {
   const [maxCount, setMaxCount] = useState("20");
   const { loading, error, data, run } = useAsync<Json>();
   const inventory = useAsync<Json>();
+  const financialsPreview = useAsync<Json>();
   const tickerList = splitTickers(tickers);
   const isInbox = mode === "inbox";
   const needsTickers = !isInbox && (mode === "intraday" || scope === "tickers");
@@ -200,8 +201,21 @@ function DataUpdatePanel(props: {
       }),
     );
 
-  useEffect(() => {
+  const refreshFinancialsPreview = () =>
+    financialsPreview.run(() =>
+      api<Json>("/api/financials/preview", {
+        financials_csv: props.financialsPath,
+        limit: 20,
+      }),
+    );
+
+  const refreshDataView = () => {
     void refreshInventory();
+    void refreshFinancialsPreview();
+  };
+
+  useEffect(() => {
+    refreshDataView();
   }, [props.financialsPath]);
 
   const executeUpdate = async (
@@ -212,7 +226,7 @@ function DataUpdatePanel(props: {
       const result = await run(() => api<Json>("/api/market/inbox", {}));
       if (result) {
         props.onMarket(result);
-        void refreshInventory();
+        refreshDataView();
       }
       return;
     }
@@ -234,7 +248,7 @@ function DataUpdatePanel(props: {
     const result = await run(() => api<Json>(endpoint, body));
     if (result) {
       props.onMarket(result);
-      void refreshInventory();
+      refreshDataView();
     }
   };
 
@@ -261,12 +275,18 @@ function DataUpdatePanel(props: {
         data={inventory.data}
         loading={inventory.loading}
         error={inventory.error}
-        onRefresh={() => void refreshInventory()}
+        onRefresh={refreshDataView}
         onRunAction={(action) => void runInventoryAction(action)}
         runningAction={loading}
       />
+      <FinancialsPreviewPanel
+        data={financialsPreview.data}
+        loading={financialsPreview.loading}
+        error={financialsPreview.error}
+        onRefresh={() => void refreshFinancialsPreview()}
+      />
       <EdinetAcquisitionPanel
-        onFinished={() => void refreshInventory()}
+        onFinished={refreshDataView}
         onFinancialsCsv={props.setFinancialsPath}
       />
       <div className="form-grid">
@@ -616,6 +636,66 @@ function DataInventory(props: {
         ))}
         {datasets.length === 0 && !props.loading && <p className="muted">まだ状態を取得していません。</p>}
       </div>
+    </section>
+  );
+}
+
+function FinancialsPreviewPanel(props: {
+  data: Json | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  const status = String(props.data?.status ?? "unknown");
+  const rows = Array.isArray(props.data?.rows) ? (props.data.rows as Json[]) : [];
+  const warnings = Array.isArray(props.data?.warnings) ? (props.data.warnings as unknown[]) : [];
+  const years = Array.isArray(props.data?.fiscal_years) ? props.data.fiscal_years.map(String).join(", ") : "-";
+  return (
+    <section className="inventory financials-preview">
+      <header className="inventory-head">
+        <div>
+          <h3>財務CSVの中身</h3>
+          <p>選択中の財務CSVから、銘柄ごとの最新年度データを確認します。</p>
+        </div>
+        <button onClick={props.onRefresh} disabled={props.loading}>
+          {props.loading ? "読込中..." : "再読込"}
+        </button>
+      </header>
+      <Status loading={props.loading} error={props.error} />
+      {props.data && (
+        <>
+          <div className="inventory-summary">
+            <InventoryPill label="状態" value={statusLabel(status)} tone={statusTone(status)} />
+            <InventoryPill label="銘柄数" value={`${String(props.data.company_count ?? 0)}件`} tone="ready" />
+            <InventoryPill label="行数" value={`${String(props.data.row_count ?? 0)}行`} tone="muted" />
+            <InventoryPill label="年度" value={years} tone="muted" />
+          </div>
+          <code className="path-chip">{String(props.data.path ?? "-")}</code>
+          {warnings.length > 0 && (
+            <ul className="warning-list">
+              {warnings.map((warning, index) => (
+                <li key={`${String(warning)}-${index}`}>{String(warning)}</li>
+              ))}
+            </ul>
+          )}
+          {rows.length > 0 ? (
+            <SimpleTable
+              rows={rows}
+              columns={[
+                ["ticker", "コード"],
+                ["name", "企業名"],
+                ["fiscal_year", "年度"],
+                ["operating_cf", "営業CF"],
+                ["equity_ratio", "自己資本比率"],
+                ["dividend_per_share", "1株配当"],
+                ["payout_policy", "メモ"],
+              ]}
+            />
+          ) : (
+            <p className="muted">表示できる財務データがありません。</p>
+          )}
+        </>
+      )}
     </section>
   );
 }

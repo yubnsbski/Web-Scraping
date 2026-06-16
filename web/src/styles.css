@@ -675,6 +675,22 @@ h3 {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.financials-preview {
+  gap: 12px;
+}
+
+.path-chip {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
 .inventory-metrics {
   display: grid;
   grid-template-columns: max-content 1fr;
