@@ -8,7 +8,11 @@ from typing import Any
 from investment_assistant.edinet.client import API_KEY_ENV_VAR
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.ingestion.fetcher import reject_path_traversal
-from investment_assistant.webapi.local_env import LOCAL_ENV_FILENAMES, LOCAL_ENV_ROOT_ENV
+from investment_assistant.webapi.local_env import (
+    LOCAL_ENV_FILENAMES,
+    LOCAL_ENV_ROOT_ENV,
+    load_local_env_files,
+)
 
 JsonDict = dict[str, Any]
 
@@ -31,6 +35,7 @@ def edinet_status(body: JsonDict) -> JsonDict:
     registry = reject_path_traversal(registry_path)
     output = reject_path_traversal(output_dir)
     db = reject_path_traversal(db_path)
+    env_reload = load_local_env_files()
     api_key_configured = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
 
     registry_error: str | None = None
@@ -77,12 +82,12 @@ def edinet_status(body: JsonDict) -> JsonDict:
         "local_env_files": list(LOCAL_ENV_FILENAMES),
         "explicit_root_env": LOCAL_ENV_ROOT_ENV,
         "example_line": f"{API_KEY_ENV_VAR}=<your-edinet-api-key>",
-        "restart_required": True,
+        "restart_required": False,
         "steps": [
             "リポジトリ直下に .env.local を作成します。",
             f"{API_KEY_ENV_VAR}=... を1行で追加します。",
             f"別の保存場所を使う場合は {LOCAL_ENV_ROOT_ENV} でディレクトリを指定します。",
-            "バックエンドを再起動すると、この画面でAPIキー検出済みになります。",
+            "この画面で事前確認を押すと、ローカルenvを再読込します。",
         ],
         "secret_policy": "APIキーの値は画面・ログ・API応答に表示しません。",
     }
@@ -91,6 +96,7 @@ def edinet_status(body: JsonDict) -> JsonDict:
         "status": "ready" if can_start else "needs_setup",
         "api_key_configured": api_key_configured,
         "api_key_env_var": API_KEY_ENV_VAR,
+        "env_reload": _public_env_reload(env_reload),
         "setup_guidance": setup_guidance,
         "registry_path": str(registry),
         "registry_exists": registry.exists(),
@@ -111,6 +117,16 @@ def edinet_status(body: JsonDict) -> JsonDict:
         "start_payload": payload,
         "auto_trading": False,
         "call_real_api": False,
+    }
+
+
+def _public_env_reload(env_reload: JsonDict) -> JsonDict:
+    return {
+        "checked_roots": list(env_reload.get("checked_roots", [])),
+        "loaded_files": list(env_reload.get("loaded_files", [])),
+        "loaded_keys": list(env_reload.get("loaded_keys", [])),
+        "skipped_keys": list(env_reload.get("skipped_keys", [])),
+        "override": bool(env_reload.get("override", False)),
     }
 
 

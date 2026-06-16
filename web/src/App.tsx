@@ -399,6 +399,9 @@ function EdinetAcquisitionPanel(props: {
   const sampleTargets = Array.isArray(plan?.sample_targets) ? (plan.sample_targets as Json[]) : [];
   const setup = asJson(plan?.setup_guidance);
   const setupSteps = Array.isArray(setup?.steps) ? (setup.steps as unknown[]) : [];
+  const envReload = asJson(plan?.env_reload);
+  const envFiles = Array.isArray(envReload?.loaded_files) ? (envReload.loaded_files as unknown[]) : [];
+  const envKeys = Array.isArray(envReload?.loaded_keys) ? (envReload.loaded_keys as unknown[]) : [];
   const jobResult = asJson(job?.result);
   const jobStatus = String(job?.status ?? "");
   const canStart = Boolean(plan?.can_start) && !start.loading && !jobId;
@@ -472,6 +475,15 @@ function EdinetAcquisitionPanel(props: {
             </ol>
           )}
           <span>{String(setup.secret_policy ?? "APIキーの値は表示しません。")}</span>
+          <span>
+            env確認:{" "}
+            {envFiles.length > 0
+              ? [
+                  envFiles.map((file) => shortPath(String(file))).join(", "),
+                  envKeys.map(String).join(", ") || "キーなし",
+                ].join(" / ")
+              : "読込ファイルなし"}
+          </span>
         </div>
       )}
       <ActionRow>
@@ -1065,6 +1077,10 @@ function buildWorkState(input: {
 function asJson(value: unknown): Json | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Json;
+}
+
+function shortPath(value: string): string {
+  return value.split(/[\\/]/).filter(Boolean).pop() ?? value;
 }
 
 function splitTickers(value: string): string[] {
