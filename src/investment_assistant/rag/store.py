@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -302,8 +304,17 @@ class RagStore:
             ],
         )
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def _vector_from_json(value: str) -> list[float]:
@@ -367,11 +378,14 @@ def read_stored_embedder_name(db_path: str | Path) -> str | None:
     path = Path(db_path)
     if not path.exists():
         return None
-    with sqlite3.connect(path) as conn:
+    conn = sqlite3.connect(path)
+    try:
         try:
             row = conn.execute(
                 "SELECT value FROM rag_meta WHERE key = 'embedder'"
             ).fetchone()
         except sqlite3.OperationalError:
             return None
+    finally:
+        conn.close()
     return str(row[0]) if row else None

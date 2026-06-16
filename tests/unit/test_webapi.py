@@ -914,6 +914,71 @@ def test_market_bars_universe_expands_financials_csv_and_saves(monkeypatch, tmp_
     assert "8306,2026-06-15,,,,101.0," in out.read_text(encoding="utf-8-sig")
 
 
+def test_market_financials_route_fetches_and_can_save(monkeypatch, tmp_path: Path) -> None:
+    from investment_assistant.webapi import service
+
+    out = tmp_path / "yahoo_financials.csv"
+    captured: dict[str, object] = {}
+
+    def fake_financials(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "provider_id": "yfinance",
+            "financials": {"9432": {"price": 5000.0, "dividend_yield_percent": 3.2}},
+            "counts": {"9432": 2},
+            "matched_tickers": 1,
+            "tickers_count": 1,
+            "saved": bool(kwargs.get("save")),
+            "output_path": str(kwargs.get("output_path")),
+        }
+
+    monkeypatch.setattr(service.cli, "run_market_financials", fake_financials)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/financials",
+        {"tickers": "9432", "save_csv": True, "output_path": str(out)},
+    )
+
+    assert status == 200
+    assert captured["tickers"] == ["9432"]
+    assert captured["save"] is True
+    assert captured["output_path"] == str(out)
+    assert payload["financials"]["9432"]["dividend_yield_percent"] == 3.2
+    assert payload["universe_source"] == "tickers"
+
+
+def test_market_financials_route_expands_financials_csv(monkeypatch, tmp_path: Path) -> None:
+    from investment_assistant.webapi import service
+
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2025,100,8.0,41,stable\n"
+        "7203,Toyota,2025,200,40.0,75,stable\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_financials(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"financials": {}, "counts": {}, "tickers_count": 2, "matched_tickers": 0}
+
+    monkeypatch.setattr(service.cli, "run_market_financials", fake_financials)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/financials",
+        {"universe": "financials_csv", "financials_csv": str(financials), "max_count": 1},
+    )
+
+    assert status == 200
+    assert captured["tickers"] == ["8306", "7203"]
+    assert captured["max_count"] == 1
+    assert captured["save"] is False
+    assert payload["universe_source"].startswith("financials_csv:")
+
+
 def test_market_intraday_route_validates_and_routes(monkeypatch) -> None:
     from investment_assistant.webapi import service
 

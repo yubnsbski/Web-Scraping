@@ -22,6 +22,7 @@ _MAX_MARKET_TICKERS = 50
 _YAHOO_PRICE_PROVIDER_IDS = {"yfinance", "yahoo", "yahoo_finance"}
 _DEFAULT_NIKKEI225_REGISTRY = "examples/source_registry_nikkei225_edinet.yaml"
 _DEFAULT_DAILY_BARS_PATH = "local_docs/market/daily_bars.csv"
+_DEFAULT_YAHOO_FINANCIALS_PATH = "local_docs/market/yahoo_financials.csv"
 
 
 def market_prices(body: JsonDict) -> JsonDict:
@@ -91,6 +92,30 @@ def market_bars_universe(body: JsonDict) -> JsonDict:
     result["universe_source"] = universe_source
     result["max_count"] = max_count
     _attach_daily_bars_csv(result, str(body.get("daily_bars_path") or _DEFAULT_DAILY_BARS_PATH))
+    return result
+
+
+def market_financials(body: JsonDict) -> JsonDict:
+    """Fetch Yahoo market fundamentals for explicit tickers or a wider universe."""
+
+    runtime_mode = _runtime_mode(body)
+    _ensure_market_provider("yfinance", runtime_mode)
+    tickers, registry_path, universe_source = _resolve_bars_universe(body)
+    max_count = _as_int(body.get("max_count", body.get("limit")), 0)
+    output_path = str(
+        body.get("output_path")
+        or body.get("financials_path")
+        or _DEFAULT_YAHOO_FINANCIALS_PATH
+    )
+    result = cli.run_market_financials(
+        tickers=tickers or None,
+        registry_path=registry_path,
+        max_count=max_count,
+        save=_as_bool(body.get("save_csv"), False) or bool(body.get("output_path")),
+        output_path=output_path,
+    )
+    result["universe_source"] = universe_source
+    result["max_count"] = max_count
     return result
 
 

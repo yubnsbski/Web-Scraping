@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from investment_assistant.edinet.registry import build_edinet_targets_from_registry
 from investment_assistant.ingestion.fetcher import reject_path_traversal
@@ -17,7 +18,14 @@ from investment_assistant.portfolio._market_common import (
     MarketFetchPolicy,
 )
 
-__all__ = ["run_market_ohlcv", "run_yahoo_intraday"]
+DEFAULT_YAHOO_FINANCIALS_PATH = "local_docs/market/yahoo_financials.csv"
+
+__all__ = [
+    "DEFAULT_YAHOO_FINANCIALS_PATH",
+    "run_market_financials",
+    "run_market_ohlcv",
+    "run_yahoo_intraday",
+]
 
 CsvWriter = Callable[[list[dict[str, object]]], str]
 
@@ -105,6 +113,53 @@ def run_market_ohlcv(
     return _persist_or_inline(
         result, output_dir=output_dir, series_key="ohlcv", csv_writer=ohlcv_csv_text
     )
+
+
+def run_market_financials(
+    *,
+    tickers: list[str] | None = None,
+    registry_path: str | Path | None = None,
+    max_count: int = 0,
+    save: bool = False,
+    output_path: str | Path = DEFAULT_YAHOO_FINANCIALS_PATH,
+    fetch: Callable[[str], str] | None = None,
+    rate_limit_policy: MarketFetchPolicy | None = DEFAULT_YAHOO_RATE_LIMIT_POLICY,
+) -> dict[str, object]:
+    """Fetch Yahoo market fundamentals for explicit tickers or a registry."""
+
+    from investment_assistant.portfolio.yahoo_financials import (
+        fetch_yahoo_financials,
+        yahoo_financials_csv_text,
+    )
+
+    resolved = _resolve_market_tickers(tickers, registry_path)
+    if max_count and max_count > 0:
+        resolved = resolved[:max_count]
+
+    result = fetch_yahoo_financials(
+        resolved,
+        fetch=fetch,
+        rate_limit=rate_limit_policy,
+    )
+    result["tickers_count"] = len(resolved)
+    result["saved"] = False
+    result["output_path"] = str(output_path)
+    if save:
+        path = reject_path_traversal(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        financials = result.get("financials")
+        if isinstance(financials, dict):
+            path.write_text(
+                yahoo_financials_csv_text(
+                    cast("dict[str, dict[str, object]]", financials)
+                ),
+                encoding="utf-8-sig",
+            )
+        else:
+            path.write_text(yahoo_financials_csv_text({}), encoding="utf-8-sig")
+        result["saved"] = True
+        result["output_path"] = str(path)
+    return result
 
 
 def run_yahoo_intraday(
