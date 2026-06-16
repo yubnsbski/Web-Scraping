@@ -234,6 +234,125 @@ function ScrapeSection() {
   );
 }
 
+// --- Fundamentals: PER / PBR / yield / EPS / DPS / market cap (one batched call) ---
+const FIN_COLS: Array<[string, string]> = [
+  ["name", "名称"],
+  ["price", "株価"],
+  ["per", "PER"],
+  ["pbr", "PBR"],
+  ["dividend_yield", "配当利回り"],
+  ["eps", "EPS"],
+  ["dps", "DPS"],
+  ["market_cap", "時価総額"],
+];
+
+function fmtMetric(key: string, value: unknown): string {
+  if (value == null || value === "") return "";
+  if (key === "dividend_yield") {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${(n * 100).toFixed(2)}%` : String(value);
+  }
+  if (key === "market_cap") {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${(n / 1e8).toLocaleString()}億円` : String(value);
+  }
+  return String(value);
+}
+
+function FinancialsSection() {
+  const [tickers, setTickers] = useState("");
+  const [data, setData] = useState<Json | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const tickerList = tickers
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  const fetchFinancials = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setData(await api<Json>("/api/market/financials", { tickers: tickerList }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const financials = (data?.financials ?? {}) as Record<string, Record<string, unknown>>;
+  const notes = (data?.notes ?? {}) as Record<string, string>;
+  const rows = Object.entries(financials);
+
+  return (
+    <div className="subpanel">
+      <div className="section-head">
+        <h4>財務情報</h4>
+        <span className="badge">PER/PBR/利回り</span>
+      </div>
+      <p className="hint">
+        Yahoo!ファイナンスの株価指標（PER・PBR・配当利回り・EPS・DPS・時価総額）を取得します。EDINETの財務数値を補完する市場指標です。
+      </p>
+      <div className="form">
+        <Field label="銘柄（カンマ区切り・最大50）">
+          <input
+            value={tickers}
+            onChange={(e) => setTickers(e.target.value)}
+            placeholder="8306,7203,2914"
+          />
+        </Field>
+        <button
+          className="primary"
+          onClick={() => void fetchFinancials()}
+          disabled={loading || tickerList.length === 0}
+        >
+          {loading ? "取得中…" : "取得"}
+        </button>
+      </div>
+
+      {error && <p className="status error">取得に失敗しました: {error}</p>}
+
+      {data && !loading && (
+        <>
+          {Object.keys(notes).length > 0 && (
+            <p className="callout">
+              取得できなかった銘柄: {Object.keys(notes).join(", ")}
+            </p>
+          )}
+          {rows.length === 0 ? (
+            <p className="hint">表示できる財務情報がありません。</p>
+          ) : (
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>ticker</th>
+                  {FIN_COLS.map(([, label]) => (
+                    <th key={label}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(([ticker, m]) => (
+                  <tr key={ticker}>
+                    <td className="mono">{ticker}</td>
+                    {FIN_COLS.map(([key]) => (
+                      <td key={key} className={key === "name" ? "" : "mono"}>
+                        {fmtMetric(key, m[key])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function MarketDataPanel({ onApplyPrices }: MarketDataPanelProps) {
   return (
     <section className="tool-section">
@@ -242,6 +361,7 @@ export function MarketDataPanel({ onApplyPrices }: MarketDataPanelProps) {
       </div>
       <InboxSection onApplyPrices={onApplyPrices} />
       <ScrapeSection />
+      <FinancialsSection />
     </section>
   );
 }

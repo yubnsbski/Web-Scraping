@@ -19,7 +19,37 @@ from investment_assistant.portfolio._market_common import (
     Sleeper,
 )
 
-__all__ = ["run_market_inbox", "run_market_ohlcv", "run_yahoo_intraday"]
+__all__ = [
+    "run_market_financials",
+    "run_market_inbox",
+    "run_market_ohlcv",
+    "run_yahoo_intraday",
+]
+
+
+def run_market_financials(
+    *,
+    tickers: list[str] | None = None,
+    registry_path: str | Path | None = None,
+    max_count: int = 0,
+    fetch: Callable[[str], str] | None = None,
+    rate_limit: RateLimitPolicy | None = DEFAULT_RATE_LIMIT,
+    sleeper: Sleeper = time.sleep,
+) -> dict[str, object]:
+    """Fetch Yahoo!ファイナンス fundamentals (PER/PBR/yield/EPS/DPS/market cap).
+
+    Same universe expansion and ``max_count`` semantics as the other market
+    runners; complements the EDINET financials with market-based metrics.
+    """
+
+    from investment_assistant.portfolio.yahoo_financials import fetch_yahoo_financials
+
+    resolved = _resolve_market_tickers(tickers, registry_path)
+    if max_count and max_count > 0:
+        resolved = resolved[:max_count]
+    return fetch_yahoo_financials(
+        resolved, fetch=fetch, rate_limit=rate_limit, sleeper=sleeper
+    )
 
 
 def run_market_inbox(*, path: str | Path | None = None) -> dict[str, object]:

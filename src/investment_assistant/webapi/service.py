@@ -646,6 +646,12 @@ def _market_inbox(body: JsonDict) -> JsonDict:
     return cli.run_market_inbox(path=str(raw_path) if raw_path else None)
 
 
+def _market_financials(body: JsonDict) -> JsonDict:
+    tickers, runtime_mode = _market_universe(body)
+    _ensure_market_provider("yfinance", runtime_mode)
+    return cli.run_market_financials(tickers=tickers)
+
+
 def _provider_policy_ledger(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import provider_policy_ledger
 
@@ -1358,6 +1364,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/ohlcv"): _market_ohlcv,
     ("POST", "/api/market/intraday"): _market_intraday,
     ("POST", "/api/market/inbox"): _market_inbox,
+    ("POST", "/api/market/financials"): _market_financials,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): _portfolio_performance,
     ("POST", "/api/holdings/import"): _holdings_import,
