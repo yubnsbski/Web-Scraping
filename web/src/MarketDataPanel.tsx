@@ -279,7 +279,7 @@ function ScrapeSection() {
                 </thead>
                 <tbody>
                   {rows.slice(0, 100).map((bar, i) => (
-                    <tr key={i}>
+                    <tr key={`${String(bar[cols[0]] ?? "")}-${i}`}>
                       {cols.map((c) => (
                         <td key={c} className="mono">
                           {String(bar[c] ?? "")}
