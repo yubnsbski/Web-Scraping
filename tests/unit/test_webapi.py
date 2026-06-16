@@ -149,7 +149,49 @@ def test_edinet_status_reloads_local_env_without_restart(
     assert payload["can_start"] is True
     assert payload["env_reload"]["loaded_keys"] == [API_KEY_ENV_VAR]
     assert str(tmp_path / ".env.local") in payload["env_reload"]["loaded_files"]
+    assert payload["env_diagnostics"]["expected"][0]["key"] == API_KEY_ENV_VAR
+    assert payload["env_diagnostics"]["expected"][0]["has_value"] is True
     assert "dummy-key-from-file" not in str(payload)
+
+
+def test_edinet_status_diagnoses_empty_or_misnamed_env_key(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+    from investment_assistant.webapi.local_env import LOCAL_ENV_ROOT_ENV
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(API_KEY_ENV_VAR, raising=False)
+    monkeypatch.delenv(LOCAL_ENV_ROOT_ENV, raising=False)
+    (tmp_path / ".env.local").write_text(
+        "EDINET_API_KEY=\nEDINET_KEY=wrong-name-value\n",
+        encoding="utf-8",
+    )
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "sources:\n"
+        "  - name: kddi_edinet\n"
+        "    source_type: public_api\n"
+        "    provider: edinet\n"
+        "    allowed: true\n"
+        "    ticker: '9433'\n"
+        "    company: KDDI\n"
+        "    doc_types: ['120']\n",
+        encoding="utf-8",
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/edinet/status",
+        {"registry_path": str(registry), "output_dir": str(tmp_path / "edinet"), "days": 5},
+    )
+
+    assert status == 200
+    assert payload["api_key_configured"] is False
+    assert payload["env_diagnostics"]["expected"][0]["present"] is True
+    assert payload["env_diagnostics"]["expected"][0]["has_value"] is False
+    assert payload["env_diagnostics"]["related_keys"] == ["EDINET_KEY"]
+    assert "wrong-name-value" not in str(payload)
 
 
 
