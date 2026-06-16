@@ -10,6 +10,7 @@ import os
 from typing import Any
 
 from investment_assistant import cli
+from investment_assistant.webapi.errors import ApiError
 
 JsonDict = dict[str, Any]
 
@@ -26,7 +27,10 @@ def market_prices(body: JsonDict) -> JsonDict:
     tickers = [str(t) for t in raw] if isinstance(raw, list) else []
     provider_id = str(body.get("provider_id") or "stooq_public_csv")
     runtime_mode = _runtime_mode(body)
-    policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
+    try:
+        policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
+    except ValueError as exc:
+        raise ApiError(str(exc), status=400) from exc
     rate_limit = (
         DEFAULT_YAHOO_RATE_LIMIT_POLICY
         if provider_id.strip().lower() in _YAHOO_PRICE_PROVIDER_IDS
@@ -71,9 +75,9 @@ def _market_universe(body: JsonDict) -> tuple[list[str], str]:
 
     tickers = _market_ticker_list(body)
     if not tickers:
-        raise ValueError("tickers must be a non-empty list or comma-separated string")
+        raise ApiError("tickers must be a non-empty list or comma-separated string")
     if len(tickers) > _MAX_MARKET_TICKERS:
-        raise ValueError(f"too many tickers (max {_MAX_MARKET_TICKERS})")
+        raise ApiError(f"too many tickers (max {_MAX_MARKET_TICKERS})")
     return tickers, _runtime_mode(body)
 
 
@@ -88,4 +92,7 @@ def _runtime_mode(body: JsonDict) -> str:
 def _ensure_market_provider(provider_id: str, runtime_mode: str) -> None:
     from investment_assistant.investment.provider_policy import ensure_provider_allowed
 
-    ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
+    try:
+        ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
+    except ValueError as exc:
+        raise ApiError(str(exc), status=400) from exc

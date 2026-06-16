@@ -6,6 +6,7 @@ plus an optional static-file server for the built React/Vite frontend in
 Gemini API calls.
 """
 
-from investment_assistant.webapi.service import ApiError, available_routes, handle_api
+from investment_assistant.webapi.errors import ApiError
+from investment_assistant.webapi.service import available_routes, handle_api
 
 __all__ = ["ApiError", "available_routes", "handle_api"]
