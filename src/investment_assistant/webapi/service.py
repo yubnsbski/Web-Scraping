@@ -22,6 +22,7 @@ from investment_assistant.financials.evidence import (
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 from investment_assistant.webapi import data_status as data_status_api
+from investment_assistant.webapi import edinet as edinet_api
 from investment_assistant.webapi import investments as investment_api
 from investment_assistant.webapi import market as market_api
 from investment_assistant.webapi import portfolio as portfolio_api
@@ -946,6 +947,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/fetch-job/dry-run"): lambda body: _fetch_job(body, dry_run=True),
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
+    ("POST", "/api/edinet/status"): edinet_api.edinet_status,
     ("POST", "/api/edinet/ingest"): _edinet_ingest,
     ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
     ("POST", "/api/jobs/status"): _job_status,

@@ -265,6 +265,10 @@ function DataUpdatePanel(props: {
         onRunAction={(action) => void runInventoryAction(action)}
         runningAction={loading}
       />
+      <EdinetAcquisitionPanel
+        onFinished={() => void refreshInventory()}
+        onFinancialsCsv={props.setFinancialsPath}
+      />
       <div className="form-grid">
         <Field label="データ種別">
           <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
@@ -314,6 +318,166 @@ function DataUpdatePanel(props: {
       </ActionRow>
       <Status loading={loading} error={error} />
       {data && <MarketResult data={data} mode={mode} />}
+    </section>
+  );
+}
+
+function EdinetAcquisitionPanel(props: {
+  onFinished: () => void;
+  onFinancialsCsv: (value: string) => void;
+}) {
+  const [registryPath, setRegistryPath] = useState("examples/source_registry_nikkei225_edinet.yaml");
+  const [outputDir, setOutputDir] = useState("local_docs/edinet");
+  const [days, setDays] = useState("7");
+  const [years, setYears] = useState("0");
+  const [maxPeriods, setMaxPeriods] = useState("1");
+  const [indexAfterFetch, setIndexAfterFetch] = useState(true);
+  const [jobId, setJobId] = useState("");
+  const [job, setJob] = useState<Json | null>(null);
+  const status = useAsync<Json>();
+  const start = useAsync<Json>();
+  const poll = useAsync<Json>();
+
+  const buildBody = (): Json => ({
+    registry_path: registryPath.trim() || "examples/source_registry_nikkei225_edinet.yaml",
+    output_dir: outputDir.trim() || "local_docs/edinet",
+    days: Number(days) || 7,
+    years: Number(years) || 0,
+    max_periods: Number(maxPeriods) || 0,
+    index_after_fetch: indexAfterFetch,
+  });
+
+  const checkStatus = () => status.run(() => api<Json>("/api/edinet/status", buildBody()));
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void checkStatus();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [registryPath, outputDir, days, years, maxPeriods, indexAfterFetch]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let alive = true;
+    const tick = async () => {
+      const result = await poll.run(() => api<Json>("/api/jobs/status", { job_id: jobId }));
+      if (!alive || !result) return;
+      setJob(result);
+      const jobStatus = String(result.status ?? "");
+      if (jobStatus === "done" || jobStatus === "error") {
+        setJobId("");
+        if (jobStatus === "done") {
+          const resultBody = asJson(result.result);
+          const financialsCsv = String(resultBody?.financials_csv ?? status.data?.financials_csv ?? "");
+          if (financialsCsv) props.onFinancialsCsv(financialsCsv);
+          props.onFinished();
+        }
+      }
+    };
+    void tick();
+    const interval = window.setInterval(() => {
+      void tick();
+    }, 2000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, [jobId]);
+
+  const startIngest = async () => {
+    const plan = await checkStatus();
+    if (!plan?.can_start) return;
+    const result = await start.run(() => api<Json>("/api/edinet/ingest-async", plan.start_payload));
+    if (result?.job_id) {
+      setJob(result);
+      setJobId(String(result.job_id));
+    }
+  };
+
+  const plan = status.data;
+  const warnings = Array.isArray(plan?.warnings) ? (plan.warnings as unknown[]) : [];
+  const sampleTargets = Array.isArray(plan?.sample_targets) ? (plan.sample_targets as Json[]) : [];
+  const jobResult = asJson(job?.result);
+  const jobStatus = String(job?.status ?? "");
+  const canStart = Boolean(plan?.can_start) && !start.loading && !jobId;
+
+  return (
+    <section className="edinet-panel">
+      <header className="edinet-head">
+        <div>
+          <h3>EDINET 財務データ</h3>
+          <p>公式開示から財務CSVとRAG用テキストを更新します。取得前に対象数とAPIキー状態だけ確認します。</p>
+        </div>
+        <InventoryPill
+          label="取得準備"
+          value={plan?.can_start ? "開始可" : "要確認"}
+          tone={plan?.can_start ? "ready" : "warn"}
+        />
+      </header>
+      <div className="edinet-grid">
+        <Field label="EDINET registry">
+          <input value={registryPath} onChange={(e) => setRegistryPath(e.target.value)} />
+        </Field>
+        <Field label="出力先">
+          <input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} />
+        </Field>
+        <Field label="直近日数">
+          <input value={days} inputMode="numeric" onChange={(e) => setDays(e.target.value)} />
+        </Field>
+        <Field label="バックフィル年数">
+          <input value={years} inputMode="numeric" onChange={(e) => setYears(e.target.value)} />
+        </Field>
+        <Field label="最大提出書類数">
+          <input value={maxPeriods} inputMode="numeric" onChange={(e) => setMaxPeriods(e.target.value)} />
+        </Field>
+        <Check label="取得後にRAGへ登録" checked={indexAfterFetch} onChange={setIndexAfterFetch} />
+      </div>
+      <div className="edinet-summary">
+        <InventoryPill
+          label="APIキー"
+          value={plan?.api_key_configured ? "検出済み" : "未検出"}
+          tone={plan?.api_key_configured ? "ready" : "error"}
+        />
+        <InventoryPill label="対象企業" value={`${String(plan?.target_count ?? 0)}件`} tone="muted" />
+        <InventoryPill label="財務CSV" value={String(plan?.financials_csv ?? "-")} tone="muted" />
+      </div>
+      {sampleTargets.length > 0 && (
+        <div className="edinet-samples">
+          {sampleTargets.slice(0, 6).map((target) => (
+            <span key={`${String(target.ticker)}-${String(target.company)}`}>
+              {String(target.ticker)} {String(target.company)}
+            </span>
+          ))}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <ul className="warning-list">
+          {warnings.map((warning, index) => (
+            <li key={`${String(warning)}-${index}`}>{String(warning)}</li>
+          ))}
+        </ul>
+      )}
+      <ActionRow>
+        <button className="primary" disabled={!canStart} onClick={() => void startIngest()}>
+          {start.loading || jobId ? "EDINET取得中..." : "EDINET取得を開始"}
+        </button>
+        <button disabled={status.loading} onClick={() => void checkStatus()}>
+          {status.loading ? "確認中..." : "事前確認"}
+        </button>
+      </ActionRow>
+      <Status loading={status.loading || start.loading || poll.loading} error={status.error || start.error || poll.error} />
+      {job && (
+        <article className={`job-card ${jobStatus === "error" ? "error" : ""}`}>
+          <b>ジョブ: {jobStatus || "running"}</b>
+          <span>{String(job.job_id ?? "")}</span>
+          {job.error && <p className="status error">{String(job.error)}</p>}
+          {jobResult && (
+            <p>
+              取得 {String(jobResult.ingested_count ?? 0)}件 / 財務CSV {String(jobResult.financials_csv ?? "-")}
+            </p>
+          )}
+        </article>
+      )}
     </section>
   );
 }
@@ -879,6 +1043,11 @@ function buildWorkState(input: {
     { label: "候補", done: input.candidates !== null },
     { label: "報告", done: input.report !== null },
   ];
+}
+
+function asJson(value: unknown): Json | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Json;
 }
 
 function splitTickers(value: string): string[] {
