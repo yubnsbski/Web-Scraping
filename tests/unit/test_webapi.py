@@ -708,6 +708,9 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert saved["summary"]["integrity_status"] == "ok"
     assert saved["report"]["kpis"]
     assert saved["report"]["evidence"]
+    assert saved["report"]["history"]["id"] == history_summary["id"]
+    assert saved["report"]["history"]["integrity_status"] == "ok"
+    assert saved["report"]["history"]["report_hash"] == history_summary["report_hash"]
     assert "csv_text" not in saved["report"]
 
     status, verified_history = handle_api(
@@ -733,6 +736,10 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     )
     assert status == 200
     assert markdown["auto_trading"] is False
+    assert "## Saved Report" in markdown["markdown"]
+    assert f"id: {history_summary['id']}" in markdown["markdown"]
+    assert "integrity_status: ok" in markdown["markdown"]
+    assert str(history_summary["report_hash"]) in markdown["markdown"]
     assert "## Publish Audit" in markdown["markdown"]
     assert "status: ok" in markdown["markdown"]
     assert "## KPIs" in markdown["markdown"]
