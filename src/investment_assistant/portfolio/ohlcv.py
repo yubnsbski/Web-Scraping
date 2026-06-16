@@ -17,7 +17,13 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 from investment_assistant.observability import get_logger
-from investment_assistant.portfolio._market_common import default_fetch, render_csv
+from investment_assistant.portfolio._market_common import (
+    MarketFetchPolicy,
+    MarketFetchRunner,
+    default_fetch,
+    normalize_tickers,
+    render_csv,
+)
 
 _logger = get_logger("portfolio.ohlcv")
 
@@ -100,6 +106,7 @@ def fetch_ohlcv(
     tickers: Iterable[str],
     *,
     fetch: Callable[[str], str] | None = None,
+    rate_limit: MarketFetchPolicy | None = None,
     range_: str = "1mo",
     interval: str = "1d",
 ) -> dict[str, object]:
@@ -110,27 +117,26 @@ def fetch_ohlcv(
     """
 
     fetcher = fetch or default_fetch
+    runner = MarketFetchRunner(fetcher, policy=rate_limit, logger=_logger)
     series: dict[str, list[dict[str, object]]] = {}
     counts: dict[str, int] = {}
     notes: dict[str, str] = {}
-    for raw in tickers:
-        ticker = str(raw).strip()
-        if not ticker or ticker in series:
-            continue
-        url = YAHOO_OHLCV_URL_TEMPLATE.format(
-            ticker=ticker.lower(), range=range_, interval=interval
-        )
-        try:
-            bars = parse_yahoo_ohlcv(fetcher(url))
-        except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
-            _logger.warning("ohlcv fetch failed ticker=%s error=%s", ticker, type(exc).__name__)
-            series[ticker] = []
-            counts[ticker] = 0
-            notes[ticker] = type(exc).__name__
-            continue
-        series[ticker] = [asdict(bar) for bar in bars]
-        counts[ticker] = len(bars)
-    return {
+    for batch in runner.batches(normalize_tickers(tickers)):
+        for ticker in batch:
+            url = YAHOO_OHLCV_URL_TEMPLATE.format(
+                ticker=ticker.lower(), range=range_, interval=interval
+            )
+            try:
+                bars = parse_yahoo_ohlcv(runner.fetch_once(url, ticker=ticker))
+            except Exception as exc:  # noqa: BLE001 - one bad ticker must not abort the batch
+                _logger.warning("ohlcv fetch failed ticker=%s error=%s", ticker, type(exc).__name__)
+                series[ticker] = []
+                counts[ticker] = 0
+                notes[ticker] = type(exc).__name__
+                continue
+            series[ticker] = [asdict(bar) for bar in bars]
+            counts[ticker] = len(bars)
+    result: dict[str, object] = {
         "provider_id": "yfinance",
         "range": range_,
         "interval": interval,
@@ -138,6 +144,9 @@ def fetch_ohlcv(
         "counts": counts,
         "notes": notes,
     }
+    if rate_limit is not None:
+        result["rate_limit"] = runner.summary()
+    return result
 
 
 def ohlcv_csv_text(bars: Iterable[dict[str, object]]) -> str:

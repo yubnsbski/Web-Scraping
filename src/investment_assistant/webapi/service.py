@@ -565,6 +565,7 @@ def _portfolio_universe(body: JsonDict) -> JsonDict:
 
 def _market_prices(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.provider_policy import ensure_provider_allowed
+    from investment_assistant.portfolio._market_common import DEFAULT_YAHOO_RATE_LIMIT_POLICY
     from investment_assistant.portfolio.prices import fetch_prices
 
     raw = body.get("tickers")
@@ -579,7 +580,12 @@ def _market_prices(body: JsonDict) -> JsonDict:
         policy = ensure_provider_allowed(provider_id, runtime_mode=runtime_mode)
     except ValueError as exc:
         raise ApiError(str(exc), status=400) from exc
-    result = fetch_prices(tickers, provider_id=provider_id)
+    rate_limit = (
+        DEFAULT_YAHOO_RATE_LIMIT_POLICY
+        if provider_id.strip().lower() in {"yfinance", "yahoo", "yahoo_finance"}
+        else None
+    )
+    result = fetch_prices(tickers, provider_id=provider_id, rate_limit=rate_limit)
     result["provider_policy"] = policy.to_dict()
     return result
 
