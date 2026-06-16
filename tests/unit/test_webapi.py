@@ -749,6 +749,27 @@ def test_market_prices_reject_uncontracted_provider_in_production() -> None:
     assert "not allowed in production" in payload["error"]
 
 
+def test_market_prices_defaults_to_yahoo_and_accepts_comma_string(monkeypatch) -> None:
+    from investment_assistant.portfolio import prices as prices_mod
+
+    captured: dict[str, object] = {}
+
+    def fake_fetch_prices(tickers: object, **kwargs: object) -> dict[str, object]:
+        captured["tickers"] = tickers
+        captured.update(kwargs)
+        return {"provider_id": "yfinance", "prices": {"8306": 3010.0}, "notes": {}}
+
+    monkeypatch.setattr(prices_mod, "fetch_prices", fake_fetch_prices)
+
+    status, payload = handle_api("POST", "/api/market/prices", {"tickers": "8306, 7203"})
+
+    assert status == 200
+    assert captured["tickers"] == ["8306", "7203"]
+    assert captured["provider_id"] == "yfinance"
+    assert captured["rate_limit"] is not None
+    assert payload["provider_id"] == "yfinance"
+
+
 def test_provider_policy_ledger_route_reports_runtime_decisions() -> None:
     status, payload = handle_api(
         "POST",
@@ -803,6 +824,94 @@ def test_market_ohlcv_route_validates_and_routes(monkeypatch) -> None:
     )
     assert status == 200
     assert captured["tickers"] == ["8306", "7203"] and captured["range_"] == "5d"
+
+
+def test_market_bars_alias_can_save_daily_bars(monkeypatch, tmp_path: Path) -> None:
+    from investment_assistant.webapi import service
+
+    out = tmp_path / "daily_bars.csv"
+
+    def fake_ohlcv(**kwargs: object) -> dict[str, object]:
+        return {
+            "provider_id": "yfinance",
+            "range": kwargs.get("range_"),
+            "interval": kwargs.get("interval"),
+            "ohlcv": {
+                "8306": [
+                    {
+                        "date": "2026-06-15",
+                        "open": 100.0,
+                        "high": 110.0,
+                        "low": 90.0,
+                        "close": 105.0,
+                        "volume": 1000,
+                    }
+                ]
+            },
+            "counts": {"8306": 1},
+            "tickers_count": 1,
+        }
+
+    monkeypatch.setattr(service.cli, "run_market_ohlcv", fake_ohlcv)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/bars",
+        {"tickers": ["8306"], "save_csv": True, "daily_bars_path": str(out)},
+    )
+
+    assert status == 200
+    assert payload["daily_bars_count"] == 1
+    assert out.read_text(encoding="utf-8-sig").splitlines() == [
+        "ticker,date,open,high,low,close,volume",
+        "8306,2026-06-15,100.0,110.0,90.0,105.0,1000",
+    ]
+
+
+def test_market_bars_universe_expands_financials_csv_and_saves(monkeypatch, tmp_path: Path) -> None:
+    from investment_assistant.webapi import service
+
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2025,100,8.0,41,stable\n"
+        "7203,Toyota,2025,200,40.0,75,stable\n"
+        "8306,MUFG,2024,90,7.5,39,stable\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "daily_bars.csv"
+    captured: dict[str, object] = {}
+
+    def fake_ohlcv(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "provider_id": "yfinance",
+            "ohlcv": {
+                "8306": [{"date": "2026-06-15", "close": 101.0}],
+                "7203": [{"date": "2026-06-15", "close": 202.0}],
+            },
+            "counts": {"8306": 1, "7203": 1},
+            "tickers_count": 2,
+        }
+
+    monkeypatch.setattr(service.cli, "run_market_ohlcv", fake_ohlcv)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/market/bars/universe",
+        {
+            "universe": "financials_csv",
+            "financials_csv": str(financials),
+            "daily_bars_path": str(out),
+        },
+    )
+
+    assert status == 200
+    assert captured["tickers"] == ["8306", "7203"]
+    assert captured["max_count"] == 0
+    assert payload["daily_bars_count"] == 2
+    assert payload["universe_source"].startswith("financials_csv:")
+    assert "8306,2026-06-15,,,,101.0," in out.read_text(encoding="utf-8-sig")
 
 
 def test_market_intraday_route_validates_and_routes(monkeypatch) -> None:

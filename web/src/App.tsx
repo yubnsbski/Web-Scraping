@@ -3795,7 +3795,7 @@ function SimulateTab() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
-  const [priceProvider, setPriceProvider] = useState("stooq_public_csv");
+  const [priceProvider, setPriceProvider] = useState("yfinance");
   const { loading, error, data, run } = useAsync<Json>();
 
   useEffect(() => {

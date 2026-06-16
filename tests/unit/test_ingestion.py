@@ -276,6 +276,29 @@ def test_safe_fetcher_refuses_robots_blocked_target(tmp_path) -> None:
     assert transport.calls == ["https://example.com/robots.txt"]
 
 
+def test_safe_fetcher_fetch_document_can_explicitly_skip_robots_gate(tmp_path) -> None:
+    transport = FakeTransport({
+        "https://example.com/robots.txt": response(
+            "https://example.com/robots.txt",
+            "User-agent: *\nDisallow: /blocked\n",
+        ),
+        "https://example.com/blocked": response("https://example.com/blocked", "market data"),
+    })
+    fetcher = SafeFetcher(
+        transport=transport,
+        cache=HttpCache(tmp_path / "http.sqlite"),
+        rate_limiter=DomainRateLimiter(min_interval_seconds=0),
+        user_agent="investment-assistant-test",
+    )
+
+    result = fetcher.fetch_document("https://example.com/blocked", respect_robots=False)
+
+    assert result.html == "market data"
+    assert result.allowed_by_robots is True
+    assert result.source == "network"
+    assert transport.calls == ["https://example.com/robots.txt", "https://example.com/blocked"]
+
+
 def test_safe_fetcher_fails_closed_when_robots_unavailable(tmp_path) -> None:
     transport = FailingTransport()
     fetcher = SafeFetcher(
