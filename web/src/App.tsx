@@ -204,8 +204,11 @@ function DataUpdatePanel(props: {
     void refreshInventory();
   }, [props.financialsPath]);
 
-  const update = async () => {
-    if (isInbox) {
+  const executeUpdate = async (
+    selectedMode: "financials" | "ohlcv" | "intraday" | "inbox" = mode,
+    selectedScope: "tickers" | "nikkei225" | "financials_csv" = scope,
+  ) => {
+    if (selectedMode === "inbox") {
       const result = await run(() => api<Json>("/api/market/inbox", {}));
       if (result) {
         props.onMarket(result);
@@ -214,23 +217,40 @@ function DataUpdatePanel(props: {
       return;
     }
     const endpoint =
-      mode === "financials"
+      selectedMode === "financials"
         ? "/api/market/financials"
-        : mode === "ohlcv"
+        : selectedMode === "ohlcv"
           ? "/api/market/bars/universe"
           : "/api/market/intraday";
+    const selectedNeedsTickers = selectedMode === "intraday" || selectedScope === "tickers";
     const body: Json = {
       max_count: Number(maxCount) || 0,
-      save_csv: mode !== "intraday",
+      save_csv: selectedMode !== "intraday",
     };
-    if (mode === "ohlcv") body.range = range;
-    if (needsTickers) body.tickers = tickerList;
-    else body.universe = scope;
-    if (scope === "financials_csv") body.financials_csv = props.financialsPath;
+    if (selectedMode === "ohlcv") body.range = range;
+    if (selectedNeedsTickers) body.tickers = tickerList;
+    else body.universe = selectedScope;
+    if (selectedScope === "financials_csv") body.financials_csv = props.financialsPath;
     const result = await run(() => api<Json>(endpoint, body));
     if (result) {
       props.onMarket(result);
       void refreshInventory();
+    }
+  };
+
+  const update = () => executeUpdate();
+
+  const runInventoryAction = async (action: Json) => {
+    const type = String(action.action_type ?? "");
+    if (type === "market_financials") {
+      setMode("financials");
+      await executeUpdate("financials", scope);
+    } else if (type === "daily_bars") {
+      setMode("ohlcv");
+      await executeUpdate("ohlcv", scope);
+    } else if (type === "price_inbox") {
+      setMode("inbox");
+      await executeUpdate("inbox", scope);
     }
   };
 
@@ -242,6 +262,8 @@ function DataUpdatePanel(props: {
         loading={inventory.loading}
         error={inventory.error}
         onRefresh={() => void refreshInventory()}
+        onRunAction={(action) => void runInventoryAction(action)}
+        runningAction={loading}
       />
       <div className="form-grid">
         <Field label="データ種別">
@@ -301,9 +323,12 @@ function DataInventory(props: {
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  onRunAction: (action: Json) => void;
+  runningAction: boolean;
 }) {
   const summary = (props.data?.summary ?? {}) as Json;
   const datasets = Array.isArray(props.data?.datasets) ? (props.data.datasets as Json[]) : [];
+  const actions = Array.isArray(props.data?.actions) ? (props.data.actions as Json[]) : [];
   const status = String(props.data?.status ?? "unknown");
   return (
     <section className="inventory">
@@ -323,6 +348,7 @@ function DataInventory(props: {
         <InventoryPill label="未取得" value={`${String(summary.missing_count ?? 0)}件`} tone="muted" />
         <InventoryPill label="要更新" value={`${String(summary.stale_count ?? 0)}件`} tone="warn" />
       </div>
+      <RefreshActions actions={actions} onRun={props.onRunAction} running={props.runningAction} />
       <div className="inventory-list">
         {datasets.map((item) => (
           <article className="inventory-row" key={String(item.id)}>
@@ -344,6 +370,40 @@ function DataInventory(props: {
         {datasets.length === 0 && !props.loading && <p className="muted">まだ状態を取得していません。</p>}
       </div>
     </section>
+  );
+}
+
+function RefreshActions(props: { actions: Json[]; onRun: (action: Json) => void; running: boolean }) {
+  if (props.actions.length === 0) {
+    return <p className="status">追加で必要な更新はありません。</p>;
+  }
+  return (
+    <div className="refresh-actions">
+      <div>
+        <h4>次の更新</h4>
+        <p>未取得・古いデータから、次に処理すべきものを並べています。</p>
+      </div>
+      <div className="refresh-action-list">
+        {props.actions.map((action) => {
+          const safe = Boolean(action.safe_to_run);
+          return (
+            <article className="refresh-action" key={String(action.id)}>
+              <div>
+                <b>{String(action.label ?? action.id)}</b>
+                <span>{String(action.reason ?? "")}</span>
+              </div>
+              {safe ? (
+                <button disabled={props.running} onClick={() => props.onRun(action)}>
+                  実行
+                </button>
+              ) : (
+                <span className="manual-chip">手動確認</span>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

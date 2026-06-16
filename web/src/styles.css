@@ -394,6 +394,70 @@ h3 {
   gap: 8px;
 }
 
+.refresh-actions {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  border-radius: 8px;
+  background: #f0fdfa;
+}
+
+.refresh-actions h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.refresh-actions p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.refresh-action-list {
+  display: grid;
+  gap: 8px;
+}
+
+.refresh-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(15, 118, 110, 0.20);
+  border-radius: 8px;
+  background: white;
+}
+
+.refresh-action div {
+  display: grid;
+  gap: 3px;
+}
+
+.refresh-action b {
+  font-size: 14px;
+}
+
+.refresh-action span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.manual-chip {
+  display: inline-grid;
+  place-items: center;
+  min-height: 34px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .inventory-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.72fr);
@@ -589,7 +653,8 @@ td {
   }
 
   .inventory-head,
-  .inventory-row {
+  .inventory-row,
+  .refresh-action {
     display: grid;
     grid-template-columns: 1fr;
   }

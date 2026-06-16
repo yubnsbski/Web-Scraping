@@ -1033,6 +1033,12 @@ def test_data_status_route_reports_local_inventory(tmp_path: Path) -> None:
     assert rows["daily_bars"]["latest_value"] == "2026-06-15"
     assert rows["market_fetch_log"]["line_count"] == 2
     assert rows["market_financials"]["status"] == "missing"
+    actions = {str(item["id"]): item for item in payload["actions"]}
+    assert actions["refresh_market_financials"]["safe_to_run"] is True
+    assert actions["check_price_inbox"]["action_type"] == "price_inbox"
+    assert actions["prepare_edinet_financials"]["safe_to_run"] is False
+    assert payload["summary"]["action_count"] >= 3
+    assert payload["summary"]["safe_action_count"] >= 2
     assert payload["auto_trading"] is False
     assert payload["call_real_api"] is False
     assert "POST /api/data/status" in available_routes()
