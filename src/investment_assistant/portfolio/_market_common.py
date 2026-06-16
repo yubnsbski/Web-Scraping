@@ -7,6 +7,7 @@ modules differ only in their URLs and parsers.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from investment_assistant.ingestion.fetcher import SafeFetcher
 
 __all__ = [
     "DEFAULT_RATE_LIMIT",
+    "MARKET_ROBOTS_BYPASS_ENV",
     "RateLimitPolicy",
     "Sleeper",
     "default_fetch",
@@ -22,10 +24,22 @@ __all__ = [
     "pause_after",
     "render_csv",
     "request_with_retry",
+    "robots_bypass_enabled",
     "unique_tickers",
 ]
 
 Sleeper = Callable[[float], None]
+
+# Personal-use opt-in: skip only the robots.txt gate for market sources that
+# block crawlers (Yahoo). SSRF protection, rate limiting, caching, and the
+# User-Agent still apply. Off by default — set to 1/true to enable.
+MARKET_ROBOTS_BYPASS_ENV = "MARKET_ALLOW_ROBOTS_BYPASS"
+
+
+def robots_bypass_enabled() -> bool:
+    """Whether the personal-use robots bypass is enabled via the env switch."""
+
+    return os.getenv(MARKET_ROBOTS_BYPASS_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -49,9 +63,14 @@ DEFAULT_RATE_LIMIT = RateLimitPolicy()
 
 
 def default_fetch(url: str) -> str:
-    """Fetch a URL's body via the robots-respecting, rate-limited SafeFetcher."""
+    """Fetch a URL's body via the rate-limited SafeFetcher.
 
-    return SafeFetcher().fetch_document(url).html
+    Honors robots.txt unless the personal-use bypass env is set (see
+    :data:`MARKET_ROBOTS_BYPASS_ENV`); SSRF/rate-limit/UA always apply.
+    """
+
+    respect_robots = not robots_bypass_enabled()
+    return SafeFetcher().fetch_document(url, respect_robots=respect_robots).html
 
 
 def unique_tickers(tickers: Iterable[str]) -> list[str]:

@@ -291,3 +291,30 @@ def test_safe_fetcher_fails_closed_when_robots_unavailable(tmp_path) -> None:
     assert result.allowed_by_robots is False
     assert result.status_code is None
     assert transport.calls == ["https://example.com/robots.txt"]
+
+
+def test_fetch_document_respect_robots_false_bypasses_block(tmp_path) -> None:
+    transport = FakeTransport({
+        "https://blocked.example.com/robots.txt": response(
+            "https://blocked.example.com/robots.txt", "User-agent: *\nDisallow: /\n"),
+        "https://blocked.example.com/data": response(
+            "https://blocked.example.com/data", "<html>payload</html>"),
+    })
+    fetcher = SafeFetcher(
+        transport=transport,
+        cache=HttpCache(tmp_path / "http.sqlite"),
+        rate_limiter=DomainRateLimiter(min_interval_seconds=0),
+        user_agent="investment-assistant-test",
+    )
+
+    # robots.txt disallows -> default honors it (blocked, empty body).
+    blocked = fetcher.fetch_document("https://blocked.example.com/data")
+    assert blocked.allowed_by_robots is False
+    assert blocked.html == "" and blocked.status_code is None
+
+    # Personal-use opt-in -> skip only the robots gate, fetch the body.
+    allowed = fetcher.fetch_document(
+        "https://blocked.example.com/data", respect_robots=False
+    )
+    assert allowed.status_code == 200
+    assert "payload" in allowed.html

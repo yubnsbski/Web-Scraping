@@ -106,3 +106,27 @@ def test_fetch_ohlcv_with_policy_spaces_requests_and_retries() -> None:
     assert 2.0 in waits and 10.0 in waits
     url_7203 = "https://query1.finance.yahoo.com/v8/finance/chart/7203.T?range=1mo&interval=1d"
     assert attempts[url_7203] == 2  # first attempt failed, retried once
+
+
+def test_default_fetch_respects_robots_unless_personal_use_bypass(monkeypatch) -> None:
+    from investment_assistant.portfolio import _market_common as mc
+
+    captured: dict[str, object] = {}
+
+    class _FakeDoc:
+        html = "ok"
+
+    class _FakeFetcher:
+        def fetch_document(self, url: str, *, respect_robots: bool = True) -> _FakeDoc:
+            captured["respect_robots"] = respect_robots
+            return _FakeDoc()
+
+    monkeypatch.setattr(mc, "SafeFetcher", lambda: _FakeFetcher())
+
+    monkeypatch.delenv(mc.MARKET_ROBOTS_BYPASS_ENV, raising=False)
+    assert mc.default_fetch("u") == "ok"
+    assert captured["respect_robots"] is True  # robots honored by default
+
+    monkeypatch.setenv(mc.MARKET_ROBOTS_BYPASS_ENV, "1")
+    mc.default_fetch("u")
+    assert captured["respect_robots"] is False  # personal-use bypass enabled
