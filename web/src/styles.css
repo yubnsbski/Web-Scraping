@@ -810,6 +810,22 @@ h3 {
   line-height: 1.5;
 }
 
+.report-history {
+  gap: 10px;
+}
+
+.history-row.warn td {
+  background: #fff7ed;
+}
+
+.history-sub {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .result {
   display: grid;
   gap: 12px;
