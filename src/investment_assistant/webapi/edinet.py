@@ -13,6 +13,7 @@ from investment_assistant.webapi.local_env import (
     LOCAL_ENV_ROOT_ENV,
     inspect_local_env_keys,
     load_local_env_files,
+    save_local_env_key,
 )
 
 JsonDict = dict[str, Any]
@@ -123,6 +124,27 @@ def edinet_status(body: JsonDict) -> JsonDict:
         "start_payload": payload,
         "auto_trading": False,
         "call_real_api": False,
+    }
+
+
+def edinet_save_api_key(body: JsonDict) -> JsonDict:
+    """Persist the EDINET key to local ignored env storage."""
+
+    api_key = str(body.get("api_key") or "").strip()
+    save_result = save_local_env_key(API_KEY_ENV_VAR, api_key)
+    env_reload = load_local_env_files()
+    env_diagnostics = inspect_local_env_keys(
+        [API_KEY_ENV_VAR],
+        include_key_contains=("EDINET",),
+    )
+    return {
+        "status": "saved",
+        "api_key_configured": bool(os.getenv(API_KEY_ENV_VAR, "").strip()),
+        "api_key_env_var": API_KEY_ENV_VAR,
+        "save": save_result,
+        "env_reload": _public_env_reload(env_reload),
+        "env_diagnostics": _public_env_diagnostics(env_diagnostics),
+        "secret_policy": "APIキーの値は画面・ログ・API応答に表示しません。",
     }
 
 

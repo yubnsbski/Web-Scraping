@@ -334,9 +334,11 @@ function EdinetAcquisitionPanel(props: {
   const [indexAfterFetch, setIndexAfterFetch] = useState(true);
   const [jobId, setJobId] = useState("");
   const [job, setJob] = useState<Json | null>(null);
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const status = useAsync<Json>();
   const start = useAsync<Json>();
   const poll = useAsync<Json>();
+  const keySave = useAsync<Json>();
 
   const buildBody = (): Json => ({
     registry_path: registryPath.trim() || "examples/source_registry_nikkei225_edinet.yaml",
@@ -348,6 +350,16 @@ function EdinetAcquisitionPanel(props: {
   });
 
   const checkStatus = () => status.run(() => api<Json>("/api/edinet/status", buildBody()));
+
+  const saveApiKey = async () => {
+    const result = await keySave.run(() =>
+      api<Json>("/api/edinet/api-key", { api_key: apiKeyDraft }),
+    );
+    if (result?.api_key_configured) {
+      setApiKeyDraft("");
+      await checkStatus();
+    }
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -498,6 +510,20 @@ function EdinetAcquisitionPanel(props: {
               {relatedEnvKeys.length > 0 ? ` / 近いキー: ${relatedEnvKeys.map(String).join(", ")}` : ""}
             </span>
           )}
+          <div className="secret-row">
+            <input
+              type="password"
+              value={apiKeyDraft}
+              autoComplete="off"
+              onChange={(event) => setApiKeyDraft(event.target.value)}
+              placeholder="EDINET APIキーを入力"
+            />
+            <button disabled={keySave.loading || !apiKeyDraft.trim()} onClick={() => void saveApiKey()}>
+              {keySave.loading ? "保存中..." : "このPCに保存"}
+            </button>
+          </div>
+          <Status loading={keySave.loading} error={keySave.error} />
+          {keySave.data?.api_key_configured && <span>APIキーを保存しました。値は表示しません。</span>}
         </div>
       )}
       <ActionRow>
