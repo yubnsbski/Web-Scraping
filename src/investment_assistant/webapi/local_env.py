@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,80 @@ def load_local_env_files(
         "loaded_keys": sorted(set(loaded_keys)),
         "skipped_keys": sorted(set(skipped_keys)),
         "override": override,
+    }
+
+
+def inspect_local_env_keys(
+    expected_keys: Sequence[str],
+    root: str | Path | None = None,
+    *,
+    include_key_contains: Sequence[str] = (),
+) -> JsonDict:
+    """Inspect local env files for key names only, never secret values."""
+
+    expected = {key for key in expected_keys if key}
+    contains = tuple(token.upper() for token in include_key_contains if token)
+    roots = _candidate_env_roots(Path(root or Path.cwd()))
+    files_found: list[str] = []
+    entries: list[JsonDict] = []
+
+    for base in roots:
+        for filename in LOCAL_ENV_FILENAMES:
+            path = base / filename
+            if not path.exists():
+                continue
+            files_found.append(str(path))
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for line_number, raw_line in enumerate(lines, start=1):
+                parsed = _parse_env_line(raw_line)
+                if parsed is None:
+                    continue
+                key, value = parsed
+                upper_key = key.upper()
+                is_expected = key in expected
+                is_related = any(token in upper_key for token in contains)
+                if not is_expected and not is_related:
+                    continue
+                entries.append(
+                    {
+                        "file": str(path),
+                        "line": line_number,
+                        "key": key,
+                        "is_expected": is_expected,
+                        "has_value": bool(value.strip()),
+                        "valid_name": bool(_KEY_PATTERN.fullmatch(key)),
+                    }
+                )
+
+    expected_status = []
+    for key in sorted(expected):
+        matches = [entry for entry in entries if entry["key"] == key]
+        expected_status.append(
+            {
+                "key": key,
+                "present": bool(matches),
+                "has_value": any(bool(entry["has_value"]) for entry in matches),
+                "valid_name": (
+                    all(bool(entry["valid_name"]) for entry in matches)
+                    if matches
+                    else None
+                ),
+            }
+        )
+
+    related_keys = sorted(
+        {
+            str(entry["key"])
+            for entry in entries
+            if not bool(entry["is_expected"])
+        }
+    )
+    return {
+        "checked_roots": [str(path) for path in roots],
+        "files_found": files_found,
+        "expected": expected_status,
+        "related_keys": related_keys,
+        "entries": entries,
     }
 
 

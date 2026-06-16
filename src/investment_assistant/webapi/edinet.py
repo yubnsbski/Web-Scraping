@@ -11,6 +11,7 @@ from investment_assistant.ingestion.fetcher import reject_path_traversal
 from investment_assistant.webapi.local_env import (
     LOCAL_ENV_FILENAMES,
     LOCAL_ENV_ROOT_ENV,
+    inspect_local_env_keys,
     load_local_env_files,
 )
 
@@ -36,6 +37,10 @@ def edinet_status(body: JsonDict) -> JsonDict:
     output = reject_path_traversal(output_dir)
     db = reject_path_traversal(db_path)
     env_reload = load_local_env_files()
+    env_diagnostics = inspect_local_env_keys(
+        [API_KEY_ENV_VAR],
+        include_key_contains=("EDINET",),
+    )
     api_key_configured = bool(os.getenv(API_KEY_ENV_VAR, "").strip())
 
     registry_error: str | None = None
@@ -97,6 +102,7 @@ def edinet_status(body: JsonDict) -> JsonDict:
         "api_key_configured": api_key_configured,
         "api_key_env_var": API_KEY_ENV_VAR,
         "env_reload": _public_env_reload(env_reload),
+        "env_diagnostics": _public_env_diagnostics(env_diagnostics),
         "setup_guidance": setup_guidance,
         "registry_path": str(registry),
         "registry_exists": registry.exists(),
@@ -127,6 +133,16 @@ def _public_env_reload(env_reload: JsonDict) -> JsonDict:
         "loaded_keys": list(env_reload.get("loaded_keys", [])),
         "skipped_keys": list(env_reload.get("skipped_keys", [])),
         "override": bool(env_reload.get("override", False)),
+    }
+
+
+def _public_env_diagnostics(env_diagnostics: JsonDict) -> JsonDict:
+    return {
+        "checked_roots": list(env_diagnostics.get("checked_roots", [])),
+        "files_found": list(env_diagnostics.get("files_found", [])),
+        "expected": list(env_diagnostics.get("expected", [])),
+        "related_keys": list(env_diagnostics.get("related_keys", [])),
+        "entries": list(env_diagnostics.get("entries", [])),
     }
 
 

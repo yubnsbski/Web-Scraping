@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import os
 
-from investment_assistant.webapi.local_env import LOCAL_ENV_ROOT_ENV, load_local_env_files
+from investment_assistant.webapi.local_env import (
+    LOCAL_ENV_ROOT_ENV,
+    inspect_local_env_keys,
+    load_local_env_files,
+)
 
 
 def test_load_local_env_files_loads_ignored_local_files(monkeypatch, tmp_path) -> None:
@@ -75,3 +79,35 @@ def test_load_local_env_files_honors_explicit_root(monkeypatch, tmp_path) -> Non
     assert result["checked_roots"][0] == str(explicit_root.resolve())
     assert result["loaded_keys"] == ["EDINET_API_KEY"]
     assert "explicit" not in str(result)
+
+
+def test_inspect_local_env_keys_reports_key_names_without_values(tmp_path) -> None:
+    (tmp_path / ".env.local").write_text(
+        "\n".join(
+            [
+                "EDINET_API_KEY=",
+                "EDINET_KEY=wrong-name-value",
+                "GEMINI_API_KEY=hidden",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = inspect_local_env_keys(
+        ["EDINET_API_KEY"],
+        tmp_path,
+        include_key_contains=("EDINET",),
+    )
+
+    assert result["expected"] == [
+        {
+            "key": "EDINET_API_KEY",
+            "present": True,
+            "has_value": False,
+            "valid_name": True,
+        }
+    ]
+    assert result["related_keys"] == ["EDINET_KEY"]
+    assert [entry["key"] for entry in result["entries"]] == ["EDINET_API_KEY", "EDINET_KEY"]
+    assert "wrong-name-value" not in str(result)
+    assert "hidden" not in str(result)

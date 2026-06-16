@@ -402,6 +402,13 @@ function EdinetAcquisitionPanel(props: {
   const envReload = asJson(plan?.env_reload);
   const envFiles = Array.isArray(envReload?.loaded_files) ? (envReload.loaded_files as unknown[]) : [];
   const envKeys = Array.isArray(envReload?.loaded_keys) ? (envReload.loaded_keys as unknown[]) : [];
+  const envDiagnostics = asJson(plan?.env_diagnostics);
+  const expectedEnv = Array.isArray(envDiagnostics?.expected)
+    ? asJson((envDiagnostics.expected as unknown[])[0])
+    : null;
+  const relatedEnvKeys = Array.isArray(envDiagnostics?.related_keys)
+    ? (envDiagnostics.related_keys as unknown[])
+    : [];
   const jobResult = asJson(job?.result);
   const jobStatus = String(job?.status ?? "");
   const canStart = Boolean(plan?.can_start) && !start.loading && !jobId;
@@ -484,6 +491,13 @@ function EdinetAcquisitionPanel(props: {
                 ].join(" / ")
               : "読込ファイルなし"}
           </span>
+          {expectedEnv && (
+            <span>
+              キー診断: {String(expectedEnv.key ?? "EDINET_API_KEY")}=
+              {expectedEnv.present ? (expectedEnv.has_value ? "値あり" : "空です") : "未記載"}
+              {relatedEnvKeys.length > 0 ? ` / 近いキー: ${relatedEnvKeys.map(String).join(", ")}` : ""}
+            </span>
+          )}
         </div>
       )}
       <ActionRow>
