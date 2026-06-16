@@ -582,11 +582,18 @@ h3 {
 
 .job-card {
   display: grid;
-  gap: 4px;
-  padding: 10px;
+  gap: 8px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
+}
+
+.job-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .job-card b {
@@ -599,6 +606,37 @@ h3 {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.job-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.job-result-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  align-items: start;
+}
+
+.job-result-grid span {
+  color: var(--muted);
+}
+
+.job-result-grid code {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.job-card.done {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: #f7fef9;
 }
 
 .job-card.error {
@@ -806,7 +844,8 @@ td {
   .inventory-head,
   .inventory-row,
   .refresh-action,
-  .secret-row {
+  .secret-row,
+  .job-result-grid {
     display: grid;
     grid-template-columns: 1fr;
   }

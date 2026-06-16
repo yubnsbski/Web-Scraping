@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 
@@ -29,6 +30,10 @@ def test_jobstore_runs_and_returns_result() -> None:
     assert job["result"] == {"value": 42}
     assert job["error"] is None
     assert job["finished_at"]
+    assert isinstance(job["elapsed_seconds"], int | float)
+    assert isinstance(job["duration_seconds"], int | float)
+    assert job["elapsed_seconds"] >= 0
+    assert job["duration_seconds"] >= 0
 
 
 def test_jobstore_captures_errors() -> None:
@@ -43,6 +48,29 @@ def test_jobstore_captures_errors() -> None:
     assert finished["status"] == "error"
     assert "kaboom" in str(finished["error"])
     assert finished["result"] is None
+    assert isinstance(finished["duration_seconds"], int | float)
+
+
+def test_jobstore_reports_running_elapsed_seconds() -> None:
+    store = JobStore()
+    release = threading.Event()
+
+    def wait_for_release() -> JsonDict:
+        release.wait(timeout=5.0)
+        return {"released": True}
+
+    job_id = store.start("slow-test", wait_for_release)
+    job = store.get(job_id)
+    assert job is not None
+    assert job["status"] == "running"
+    assert isinstance(job["elapsed_seconds"], int | float)
+    assert job["elapsed_seconds"] >= 0
+    assert job["duration_seconds"] is None
+
+    release.set()
+    finished = _wait(store, job_id)
+    assert finished["status"] == "done"
+    assert isinstance(finished["duration_seconds"], int | float)
 
 
 def test_jobstore_get_unknown_returns_none() -> None:
