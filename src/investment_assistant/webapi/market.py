@@ -57,6 +57,13 @@ def market_intraday(body: JsonDict) -> JsonDict:
     return cli.run_yahoo_intraday(tickers=tickers)
 
 
+def market_inbox(body: JsonDict) -> JsonDict:
+    """Report the manually-dropped price-CSV inbox status (no network)."""
+
+    raw_path = body.get("path")
+    return cli.run_market_inbox(path=str(raw_path) if raw_path else None)
+
+
 def _market_ticker_list(body: JsonDict) -> list[str]:
     """Accept ``tickers`` as a list or a comma-separated string; trim blanks."""
 

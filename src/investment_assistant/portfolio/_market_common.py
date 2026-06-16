@@ -8,6 +8,7 @@ parsers.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from logging.handlers import RotatingFileHandler
@@ -179,10 +180,24 @@ class MarketFetchRunner:
         return float(base * attempt)
 
 
-def default_fetch(url: str) -> str:
-    """Fetch a URL's body via the robots-respecting, rate-limited SafeFetcher."""
+MARKET_ROBOTS_BYPASS_ENV = "MARKET_ALLOW_ROBOTS_BYPASS"
 
-    return SafeFetcher().fetch_document(url).html
+
+def robots_bypass_enabled() -> bool:
+    """Whether the personal-use robots bypass is enabled via the env switch."""
+
+    return os.getenv(MARKET_ROBOTS_BYPASS_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def default_fetch(url: str) -> str:
+    """Fetch a URL's body via the rate-limited SafeFetcher.
+
+    Honors robots.txt unless the personal-use bypass env
+    (``MARKET_ALLOW_ROBOTS_BYPASS``) is set; SSRF/rate-limit/UA always apply.
+    """
+
+    respect_robots = not robots_bypass_enabled()
+    return SafeFetcher().fetch_document(url, respect_robots=respect_robots).html
 
 
 def fetch_once(
