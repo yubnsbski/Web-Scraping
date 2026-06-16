@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant.cli_market import (
+    run_market_inbox as run_market_inbox,
+)
+from investment_assistant.cli_market import (
     run_market_ohlcv as run_market_ohlcv,
 )
 from investment_assistant.cli_market import (
@@ -1368,6 +1371,11 @@ def main(argv: list[str] | None = None) -> int:
     intraday_parser.add_argument("--output-dir", help="Write one <ticker>.csv per ticker here")
     _add_rate_limit_args(intraday_parser)
 
+    inbox_parser = subparsers.add_parser(
+        "market-inbox", help="Report the manually-dropped price CSV inbox status"
+    )
+    inbox_parser.add_argument("--path", help="Inbox CSV path (default local_docs/market/...)")
+
     gemini_live_parser = subparsers.add_parser("gemini-live")
     gemini_live_parser.add_argument("--prompt", required=True)
     gemini_live_parser.add_argument("--task-type", default="rag_answer")
@@ -1584,6 +1592,8 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             output_dir=args.output_dir,
             rate_limit=_rate_limit_from_args(args),
         )
+    if command == "market-inbox":
+        return run_market_inbox(path=args.path)
     if command == "gemini-live":
         if not args.call_real_api:
             print("Refusing to call Gemini API without --call-real-api.")

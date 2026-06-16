@@ -19,7 +19,21 @@ from investment_assistant.portfolio._market_common import (
     Sleeper,
 )
 
-__all__ = ["run_market_ohlcv", "run_yahoo_intraday"]
+__all__ = ["run_market_inbox", "run_market_ohlcv", "run_yahoo_intraday"]
+
+
+def run_market_inbox(*, path: str | Path | None = None) -> dict[str, object]:
+    """Report the price-inbox file status and the tickers it yields (no network).
+
+    Backs both the UI's「ファイルから反映」action and the daily scheduled check.
+    """
+
+    from investment_assistant.portfolio.price_inbox import (
+        DEFAULT_INBOX_PATH,
+        inbox_status,
+    )
+
+    return inbox_status(path if path is not None else DEFAULT_INBOX_PATH)
 
 CsvWriter = Callable[[list[dict[str, object]]], str]
 
