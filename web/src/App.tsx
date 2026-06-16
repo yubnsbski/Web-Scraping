@@ -123,6 +123,10 @@ export function App() {
             setFundsCsv={setFundsCsv}
             financialsPath={financialsPath}
             onCandidates={setCandidates}
+            onOpenDetail={(code, assetType) => {
+              setDetailRequest((prev) => ({ code, assetType, version: prev.version + 1 }));
+              setTab("detail");
+            }}
           />
         )}
         {tab === "detail" && (
@@ -855,6 +859,7 @@ function ScreenPanel(props: {
   setFundsCsv: (value: string) => void;
   financialsPath: string;
   onCandidates: (value: Json) => void;
+  onOpenDetail: (code: string, assetType: "stock" | "fund") => void;
 }) {
   const [minEquity, setMinEquity] = useState("30");
   const [maxExpense, setMaxExpense] = useState("0.3");
@@ -897,7 +902,7 @@ function ScreenPanel(props: {
         </button>
       </ActionRow>
       <Status loading={state.loading} error={state.error} />
-      {state.data && <CandidateTable data={state.data} />}
+      {state.data && <CandidateTable data={state.data} onOpenDetail={props.onOpenDetail} />}
     </section>
   );
 }
@@ -1112,20 +1117,58 @@ function ValidationResult({ data }: { data: Json }) {
   );
 }
 
-function CandidateTable({ data }: { data: Json }) {
+function CandidateTable({
+  data,
+  onOpenDetail,
+}: {
+  data: Json;
+  onOpenDetail: (code: string, assetType: "stock" | "fund") => void;
+}) {
   const rows = Array.isArray(data.results) ? data.results : [];
   return (
     <ResultBlock title="候補抽出結果" meta={`${String(data.count ?? rows.length)} 件`}>
-      <SimpleTable
-        rows={rows}
-        columns={[
-          ["code", "コード"],
-          ["name", "名称"],
-          ["asset_type", "種別"],
-          ["score", "スコア"],
-          ["reason", "根拠"],
-        ]}
-      />
+      {rows.length > 0 ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>コード</th>
+                <th>名称</th>
+                <th>種別</th>
+                <th>スコア</th>
+                <th>根拠</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 100).map((row, index) => {
+                const code = candidateCode(row);
+                const assetType = detailAssetType(row.asset_type);
+                return (
+                  <tr key={`${code || String(row.name ?? "candidate")}-${index}`}>
+                    <td>{code || "-"}</td>
+                    <td>{formatCell(row.name)}</td>
+                    <td>{assetTypeLabel(assetType)}</td>
+                    <td>{formatCell(row.score)}</td>
+                    <td>{formatCell(row.reason)}</td>
+                    <td>
+                      <button
+                        className="table-action"
+                        disabled={!code}
+                        onClick={() => onOpenDetail(code, assetType)}
+                      >
+                        詳細
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="muted">表示できるデータがありません。</p>
+      )}
     </ResultBlock>
   );
 }
@@ -1536,6 +1579,15 @@ function assetTypeLabel(value: unknown): string {
   if (text === "fund") return "投資信託";
   if (text === "unknown" || text === "") return "未判定";
   return String(value);
+}
+
+function detailAssetType(value: unknown): "stock" | "fund" {
+  const text = String(value ?? "").toLowerCase();
+  return text === "fund" || text === "mutual_fund" || text === "investment_fund" ? "fund" : "stock";
+}
+
+function candidateCode(row: Json): string {
+  return String(row.code ?? row.ticker ?? row.ticker_or_fund_code ?? row.fund_code ?? "").trim();
 }
 
 function formatCell(value: unknown): string {
