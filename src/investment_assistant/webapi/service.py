@@ -21,6 +21,7 @@ from investment_assistant.financials.evidence import (
 )
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+from investment_assistant.webapi import data_status as data_status_api
 from investment_assistant.webapi import investments as investment_api
 from investment_assistant.webapi import market as market_api
 from investment_assistant.webapi import portfolio as portfolio_api
@@ -908,6 +909,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/financials"): market_api.market_financials,
     ("POST", "/api/market/intraday"): market_api.market_intraday,
     ("POST", "/api/market/inbox"): market_api.market_inbox,
+    ("POST", "/api/data/status"): data_status_api.data_status,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): portfolio_api.portfolio_performance,
     ("POST", "/api/holdings/import"): investment_api.holdings_import,

@@ -1,0 +1,359 @@
+"""Read-only data inventory for the local investment dashboard."""
+
+from __future__ import annotations
+
+import csv
+import sqlite3
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
+from investment_assistant.ingestion.fetcher import reject_path_traversal
+from investment_assistant.portfolio.price_inbox import DEFAULT_INBOX_PATH
+from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+
+JsonDict = dict[str, Any]
+
+_DEFAULT_DAILY_BARS_PATH = "local_docs/market/daily_bars.csv"
+_DEFAULT_YAHOO_FINANCIALS_PATH = "local_docs/market/yahoo_financials.csv"
+_DEFAULT_EDINET_FINANCIALS_PATH = "local_docs/edinet/financials.csv"
+_DEFAULT_MARKET_LOG_PATH = "local_docs/logs/market_fetch.log"
+
+
+def data_status(body: JsonDict) -> JsonDict:
+    """Return file-level data health without fetching or mutating anything."""
+
+    selected_financials = _path_from_body(body, "financials_csv", str(DEFAULT_FINANCIALS_CSV))
+    datasets = [
+        _csv_dataset(
+            dataset_id="selected_financials",
+            label="選択中の財務CSV",
+            path=selected_financials,
+            provider="EDINET / 手入力 / サンプル",
+            role="保有分析・候補抽出・レポートの基礎",
+            freshness_days=30,
+            required=True,
+        ),
+        _csv_dataset(
+            dataset_id="market_financials",
+            label="市場財務指標",
+            path=_path_from_body(body, "market_financials_path", _DEFAULT_YAHOO_FINANCIALS_PATH),
+            provider="Yahoo! ファイナンス",
+            role="株価・PBR・DPS・配当利回りの補完",
+            freshness_days=3,
+            required=False,
+        ),
+        _csv_dataset(
+            dataset_id="daily_bars",
+            label="株価四本値・出来高",
+            path=_path_from_body(body, "daily_bars_path", _DEFAULT_DAILY_BARS_PATH),
+            provider="Yahoo! ファイナンス",
+            role="価格系列、出来高、簡易トレンド確認",
+            freshness_days=3,
+            required=False,
+        ),
+        _csv_dataset(
+            dataset_id="price_inbox",
+            label="手動価格CSV",
+            path=_path_from_body(body, "price_inbox_path", str(DEFAULT_INBOX_PATH)),
+            provider="ユーザーCSV",
+            role="スクレイピングできない場合の手動補完",
+            freshness_days=7,
+            required=False,
+        ),
+        _csv_dataset(
+            dataset_id="edinet_financials",
+            label="EDINET財務CSV",
+            path=_path_from_body(body, "edinet_financials_path", _DEFAULT_EDINET_FINANCIALS_PATH),
+            provider="金融庁 EDINET",
+            role="営業CF・自己資本比率・配当履歴の基礎",
+            freshness_days=30,
+            required=False,
+        ),
+        _sqlite_dataset(
+            dataset_id="rag_db",
+            label="RAG検索DB",
+            path=_path_from_body(body, "rag_db_path", str(DEFAULT_RAG_DB_PATH)),
+            provider="ローカルSQLite",
+            role="根拠検索、引用確認、AI確認",
+            freshness_days=30,
+            required=False,
+        ),
+        _log_dataset(
+            dataset_id="market_fetch_log",
+            label="市場取得ログ",
+            path=_path_from_body(body, "market_log_path", _DEFAULT_MARKET_LOG_PATH),
+            provider="ローカルログ",
+            role="429対策、リトライ、失敗銘柄の追跡",
+            freshness_days=7,
+            required=False,
+        ),
+    ]
+
+    summary = _summary(datasets)
+    return {
+        "status": summary["overall_status"],
+        "checked_at": _now_iso(),
+        "summary": summary,
+        "datasets": datasets,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _csv_dataset(
+    *,
+    dataset_id: str,
+    label: str,
+    path: Path,
+    provider: str,
+    role: str,
+    freshness_days: int,
+    required: bool,
+) -> JsonDict:
+    base = _base_dataset(
+        dataset_id=dataset_id,
+        label=label,
+        path=path,
+        kind="csv",
+        provider=provider,
+        role=role,
+        freshness_days=freshness_days,
+        required=required,
+    )
+    if base["status"] == "missing":
+        return base
+    try:
+        rows, columns = _read_csv_rows(path)
+        tickers = _unique_values(rows, ("ticker", "code", "ticker_or_fund_code", "fund_code"))
+        latest = _latest_value(rows, ("price_as_of", "as_of", "date", "period_end", "fiscal_year"))
+        base.update(
+            {
+                "row_count": len(rows),
+                "column_count": len(columns),
+                "columns": columns[:12],
+                "ticker_count": len(tickers),
+                "latest_value": latest,
+            }
+        )
+        base["status"] = _status_for_existing(base, row_count=len(rows))
+    except (OSError, UnicodeError, csv.Error) as exc:
+        base.update({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
+    return base
+
+
+def _sqlite_dataset(
+    *,
+    dataset_id: str,
+    label: str,
+    path: Path,
+    provider: str,
+    role: str,
+    freshness_days: int,
+    required: bool,
+) -> JsonDict:
+    base = _base_dataset(
+        dataset_id=dataset_id,
+        label=label,
+        path=path,
+        kind="sqlite",
+        provider=provider,
+        role=role,
+        freshness_days=freshness_days,
+        required=required,
+    )
+    if base["status"] == "missing":
+        return base
+    try:
+        tables: dict[str, int] = {}
+        with sqlite3.connect(path) as conn:
+            table_rows = conn.execute(
+                "select name from sqlite_master where type = 'table' order by name"
+            ).fetchall()
+            for (name,) in table_rows:
+                if isinstance(name, str) and _safe_sqlite_identifier(name):
+                    count = conn.execute(f'select count(*) from "{name}"').fetchone()[0]
+                    tables[name] = int(count)
+        base.update(
+            {"table_count": len(tables), "tables": tables, "row_count": sum(tables.values())}
+        )
+        base["status"] = _status_for_existing(base, row_count=sum(tables.values()))
+    except sqlite3.DatabaseError as exc:
+        base.update({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
+    return base
+
+
+def _log_dataset(
+    *,
+    dataset_id: str,
+    label: str,
+    path: Path,
+    provider: str,
+    role: str,
+    freshness_days: int,
+    required: bool,
+) -> JsonDict:
+    base = _base_dataset(
+        dataset_id=dataset_id,
+        label=label,
+        path=path,
+        kind="log",
+        provider=provider,
+        role=role,
+        freshness_days=freshness_days,
+        required=required,
+    )
+    if base["status"] == "missing":
+        return base
+    try:
+        lines = _read_text_lines(path, max_lines=6)
+        base.update({"line_count": _count_lines(path), "tail": lines})
+        base["status"] = _status_for_existing(base, row_count=int(base["line_count"]))
+    except (OSError, UnicodeError) as exc:
+        base.update({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
+    return base
+
+
+def _base_dataset(
+    *,
+    dataset_id: str,
+    label: str,
+    path: Path,
+    kind: str,
+    provider: str,
+    role: str,
+    freshness_days: int,
+    required: bool,
+) -> JsonDict:
+    item: JsonDict = {
+        "id": dataset_id,
+        "label": label,
+        "kind": kind,
+        "path": str(path),
+        "provider": provider,
+        "role": role,
+        "required": required,
+        "freshness_days": freshness_days,
+    }
+    if not path.exists():
+        item.update({"status": "missing", "exists": False, "row_count": 0})
+        return item
+    stat = path.stat()
+    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    age_hours = max(0.0, (datetime.now(UTC) - modified_at).total_seconds() / 3600.0)
+    item.update(
+        {
+            "status": "ready",
+            "exists": True,
+            "size_bytes": stat.st_size,
+            "modified_at": modified_at.isoformat().replace("+00:00", "Z"),
+            "age_hours": round(age_hours, 2),
+        }
+    )
+    return item
+
+
+def _status_for_existing(base: JsonDict, *, row_count: int) -> str:
+    if row_count <= 0:
+        return "empty"
+    age_hours = base.get("age_hours")
+    freshness_days = base.get("freshness_days")
+    if (
+        isinstance(age_hours, int | float)
+        and isinstance(freshness_days, int | float)
+        and age_hours > float(freshness_days) * 24.0
+    ):
+        return "stale"
+    return "ready"
+
+
+def _read_csv_rows(path: Path) -> tuple[list[JsonDict], list[str]]:
+    last_error: Exception | None = None
+    for encoding in ("utf-8-sig", "utf-8", "cp932"):
+        try:
+            with path.open(newline="", encoding=encoding) as handle:
+                reader = csv.DictReader(handle)
+                columns = [str(name) for name in (reader.fieldnames or [])]
+                rows = [dict(row) for row in reader]
+                return rows, columns
+        except UnicodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return [], []
+
+
+def _unique_values(rows: Iterable[JsonDict], columns: tuple[str, ...]) -> set[str]:
+    values: set[str] = set()
+    for row in rows:
+        for column in columns:
+            value = str(row.get(column) or "").strip()
+            if value:
+                values.add(value)
+                break
+    return values
+
+
+def _latest_value(rows: Iterable[JsonDict], columns: tuple[str, ...]) -> str | None:
+    latest: str | None = None
+    for row in rows:
+        for column in columns:
+            value = str(row.get(column) or "").strip()
+            if value and (latest is None or value > latest):
+                latest = value
+            if value:
+                break
+    return latest
+
+
+def _read_text_lines(path: Path, *, max_lines: int) -> list[str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return text.splitlines()[-max_lines:]
+
+
+def _count_lines(path: Path) -> int:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        return sum(1 for _ in handle)
+
+
+def _summary(datasets: list[JsonDict]) -> JsonDict:
+    counts: dict[str, int] = {}
+    for item in datasets:
+        status = str(item.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    required_missing = [
+        str(item["label"])
+        for item in datasets
+        if item.get("required") and item.get("status") in {"missing", "empty", "error"}
+    ]
+    overall = "needs_setup" if required_missing else "ready"
+    if any(item.get("status") == "error" for item in datasets):
+        overall = "error"
+    elif any(item.get("status") == "stale" for item in datasets):
+        overall = "stale"
+    return {
+        "overall_status": overall,
+        "dataset_count": len(datasets),
+        "status_counts": counts,
+        "required_missing": required_missing,
+        "ready_count": counts.get("ready", 0),
+        "stale_count": counts.get("stale", 0),
+        "missing_count": counts.get("missing", 0),
+        "error_count": counts.get("error", 0),
+    }
+
+
+def _path_from_body(body: JsonDict, key: str, default: str) -> Path:
+    raw = body.get(key)
+    path = str(raw).strip() if raw else default
+    return reject_path_traversal(path)
+
+
+def _safe_sqlite_identifier(value: str) -> bool:
+    return bool(value) and all(char.isalnum() or char == "_" for char in value)
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

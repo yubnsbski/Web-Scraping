@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
 
 type Json = Record<string, any>;
@@ -187,15 +187,30 @@ function DataUpdatePanel(props: {
   const [range, setRange] = useState("1mo");
   const [maxCount, setMaxCount] = useState("20");
   const { loading, error, data, run } = useAsync<Json>();
+  const inventory = useAsync<Json>();
   const tickerList = splitTickers(tickers);
   const isInbox = mode === "inbox";
   const needsTickers = !isInbox && (mode === "intraday" || scope === "tickers");
   const canUseUniverse = !isInbox && mode !== "intraday";
 
+  const refreshInventory = () =>
+    inventory.run(() =>
+      api<Json>("/api/data/status", {
+        financials_csv: props.financialsPath,
+      }),
+    );
+
+  useEffect(() => {
+    void refreshInventory();
+  }, [props.financialsPath]);
+
   const update = async () => {
     if (isInbox) {
       const result = await run(() => api<Json>("/api/market/inbox", {}));
-      if (result) props.onMarket(result);
+      if (result) {
+        props.onMarket(result);
+        void refreshInventory();
+      }
       return;
     }
     const endpoint =
@@ -213,12 +228,21 @@ function DataUpdatePanel(props: {
     else body.universe = scope;
     if (scope === "financials_csv") body.financials_csv = props.financialsPath;
     const result = await run(() => api<Json>(endpoint, body));
-    if (result) props.onMarket(result);
+    if (result) {
+      props.onMarket(result);
+      void refreshInventory();
+    }
   };
 
   return (
     <section className="screen">
       <ScreenTitle title="データ更新" body="取得対象とデータ種別を選び、1つのボタンでCSVへ反映します。" />
+      <DataInventory
+        data={inventory.data}
+        loading={inventory.loading}
+        error={inventory.error}
+        onRefresh={() => void refreshInventory()}
+      />
       <div className="form-grid">
         <Field label="データ種別">
           <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
@@ -269,6 +293,66 @@ function DataUpdatePanel(props: {
       <Status loading={loading} error={error} />
       {data && <MarketResult data={data} mode={mode} />}
     </section>
+  );
+}
+
+function DataInventory(props: {
+  data: Json | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  const summary = (props.data?.summary ?? {}) as Json;
+  const datasets = Array.isArray(props.data?.datasets) ? (props.data.datasets as Json[]) : [];
+  const status = String(props.data?.status ?? "unknown");
+  return (
+    <section className="inventory">
+      <header className="inventory-head">
+        <div>
+          <h3>データ状態</h3>
+          <p>保存済みデータの件数、更新時刻、取得元を確認します。</p>
+        </div>
+        <button onClick={props.onRefresh} disabled={props.loading}>
+          {props.loading ? "確認中..." : "再確認"}
+        </button>
+      </header>
+      {props.error && <p className="status error">エラー: {props.error}</p>}
+      <div className="inventory-summary">
+        <InventoryPill label="全体" value={statusLabel(status)} tone={statusTone(status)} />
+        <InventoryPill label="利用可" value={`${String(summary.ready_count ?? 0)}件`} tone="ready" />
+        <InventoryPill label="未取得" value={`${String(summary.missing_count ?? 0)}件`} tone="muted" />
+        <InventoryPill label="要更新" value={`${String(summary.stale_count ?? 0)}件`} tone="warn" />
+      </div>
+      <div className="inventory-list">
+        {datasets.map((item) => (
+          <article className="inventory-row" key={String(item.id)}>
+            <div>
+              <b>{String(item.label ?? item.id)}</b>
+              <span>{String(item.role ?? "-")}</span>
+              <code>{String(item.path ?? "-")}</code>
+            </div>
+            <div className="inventory-metrics">
+              <span className={`badge ${statusTone(String(item.status ?? ""))}`}>
+                {statusLabel(String(item.status ?? ""))}
+              </span>
+              <span>{String(item.provider ?? "-")}</span>
+              <span>{formatRows(item)}</span>
+              <span>{formatFreshness(item)}</span>
+            </div>
+          </article>
+        ))}
+        {datasets.length === 0 && !props.loading && <p className="muted">まだ状態を取得していません。</p>}
+      </div>
+    </section>
+  );
+}
+
+function InventoryPill({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div className={`inventory-pill ${tone}`}>
+      <span>{label}</span>
+      <b>{value}</b>
+    </div>
   );
 }
 
@@ -749,6 +833,45 @@ function marketCount(value: Json | null): string {
   if (value.matched_tickers !== undefined) return `${String(value.matched_tickers)}銘柄`;
   if (value.daily_bars_count !== undefined) return `${String(value.daily_bars_count)}行`;
   return "取得済み";
+}
+
+function statusLabel(value: string): string {
+  const labels: Record<string, string> = {
+    ready: "利用可",
+    stale: "要更新",
+    missing: "未取得",
+    empty: "空",
+    error: "エラー",
+    needs_setup: "要設定",
+    unknown: "未確認",
+  };
+  return labels[value] ?? value;
+}
+
+function statusTone(value: string): string {
+  if (value === "ready") return "ready";
+  if (value === "stale") return "warn";
+  if (value === "error" || value === "needs_setup") return "error";
+  return "muted";
+}
+
+function formatRows(item: Json): string {
+  if (item.kind === "sqlite" && item.table_count !== undefined) {
+    return `${String(item.table_count)}表 / ${String(item.row_count ?? 0)}件`;
+  }
+  if (item.kind === "log" && item.line_count !== undefined) return `${String(item.line_count)}行`;
+  if (item.row_count !== undefined) {
+    const tickerCount = item.ticker_count !== undefined ? ` / ${String(item.ticker_count)}銘柄` : "";
+    return `${String(item.row_count)}件${tickerCount}`;
+  }
+  return "-";
+}
+
+function formatFreshness(item: Json): string {
+  if (!item.exists) return "ファイルなし";
+  const latest = item.latest_value ? `最新値 ${String(item.latest_value)}` : "";
+  const age = typeof item.age_hours === "number" ? `${Math.round(item.age_hours)}時間前` : "";
+  return [latest, age].filter(Boolean).join(" / ") || "-";
 }
 
 function yen(value: unknown): string {

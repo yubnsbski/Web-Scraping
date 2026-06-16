@@ -991,3 +991,48 @@ def test_market_intraday_route_validates_and_routes(monkeypatch) -> None:
     monkeypatch.setattr(service.cli, "run_yahoo_intraday", fake_intraday)
     status, payload = handle_api("POST", "/api/market/intraday", {"tickers": ["2914"]})
     assert status == 200 and payload["counts"] == {"2914": 0}
+
+
+def test_data_status_route_reports_local_inventory(tmp_path: Path) -> None:
+    financials = tmp_path / "financials.csv"
+    financials.write_text(
+        "ticker,name,fiscal_year,operating_cf,equity_ratio,dividend_per_share,payout_policy\n"
+        "8306,MUFG,2025,100,8.0,41,stable\n"
+        "7203,Toyota,2025,200,40.0,75,stable\n",
+        encoding="utf-8",
+    )
+    bars = tmp_path / "daily_bars.csv"
+    bars.write_text(
+        "ticker,date,open,high,low,close,volume\n"
+        "8306,2026-06-15,100,110,90,105,1000\n",
+        encoding="utf-8-sig",
+    )
+    log = tmp_path / "market_fetch.log"
+    log.write_text("retry 8306\nok 8306\n", encoding="utf-8")
+
+    status, payload = handle_api(
+        "POST",
+        "/api/data/status",
+        {
+            "financials_csv": str(financials),
+            "daily_bars_path": str(bars),
+            "market_log_path": str(log),
+            "market_financials_path": str(tmp_path / "missing_market.csv"),
+            "price_inbox_path": str(tmp_path / "missing_inbox.csv"),
+            "edinet_financials_path": str(tmp_path / "missing_edinet.csv"),
+            "rag_db_path": str(tmp_path / "missing_rag.sqlite"),
+        },
+    )
+
+    assert status == 200
+    rows = {str(item["id"]): item for item in payload["datasets"]}
+    assert rows["selected_financials"]["status"] == "ready"
+    assert rows["selected_financials"]["row_count"] == 2
+    assert rows["selected_financials"]["ticker_count"] == 2
+    assert rows["daily_bars"]["row_count"] == 1
+    assert rows["daily_bars"]["latest_value"] == "2026-06-15"
+    assert rows["market_fetch_log"]["line_count"] == 2
+    assert rows["market_financials"]["status"] == "missing"
+    assert payload["auto_trading"] is False
+    assert payload["call_real_api"] is False
+    assert "POST /api/data/status" in available_routes()
