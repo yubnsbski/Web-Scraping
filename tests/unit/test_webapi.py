@@ -58,6 +58,52 @@ def test_edinet_ingest_route_is_registered_and_routed(monkeypatch) -> None:
     assert captured["days"] == 5
 
 
+def test_edinet_status_reports_api_key_and_registry_plan(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "sources:\n"
+        "  - name: mufg_edinet\n"
+        "    source_type: public_api\n"
+        "    provider: edinet\n"
+        "    allowed: true\n"
+        "    ticker: '8306'\n"
+        "    company: MUFG\n"
+        "    doc_types: ['120']\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv(API_KEY_ENV_VAR, raising=False)
+    status, missing_key = handle_api(
+        "POST",
+        "/api/edinet/status",
+        {"registry_path": str(registry), "output_dir": str(tmp_path / "edinet"), "days": 5},
+    )
+    assert status == 200
+    assert missing_key["can_start"] is False
+    assert missing_key["api_key_configured"] is False
+
+    monkeypatch.setenv(API_KEY_ENV_VAR, "dummy-key")
+    status, payload = handle_api(
+        "POST",
+        "/api/edinet/status",
+        {"registry_path": str(registry), "output_dir": str(tmp_path / "edinet"), "days": 5},
+    )
+
+    assert status == 200
+    assert payload["status"] == "ready"
+    assert payload["can_start"] is True
+    assert payload["target_count"] == 1
+    assert payload["sample_targets"][0]["ticker"] == "8306"
+    assert payload["start_endpoint"] == "/api/edinet/ingest-async"
+    assert payload["start_payload"]["registry_path"] == str(registry)
+    assert payload["start_payload"]["days"] == 5
+    assert "POST /api/edinet/status" in available_routes()
+
+
 
 def test_rag_stats_endpoint_reports_db_contents(tmp_path) -> None:
     db = tmp_path / "rag.sqlite"
