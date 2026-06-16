@@ -967,7 +967,10 @@ function ReportPanel(props: {
   onReport: (value: Json) => void;
 }) {
   const [targetDividend, setTargetDividend] = useState("10000");
+  const [displayReport, setDisplayReport] = useState<Json | null>(null);
   const state = useAsync<Json>();
+  const historyState = useAsync<Json>();
+  const loadState = useAsync<Json>();
   const candidateCount = Array.isArray(props.candidates?.results) ? props.candidates.results.length : 0;
   const holdingRows = csvDataRows(props.holdingsCsv);
   const preflight = reportPreflight({
@@ -976,6 +979,7 @@ function ReportPanel(props: {
     holdingRows,
     targetDividend,
   });
+  const refreshHistory = () => historyState.run(() => api<Json>("/api/reports/investment-monthly/history", { limit: 20 }));
   const create = async () => {
     const result = await state.run(() =>
       api<Json>("/api/reports/investment-monthly", {
@@ -986,7 +990,23 @@ function ReportPanel(props: {
         optimization: "balanced",
       }),
     );
-    if (result) props.onReport(result);
+    if (result) {
+      setDisplayReport(result);
+      props.onReport(result);
+      void refreshHistory();
+    }
+  };
+  const loadReport = async (reportId: string) => {
+    const result = await loadState.run(() =>
+      api<Json>("/api/reports/investment-monthly/history/load", {
+        report_id: reportId,
+      }),
+    );
+    const report = asJson(result?.report);
+    if (report) {
+      setDisplayReport(report);
+      props.onReport(report);
+    }
   };
   return (
     <section className="screen">
@@ -1018,9 +1038,16 @@ function ReportPanel(props: {
         <button className="primary" onClick={() => void create()}>
           レポート生成
         </button>
+        <button onClick={() => void refreshHistory()}>
+          {historyState.data ? "履歴を更新" : "履歴を見る"}
+        </button>
       </ActionRow>
-      <Status loading={state.loading} error={state.error} />
-      {state.data && <ReportResult data={state.data} />}
+      <Status
+        loading={state.loading || historyState.loading || loadState.loading}
+        error={state.error || historyState.error || loadState.error}
+      />
+      {historyState.data && <ReportHistoryTable data={historyState.data} onLoad={loadReport} />}
+      {displayReport && <ReportResult data={displayReport} />}
     </section>
   );
 }
@@ -1345,6 +1372,72 @@ function DetailFact({ label, value, tone }: { label: string; value: string; tone
       <span>{label}</span>
       <b>{value}</b>
     </div>
+  );
+}
+
+function ReportHistoryTable({ data, onLoad }: { data: Json; onLoad: (reportId: string) => void }) {
+  const rows = reportHistoryRows(data);
+  if (rows.length === 0) {
+    return (
+      <section className="detail-section report-history">
+        <h4>レポート履歴</h4>
+        <p className="muted">保存済みレポートはまだありません。先にレポート生成を実行してください。</p>
+      </section>
+    );
+  }
+  return (
+    <section className="detail-section report-history" aria-label="レポート履歴">
+      <h4>レポート履歴</h4>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>保存日時</th>
+              <th>タイトル</th>
+              <th>評価額</th>
+              <th>年間収入</th>
+              <th>NISA残枠</th>
+              <th>候補</th>
+              <th>状態</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const reportId = String(row.id ?? "");
+              const auditStatus = String(row.publish_audit_status ?? "unknown");
+              const integrityStatus = String(row.integrity_status ?? "unknown");
+              const ok = auditStatus === "ok" && integrityStatus === "ok";
+              return (
+                <tr key={reportId || String(row.saved_at)} className={ok ? undefined : "history-row warn"}>
+                  <td>{formatDateTime(row.saved_at)}</td>
+                  <td>
+                    <b>{String(row.title ?? "投資月次レポート")}</b>
+                    <span className="history-sub">{shortHash(row.report_hash)}</span>
+                  </td>
+                  <td>{yenWithZero(row.market_value)}</td>
+                  <td>{yenWithZero(row.annual_income_estimate)}</td>
+                  <td>{yenWithZero(row.nisa_remaining)}</td>
+                  <td>{formatCell(row.candidate_count)}</td>
+                  <td>
+                    {historyStatusLabel(auditStatus, integrityStatus)}
+                    {row.publish_audit_issue_count ? (
+                      <span className="history-sub">指摘 {String(row.publish_audit_issue_count)}件</span>
+                    ) : null}
+                  </td>
+                  <td>
+                    <button className="table-action" disabled={!reportId} onClick={() => onLoad(reportId)}>
+                      表示
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted">履歴から開いたレポートも、同じ根拠一覧とPDF出力を利用できます。</p>
+    </section>
   );
 }
 
@@ -1701,6 +1794,16 @@ function reportPreflight(input: {
   if (input.candidateCount === 0) warnings.push("候補抽出結果がありません。候補章は空のまま生成されます。");
   if ((Number(input.targetDividend) || 0) <= 0) warnings.push("目標年間配当が0です。逆算KPIは追加されません。");
   return warnings;
+}
+
+function reportHistoryRows(data: Json | null): Json[] {
+  return Array.isArray(data?.reports) ? (data.reports as Json[]) : [];
+}
+
+function historyStatusLabel(auditStatus: string, integrityStatus: string): string {
+  const audit = auditStatus === "ok" ? "監査OK" : `監査 ${auditStatus}`;
+  const integrity = integrityStatus === "ok" ? "整合OK" : `整合 ${integrityStatus}`;
+  return `${audit} / ${integrity}`;
 }
 
 function yen(value: unknown): string {
