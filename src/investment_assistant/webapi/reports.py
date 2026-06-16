@@ -77,7 +77,8 @@ def investment_report_history_load(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.report_history import load_investment_report
 
     report_id = _report_history_id(body)
-    return load_investment_report(report_id, history_dir=_optional_history_dir(body))
+    entry = load_investment_report(report_id, history_dir=_optional_history_dir(body))
+    return _entry_with_report_history(entry)
 
 
 def investment_report_history_delete(body: JsonDict) -> JsonDict:
@@ -144,10 +145,35 @@ def _report_from_body_or_history(body: JsonDict) -> JsonDict:
     if not report_id:
         raise ApiError("report or report history id is required")
     entry = load_investment_report(report_id, history_dir=_optional_history_dir(body))
-    loaded_report = entry.get("report")
+    loaded_report = _entry_with_report_history(entry).get("report")
     if not isinstance(loaded_report, dict):
         raise ApiError("saved report is invalid")
     return loaded_report
+
+
+def _entry_with_report_history(entry: JsonDict) -> JsonDict:
+    out = dict(entry)
+    report = out.get("report")
+    if isinstance(report, dict):
+        report_out = dict(report)
+        report_out["history"] = _entry_history_summary(out)
+        out["report"] = report_out
+    return out
+
+
+def _entry_history_summary(entry: JsonDict) -> JsonDict:
+    summary = entry.get("summary")
+    out = dict(summary) if isinstance(summary, dict) else {}
+    for key in (
+        "id",
+        "saved_at",
+        "report_hash",
+        "calculated_report_hash",
+        "integrity_status",
+    ):
+        if entry.get(key) is not None:
+            out[key] = entry.get(key)
+    return out
 
 
 def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:

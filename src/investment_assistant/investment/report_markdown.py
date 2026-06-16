@@ -19,16 +19,22 @@ def render_investment_report_markdown(report: Mapping[str, object]) -> str:
         f"- auto_trading: {_bool_text(report.get('auto_trading'))}",
         f"- call_real_api: {_bool_text(report.get('call_real_api'))}",
         "",
-        "## Publish Audit",
-        "",
-        f"- status: {_text(publish_audit.get('status') if publish_audit else None, 'unknown')}",
-        f"- issue_count: {_text(publish_audit.get('issue_count') if publish_audit else None, '-')}",
-        "",
-        "## KPIs",
-        "",
-        "| metric_key | label | value | formula | evidence_keys |",
-        "| --- | --- | ---: | --- | --- |",
     ]
+    _extend_saved_report(lines, report)
+    lines.extend(
+        [
+            "## Publish Audit",
+            "",
+            f"- status: {_text(publish_audit.get('status') if publish_audit else None, 'unknown')}",
+            "- issue_count: "
+            + _text(publish_audit.get("issue_count") if publish_audit else None, "-"),
+            "",
+            "## KPIs",
+            "",
+            "| metric_key | label | value | formula | evidence_keys |",
+            "| --- | --- | ---: | --- | --- |",
+        ]
+    )
     for kpi in _items(report.get("kpis")):
         lines.append(
             "| "
@@ -89,6 +95,24 @@ def render_investment_report_markdown(report: Mapping[str, object]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _extend_saved_report(lines: list[str], report: Mapping[str, object]) -> None:
+    history = _mapping(report.get("history"))
+    if history is None:
+        return
+    lines.extend(
+        [
+            "## Saved Report",
+            "",
+            f"- id: {_text(history.get('id'), '-')}",
+            f"- saved_at: {_text(history.get('saved_at'), '-')}",
+            f"- integrity_status: {_text(history.get('integrity_status'), 'unknown')}",
+            f"- report_hash: {_text(history.get('report_hash'), '-')}",
+            f"- calculated_report_hash: {_text(history.get('calculated_report_hash'), '-')}",
+            "",
+        ]
+    )
 
 
 def _items(value: object) -> list[Mapping[str, object]]:
