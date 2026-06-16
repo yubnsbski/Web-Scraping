@@ -569,6 +569,17 @@ h3 {
   padding-left: 22px;
 }
 
+.secret-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.secret-row input {
+  min-width: 0;
+}
+
 .job-card {
   display: grid;
   gap: 4px;
@@ -794,7 +805,8 @@ td {
 
   .inventory-head,
   .inventory-row,
-  .refresh-action {
+  .refresh-action,
+  .secret-row {
     display: grid;
     grid-template-columns: 1fr;
   }

@@ -194,6 +194,48 @@ def test_edinet_status_diagnoses_empty_or_misnamed_env_key(
     assert "wrong-name-value" not in str(payload)
 
 
+def test_edinet_api_key_endpoint_saves_local_secret_without_exposing_it(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+    from investment_assistant.webapi.local_env import LOCAL_ENV_ROOT_ENV
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(API_KEY_ENV_VAR, raising=False)
+    monkeypatch.delenv(LOCAL_ENV_ROOT_ENV, raising=False)
+
+    assert "POST /api/edinet/api-key" in available_routes()
+    status, payload = handle_api(
+        "POST",
+        "/api/edinet/api-key",
+        {"api_key": "edinet-secret-from-ui"},
+    )
+
+    assert status == 200
+    assert payload["status"] == "saved"
+    assert payload["api_key_configured"] is True
+    assert payload["save"]["key"] == API_KEY_ENV_VAR
+    assert payload["env_diagnostics"]["expected"][0]["has_value"] is True
+    assert (tmp_path / ".env.local").read_text(encoding="utf-8") == (
+        f"{API_KEY_ENV_VAR}=edinet-secret-from-ui\n"
+    )
+    assert "edinet-secret-from-ui" not in str(payload)
+
+
+def test_edinet_api_key_endpoint_rejects_empty_key(monkeypatch, tmp_path: Path) -> None:
+    from investment_assistant.edinet.client import API_KEY_ENV_VAR
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(API_KEY_ENV_VAR, raising=False)
+
+    status, payload = handle_api("POST", "/api/edinet/api-key", {"api_key": "  "})
+
+    assert status == 400
+    assert API_KEY_ENV_VAR in payload["error"]
+    assert not (tmp_path / ".env.local").exists()
+
+
 
 def test_rag_stats_endpoint_reports_db_contents(tmp_path) -> None:
     db = tmp_path / "rag.sqlite"

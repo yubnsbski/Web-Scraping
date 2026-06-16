@@ -6,6 +6,7 @@ from investment_assistant.webapi.local_env import (
     LOCAL_ENV_ROOT_ENV,
     inspect_local_env_keys,
     load_local_env_files,
+    save_local_env_key,
 )
 
 
@@ -111,3 +112,41 @@ def test_inspect_local_env_keys_reports_key_names_without_values(tmp_path) -> No
     assert [entry["key"] for entry in result["entries"]] == ["EDINET_API_KEY", "EDINET_KEY"]
     assert "wrong-name-value" not in str(result)
     assert "hidden" not in str(result)
+
+
+def test_save_local_env_key_upserts_without_returning_secret(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    (tmp_path / ".env.local").write_text(
+        "GEMINI_API_KEY=keep-me\nEDINET_API_KEY=old-secret\n",
+        encoding="utf-8",
+    )
+
+    result = save_local_env_key("EDINET_API_KEY", "new-secret", tmp_path)
+
+    saved = (tmp_path / ".env.local").read_text(encoding="utf-8")
+    assert "EDINET_API_KEY=new-secret" in saved
+    assert "GEMINI_API_KEY=keep-me" in saved
+    assert "old-secret" not in saved
+    assert os.environ["EDINET_API_KEY"] == "new-secret"
+    assert result["updated_existing_key"] is True
+    assert result["key"] == "EDINET_API_KEY"
+    assert "new-secret" not in str(result)
+
+
+def test_save_local_env_key_creates_parent_env_for_codex_worktree(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    repo_root = tmp_path / "repo"
+    worktree = repo_root / ".codex-worktrees" / "feature"
+    worktree.mkdir(parents=True)
+
+    result = save_local_env_key("EDINET_API_KEY", "created-secret", worktree)
+
+    assert (repo_root / ".env.local").read_text(encoding="utf-8") == (
+        "EDINET_API_KEY=created-secret\n"
+    )
+    assert result["file"] == str(repo_root / ".env.local")
+    assert result["created_file"] is True
+    assert "created-secret" not in str(result)

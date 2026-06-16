@@ -948,6 +948,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/fetch-job/run"): lambda body: _fetch_job(body, dry_run=False),
     ("POST", "/api/fetch-job/auto"): _fetch_job_auto,
     ("POST", "/api/edinet/status"): edinet_api.edinet_status,
+    ("POST", "/api/edinet/api-key"): edinet_api.edinet_save_api_key,
     ("POST", "/api/edinet/ingest"): _edinet_ingest,
     ("POST", "/api/edinet/ingest-async"): _edinet_ingest_async,
     ("POST", "/api/jobs/status"): _job_status,

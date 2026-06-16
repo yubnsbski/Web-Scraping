@@ -130,6 +130,69 @@ def inspect_local_env_keys(
     }
 
 
+def save_local_env_key(
+    key: str,
+    value: str,
+    root: str | Path | None = None,
+    *,
+    filename: str = ".env.local",
+    apply_to_process: bool = True,
+) -> JsonDict:
+    """Upsert one local env key without returning the secret value."""
+
+    normalized_key = key.strip()
+    secret = value.strip()
+    if not _KEY_PATTERN.fullmatch(normalized_key):
+        raise ValueError(f"invalid env key: {normalized_key}")
+    if not secret:
+        raise ValueError(f"{normalized_key} must not be empty")
+    if "\n" in secret or "\r" in secret or "\x00" in secret:
+        raise ValueError(f"{normalized_key} must be a single-line value")
+    if filename not in LOCAL_ENV_FILENAMES:
+        raise ValueError(f"unsupported local env file: {filename}")
+
+    roots = _candidate_env_roots(Path(root or Path.cwd()))
+    path = _select_env_write_path(roots, filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    existed = path.exists()
+    original_lines = path.read_text(encoding="utf-8").splitlines() if existed else []
+    new_line = f"{normalized_key}={_format_env_value(secret)}"
+    updated = False
+    line_number = len(original_lines) + 1
+    next_lines: list[str] = []
+
+    for index, raw_line in enumerate(original_lines, start=1):
+        parsed = _parse_env_line(raw_line)
+        if parsed is not None and parsed[0] == normalized_key:
+            if not updated:
+                next_lines.append(new_line)
+                updated = True
+                line_number = index
+            continue
+        next_lines.append(raw_line)
+
+    if not updated:
+        if next_lines and next_lines[-1].strip():
+            next_lines.append("")
+        next_lines.append(new_line)
+
+    path.write_text("\n".join(next_lines).rstrip() + "\n", encoding="utf-8")
+    if apply_to_process:
+        os.environ[normalized_key] = secret
+
+    return {
+        "saved": True,
+        "file": str(path),
+        "key": normalized_key,
+        "has_value": True,
+        "created_file": not existed,
+        "updated_existing_key": updated,
+        "line": line_number,
+        "applied_to_process": apply_to_process,
+    }
+
+
 def _candidate_env_roots(base: Path) -> list[Path]:
     roots: list[Path] = []
     explicit = os.getenv(LOCAL_ENV_ROOT_ENV, "").strip()
@@ -152,6 +215,20 @@ def _candidate_env_roots(base: Path) -> list[Path]:
             seen.add(path)
             deduped.append(path)
     return deduped
+
+
+def _select_env_write_path(roots: list[Path], filename: str) -> Path:
+    for root in roots:
+        path = root / filename
+        if path.exists():
+            return path
+    return roots[-1] / filename if len(roots) > 1 else roots[0] / filename
+
+
+def _format_env_value(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_./:=@+-]+", value):
+        return value
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _parse_env_line(raw_line: str) -> tuple[str, str] | None:
