@@ -113,6 +113,63 @@ def test_fetch_yahoo_financials_batches_quote_requests() -> None:
     assert result["notes"] == {}
 
 
+def _chart_payload(close: float) -> str:
+    return json.dumps(
+        {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1_700_000_000, 1_700_086_400],
+                        "indicators": {"quote": [{"close": [close - 5.0, close]}]},
+                        "meta": {"gmtoffset": 32400},
+                    }
+                ]
+            }
+        }
+    )
+
+
+def test_fetch_yahoo_financials_fills_missing_price_from_chart() -> None:
+    # Yahoo Japan HTML can carry a "---" real-time price placeholder (no number),
+    # so the price must be backfilled from the v8 chart's latest close.
+    def fake_fetch(url: str) -> str:
+        if "/v7/finance/quote" in url:
+            return json.dumps({"quoteResponse": {"result": []}})  # force HTML fallback
+        if "finance.yahoo.co.jp/quote" in url:
+            return "<dl><dt><span>PER</span></dt><dd>(連)14.12倍</dd></dl>"  # no price
+        if "/v8/finance/chart" in url:
+            return _chart_payload(2887.0)
+        return ""
+
+    result = fetch_yahoo_financials(
+        ["1419"],
+        fetch=fake_fetch,
+        rate_limit=DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None),
+    )
+
+    metrics = result["financials"]["1419"]
+    assert metrics["per"] == 14.12
+    assert metrics["price"] == 2887.0
+    assert result["sources"]["1419"].endswith("+chart_close")
+
+
+def test_fetch_yahoo_financials_skips_chart_when_price_present() -> None:
+    # A healthy v7 quote already has a price -> no chart request should be made.
+    seen: list[str] = []
+
+    def fake_fetch(url: str) -> str:
+        seen.append(url)
+        return _quote_payload("8306.T")
+
+    fetch_yahoo_financials(
+        ["8306"],
+        fetch=fake_fetch,
+        rate_limit=DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None),
+    )
+
+    assert not any("/v8/finance/chart" in url for url in seen)
+
+
 def test_fetch_yahoo_financials_falls_back_to_yahoo_japan_html() -> None:
     seen: list[str] = []
 
