@@ -154,6 +154,27 @@ def investment_report_markdown_save(body: JsonDict) -> JsonDict:
     }
 
 
+def investment_report_markdown_library(body: JsonDict) -> JsonDict:
+    output_dir = _safe_report_docs_dir(body.get("output_dir"))
+    limit = _as_int(body.get("limit"), 20)
+    docs = []
+    if output_dir.exists():
+        docs = [
+            _report_markdown_doc_summary(path)
+            for path in output_dir.glob("*.md")
+            if path.is_file()
+        ]
+        docs.sort(key=lambda item: str(item.get("modified_at") or ""), reverse=True)
+    safe_limit = max(limit, 0)
+    return {
+        "output_dir": str(output_dir),
+        "docs": docs[:safe_limit],
+        "count": len(docs),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def investment_report_audit(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.report_audit import audit_investment_report
 
@@ -239,6 +260,40 @@ def _unique_path(path: Path) -> Path:
         return path
     stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     return path.with_name(f"{path.stem}-{stamp}{path.suffix}")
+
+
+def _report_markdown_doc_summary(path: Path) -> JsonDict:
+    stat = path.stat()
+    metadata = _report_markdown_doc_metadata(path)
+    return {
+        "path": str(path),
+        "filename": path.name,
+        "title": metadata.get("title") or path.stem,
+        "report_id": metadata.get("report_id"),
+        "saved_at": metadata.get("saved_at"),
+        "integrity_status": metadata.get("integrity_status"),
+        "size_bytes": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+    }
+
+
+def _report_markdown_doc_metadata(path: Path) -> JsonDict:
+    text = path.read_text(encoding="utf-8", errors="replace")[:8000]
+    out: JsonDict = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# ") and not out.get("title"):
+            out["title"] = stripped[2:].strip()
+            continue
+        if stripped.startswith("- id:"):
+            out["report_id"] = stripped.split(":", 1)[1].strip() or None
+            continue
+        if stripped.startswith("- saved_at:"):
+            out["saved_at"] = stripped.split(":", 1)[1].strip() or None
+            continue
+        if stripped.startswith("- integrity_status:"):
+            out["integrity_status"] = stripped.split(":", 1)[1].strip() or None
+    return out
 
 
 def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:
