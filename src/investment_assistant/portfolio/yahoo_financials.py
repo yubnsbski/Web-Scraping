@@ -183,6 +183,13 @@ def fetch_yahoo_financials(
                 else:
                     notes[ticker] = "not_found"
 
+            entry = financials.get(ticker)
+            if entry is not None and "price" not in entry:
+                close = _last_close_price(ticker, runner)
+                if close is not None:
+                    entry["price"] = close
+                    sources[ticker] = f"{sources.get(ticker, '')}+chart_close"
+
     result: dict[str, object] = {
         "provider_id": "yfinance",
         "financials": financials,
@@ -209,6 +216,30 @@ def _num(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value)
+
+
+def _last_close_price(ticker: str, runner: MarketFetchRunner) -> float | None:
+    """Latest close from the v8 chart API, used when quote/HTML lack a price.
+
+    Yahoo Japan renders some quote pages with a ``---`` real-time price
+    placeholder (the value is loaded by client JS), so the static HTML carries
+    no price. The chart endpoint returns it reliably for every ticker.
+    """
+
+    from investment_assistant.portfolio.ohlcv import (
+        YAHOO_OHLCV_URL_TEMPLATE,
+        parse_yahoo_ohlcv,
+    )
+
+    url = YAHOO_OHLCV_URL_TEMPLATE.format(ticker=ticker, range="5d", interval="1d")
+    try:
+        bars = parse_yahoo_ohlcv(runner.fetch_once(url, ticker=ticker))
+    except Exception:  # noqa: BLE001 - a price-fill miss must not abort the run
+        return None
+    for bar in reversed(bars):
+        if bar.close is not None and bar.close > 0:
+            return bar.close
+    return None
 
 
 def _clean_text(value: str) -> str:
