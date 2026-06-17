@@ -1351,6 +1351,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     inbox_parser.add_argument("--path", help="Inbox CSV path (default local_docs/market/...)")
 
+    universe_parser = subparsers.add_parser(
+        "market-universe-build",
+        help="Build the domestic-stock universe CSV from a JPX listed-issues file",
+    )
+    universe_parser.add_argument("--jpx", required=True, help="Path to JPX data_j CSV export")
+    universe_parser.add_argument(
+        "--output",
+        default="local_docs/market/domestic_universe.csv",
+        help="Where to write the universe CSV",
+    )
+    universe_parser.add_argument(
+        "--scope",
+        default="domestic",
+        help="domestic|all|prime|standard|growth (segment filter)",
+    )
+
     gemini_live_parser = subparsers.add_parser("gemini-live")
     gemini_live_parser.add_argument("--prompt", required=True)
     gemini_live_parser.add_argument("--task-type", default="rag_answer")
@@ -1578,6 +1594,12 @@ def _dispatch(args: argparse.Namespace) -> object | None:
         )
     if command == "market-inbox":
         return run_market_inbox(path=args.path)
+    if command == "market-universe-build":
+        from investment_assistant.portfolio.jpx_universe import build_domestic_universe_csv
+
+        return build_domestic_universe_csv(
+            args.jpx, output_path=args.output, scope=args.scope
+        )
     if command == "gemini-live":
         if not args.call_real_api:
             print("Refusing to call Gemini API without --call-real-api.")

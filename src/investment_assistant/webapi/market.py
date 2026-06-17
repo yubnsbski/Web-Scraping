@@ -21,6 +21,7 @@ JsonDict = dict[str, Any]
 _MAX_MARKET_TICKERS = 50
 _YAHOO_PRICE_PROVIDER_IDS = {"yfinance", "yahoo", "yahoo_finance"}
 _DEFAULT_NIKKEI225_REGISTRY = "examples/source_registry_nikkei225_edinet.yaml"
+_DEFAULT_DOMESTIC_UNIVERSE_PATH = "local_docs/market/domestic_universe.csv"
 _DEFAULT_DAILY_BARS_PATH = "local_docs/market/daily_bars.csv"
 _DEFAULT_YAHOO_FINANCIALS_PATH = "local_docs/market/yahoo_financials.csv"
 
@@ -186,15 +187,23 @@ def _resolve_bars_universe(body: JsonDict) -> tuple[list[str], str | None, str]:
     if scope in {"nikkei225", "nikkei_225", "nikkei-225", "日経225"}:
         return [], _DEFAULT_NIKKEI225_REGISTRY, "nikkei225_registry"
 
-    if scope in {
-        "financials",
-        "financials_csv",
+    domestic_scopes = {
         "all",
         "domestic",
+        "domestic_stocks",
+        "stock",
         "prime",
         "tse_prime",
         "東証プライム",
-    }:
+        "standard",
+        "growth",
+    }
+    if scope in domestic_scopes:
+        domestic = _tickers_from_domestic_universe(scope)
+        if domestic:
+            return domestic, None, f"domestic_universe:{scope}"
+
+    if scope in {"financials", "financials_csv"} | domestic_scopes:
         path = str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV)
         financial_tickers = _tickers_from_financials_csv(path)
         if not financial_tickers:
@@ -202,6 +211,22 @@ def _resolve_bars_universe(body: JsonDict) -> tuple[list[str], str | None, str]:
         return financial_tickers, None, f"financials_csv:{path}"
 
     raise ApiError("provide tickers, registry_path, or a supported universe")
+
+
+def _tickers_from_domestic_universe(scope: str) -> list[str]:
+    """Tickers from the JPX-derived domestic universe CSV, or empty if absent.
+
+    Operators build the CSV once with ``portfolio.jpx_universe`` from JPX's
+    public listed-issues file; until then this returns ``[]`` and the caller
+    falls back to the financials CSV (preserving prior behavior).
+    """
+
+    universe_path = os.getenv("MARKET_DOMESTIC_UNIVERSE_PATH") or _DEFAULT_DOMESTIC_UNIVERSE_PATH
+    if not Path(universe_path).is_file():
+        return []
+    from investment_assistant.portfolio.jpx_universe import load_domestic_universe_tickers
+
+    return load_domestic_universe_tickers(universe_path, scope=scope)
 
 
 def _tickers_from_financials_csv(path: str | Path) -> list[str]:
