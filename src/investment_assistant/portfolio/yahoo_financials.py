@@ -103,12 +103,9 @@ def parse_yahoo_japan_quote_html(html_text: str) -> dict[str, object]:
             metrics["name"] = name
 
     full_text = _clean_text(html_text)
-    price_match = re.search(
-        r"ポートフォリオに追加\s*([0-9][0-9,]*(?:\.\d+)?)\s*前日比",
-        full_text,
-    )
-    if price_match:
-        metrics["price"] = _parse_number(price_match.group(1))
+    price = _extract_price(full_text)
+    if price is not None:
+        metrics["price"] = price
 
     for block in re.findall(r"<dl\b[^>]*>.*?</dl>", html_text, flags=re.DOTALL):
         text = _clean_text(block)
@@ -236,6 +233,27 @@ def _parse_number(value: str) -> float | None:
         return float(value.replace(",", ""))
     except ValueError:
         return None
+
+
+# Yahoo Japan renders the current price immediately before the 前日比
+# (day-over-day change) label. Most pages carry a "ポートフォリオに追加" prefix,
+# but some layouts do not -- so the bare number-before-前日比 form (and a
+# 現在値 label) act as fallbacks instead of dropping the price entirely.
+_PRICE_PATTERNS: tuple[str, ...] = (
+    r"ポートフォリオに追加([0-9][0-9,]*(?:\.\d+)?)前日比",
+    r"([0-9][0-9,]*(?:\.\d+)?)前日比",
+    r"現在値([0-9][0-9,]*(?:\.\d+)?)",
+)
+
+
+def _extract_price(full_text: str) -> float | None:
+    for pattern in _PRICE_PATTERNS:
+        match = re.search(pattern, full_text)
+        if match:
+            value = _parse_number(match.group(1))
+            if value is not None and value > 0:
+                return value
+    return None
 
 
 def _valid_metric_value(key: str, value: float) -> bool:
