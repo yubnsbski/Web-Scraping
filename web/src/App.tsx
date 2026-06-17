@@ -4,9 +4,12 @@ import { api } from "./api";
 type Json = Record<string, any>;
 type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" | "rag" | "chat";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
+type ChatDraft = { query: string; dbPath: string; limit: number };
 
 const FINANCIALS_PATH = "examples/financials_sample.csv";
+const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const DEFAULT_CHAT_QUERY = "KDDIの配当利回りと根拠を、投資助言にならない形で確認して";
+const DEFAULT_CHAT_LIMIT = 5;
 
 const SAMPLE_HOLDINGS_CSV = [
   "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of",
@@ -42,7 +45,11 @@ export function App() {
   const [analysis, setAnalysis] = useState<Json | null>(null);
   const [candidates, setCandidates] = useState<Json | null>(null);
   const [report, setReport] = useState<Json | null>(null);
-  const [chatQuery, setChatQuery] = useState(DEFAULT_CHAT_QUERY);
+  const [chatDraft, setChatDraft] = useState<ChatDraft>({
+    query: DEFAULT_CHAT_QUERY,
+    dbPath: DEFAULT_RAG_DB_PATH,
+    limit: DEFAULT_CHAT_LIMIT,
+  });
   const [detailRequest, setDetailRequest] = useState<DetailRequest>({
     code: "8306",
     assetType: "stock",
@@ -151,13 +158,13 @@ export function App() {
         )}
         {tab === "rag" && (
           <RagSearchPanel
-            onAskQuery={(value) => {
-              setChatQuery(value);
+            onAskDraft={(draft) => {
+              setChatDraft(draft);
               setTab("chat");
             }}
           />
         )}
-        {tab === "chat" && <ChatPanel draftQuery={chatQuery} onDraftQuery={setChatQuery} />}
+        {tab === "chat" && <ChatPanel draft={chatDraft} onDraftChange={setChatDraft} />}
       </main>
     </div>
   );
@@ -1064,9 +1071,9 @@ function ReportPanel(props: {
   );
 }
 
-function RagSearchPanel(props: { onAskQuery: (value: string) => void }) {
+function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
   const [query, setQuery] = useState("配当 利回り 根拠");
-  const [dbPath, setDbPath] = useState(".cache/investment_assistant/rag.sqlite");
+  const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
   const [limit, setLimit] = useState("8");
   const [hybrid, setHybrid] = useState(true);
   const searchState = useAsync<Json>();
@@ -1084,7 +1091,11 @@ function RagSearchPanel(props: { onAskQuery: (value: string) => void }) {
     );
 
   const sendToChat = () => {
-    props.onAskQuery(buildRagChatPrompt(query, results));
+    props.onAskDraft({
+      query: buildRagChatPrompt(query, results),
+      dbPath,
+      limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+    });
   };
 
   const refreshStats = () =>
@@ -1184,28 +1195,49 @@ function RagSearchResults({ results }: { results: Json[] }) {
   );
 }
 
-function ChatPanel(props: { draftQuery: string; onDraftQuery: (value: string) => void }) {
-  const [query, setQuery] = useState(props.draftQuery);
+function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) => void }) {
+  const [query, setQuery] = useState(props.draft.query);
+  const [dbPath, setDbPath] = useState(props.draft.dbPath);
+  const [limit, setLimit] = useState(String(props.draft.limit));
   const state = useAsync<Json>();
   const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
   useEffect(() => {
-    setQuery(props.draftQuery);
-  }, [props.draftQuery]);
+    setQuery(props.draft.query);
+    setDbPath(props.draft.dbPath);
+    setLimit(String(props.draft.limit));
+  }, [props.draft]);
   const updateQuery = (value: string) => {
     setQuery(value);
-    props.onDraftQuery(value);
+    props.onDraftChange({ query: value, dbPath, limit: Number(limit) || DEFAULT_CHAT_LIMIT });
+  };
+  const updateDbPath = (value: string) => {
+    setDbPath(value);
+    props.onDraftChange({ query, dbPath: value, limit: Number(limit) || DEFAULT_CHAT_LIMIT });
+  };
+  const updateLimit = (value: string) => {
+    setLimit(value);
+    props.onDraftChange({ query, dbPath, limit: Number(value) || DEFAULT_CHAT_LIMIT });
   };
   const ask = () =>
     state.run(() =>
       api<Json>("/api/rag/answer", {
         query,
-        limit: 5,
+        db_path: dbPath,
+        limit: Number(limit) || DEFAULT_CHAT_LIMIT,
         call_real_api: false,
       }),
     );
   return (
     <section className="screen">
       <ScreenTitle title="AI確認" body="RAGの根拠を確認するための補助チャットです。数値判断は決定論エンジンを優先します。" />
+      <div className="form-grid tight">
+        <Field label="RAG DB">
+          <input value={dbPath} onChange={(event) => updateDbPath(event.target.value)} />
+        </Field>
+        <Field label="件数">
+          <input value={limit} onChange={(event) => updateLimit(event.target.value)} inputMode="numeric" />
+        </Field>
+      </div>
       <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
       <ActionRow>
         <button className="primary" onClick={() => void ask()}>
