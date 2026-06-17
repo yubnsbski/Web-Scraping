@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
 
 type Json = Record<string, any>;
-type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" | "chat";
+type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" | "rag" | "chat";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 
 const FINANCIALS_PATH = "examples/financials_sample.csv";
@@ -28,6 +28,7 @@ const TABS: Array<{ id: TabId; label: string; short: string }> = [
   { id: "screen", label: "候補抽出", short: "候補" },
   { id: "detail", label: "詳細", short: "詳細" },
   { id: "report", label: "レポート", short: "報告" },
+  { id: "rag", label: "RAG検索", short: "RAG" },
   { id: "chat", label: "AI確認", short: "AI" },
 ];
 
@@ -146,6 +147,7 @@ export function App() {
             onReport={setReport}
           />
         )}
+        {tab === "rag" && <RagSearchPanel />}
         {tab === "chat" && <ChatPanel />}
       </main>
     </div>
@@ -1050,6 +1052,121 @@ function ReportPanel(props: {
       {historyState.data && <ReportHistoryTable data={historyState.data} onLoad={loadReport} onRefresh={refreshHistory} />}
       {displayReport && <ReportResult data={displayReport} />}
     </section>
+  );
+}
+
+function RagSearchPanel() {
+  const [query, setQuery] = useState("配当 利回り 根拠");
+  const [dbPath, setDbPath] = useState(".cache/investment_assistant/rag.sqlite");
+  const [limit, setLimit] = useState("8");
+  const [hybrid, setHybrid] = useState(true);
+  const searchState = useAsync<Json>();
+  const statsState = useAsync<Json>();
+  const results = Array.isArray(searchState.data?.results) ? (searchState.data.results as Json[]) : [];
+
+  const search = () =>
+    searchState.run(() =>
+      api<Json>("/api/rag/search", {
+        query,
+        db_path: dbPath,
+        limit: Number(limit) || 8,
+        hybrid,
+      }),
+    );
+
+  const refreshStats = () =>
+    statsState.run(() =>
+      api<Json>("/api/rag/stats", {
+        db_path: dbPath,
+      }),
+    );
+
+  useEffect(() => {
+    void refreshStats();
+  }, []);
+
+  return (
+    <section className="screen">
+      <ScreenTitle
+        title="RAG検索"
+        body="保存済みレポートや開示文書を先に検索し、AIへ渡す前の根拠を確認します。"
+      />
+      <div className="form-grid">
+        <Field label="検索語">
+          <input value={query} onChange={(event) => setQuery(event.target.value)} />
+        </Field>
+        <Field label="RAG DB">
+          <input value={dbPath} onChange={(event) => setDbPath(event.target.value)} />
+        </Field>
+        <Field label="件数">
+          <input value={limit} onChange={(event) => setLimit(event.target.value)} inputMode="numeric" />
+        </Field>
+        <Check label="ハイブリッド検索" checked={hybrid} onChange={setHybrid} />
+      </div>
+      <div className="quick-queries" aria-label="検索例">
+        {["配当 利回り 根拠", "market_value", "NISA 枠", "集中リスク", "integrity_status ok"].map((item) => (
+          <button key={item} className="table-action" onClick={() => setQuery(item)}>
+            {item}
+          </button>
+        ))}
+      </div>
+      <ActionRow>
+        <button className="primary" onClick={() => void search()}>
+          検索
+        </button>
+        <button onClick={() => void refreshStats()}>索引を確認</button>
+      </ActionRow>
+      <Status loading={searchState.loading || statsState.loading} error={searchState.error || statsState.error} />
+      {statsState.data && <RagStatsSummary data={statsState.data} />}
+      {searchState.data && (
+        <ResultBlock title="検索結果" meta={`${results.length}件 / ${hybrid ? "hybrid" : "keyword"}`}>
+          <RagSearchResults results={results} />
+          <JsonDetails data={searchState.data} />
+        </ResultBlock>
+      )}
+    </section>
+  );
+}
+
+function RagStatsSummary({ data }: { data: Json }) {
+  return (
+    <section className="detail-section rag-stats" aria-label="RAG索引の状態">
+      <h4>索引の状態</h4>
+      <div className="detail-metrics">
+        <DetailFact label="文書" value={`${String(data.sources_count ?? 0)}件`} />
+        <DetailFact label="チャンク" value={`${String(data.chunks_count ?? 0)}件`} />
+        <DetailFact label="文字数" value={String(data.total_chars ?? 0)} />
+        <DetailFact label="DB" value={shortPath(String(data.db_path ?? "")) || "-"} />
+      </div>
+    </section>
+  );
+}
+
+function RagSearchResults({ results }: { results: Json[] }) {
+  if (results.length === 0) {
+    return <p className="muted">一致する根拠は見つかりませんでした。</p>;
+  }
+  return (
+    <div className="rag-results">
+      {results.map((result, index) => {
+        const citation = asJson(result.citation) ?? {};
+        return (
+          <article className="rag-result" key={String(result.chunk_id ?? `${result.source}-${index}`)}>
+            <header>
+              <b>{String(citation.label ?? `#${index + 1}`)}</b>
+              <span>{formatScore(citation.score ?? result.score)}</span>
+            </header>
+            <p>{previewText(result.text, 360)}</p>
+            <div className="rag-meta">
+              <span>文書: {shortPath(String(result.source ?? ""))}</span>
+              <span>チャンク: {String(result.chunk_index ?? "-")}</span>
+              {citation.report_id && <span>レポートID: {String(citation.report_id)}</span>}
+              {citation.integrity_status && <span>整合性: {String(citation.integrity_status)}</span>}
+            </div>
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
@@ -2077,6 +2194,12 @@ function formatScore(value: unknown): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "-";
   return numeric.toLocaleString("ja-JP", { maximumFractionDigits: 4 });
+}
+
+function previewText(value: unknown, maxLength: number): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text || "-";
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
 }
 
 function formatFreshness(item: Json): string {

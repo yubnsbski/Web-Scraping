@@ -1092,6 +1092,64 @@ td {
   max-height: 280px;
 }
 
+.quick-queries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rag-results {
+  display: grid;
+  gap: 10px;
+}
+
+.rag-result {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.rag-result header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.rag-result header b {
+  overflow-wrap: anywhere;
+}
+
+.rag-result header span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rag-result p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.rag-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rag-meta span {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
