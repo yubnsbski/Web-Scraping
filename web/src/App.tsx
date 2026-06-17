@@ -4,7 +4,7 @@ import { api } from "./api";
 type Json = Record<string, any>;
 type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" | "rag" | "chat";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
-type ChatDraft = { query: string; dbPath: string; limit: number };
+type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[] };
 
 const FINANCIALS_PATH = "examples/financials_sample.csv";
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
@@ -1097,6 +1097,7 @@ function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
       query: buildRagChatPrompt(query, selectedResults),
       dbPath,
       limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+      evidence: selectedResults,
     });
   };
 
@@ -1234,6 +1235,7 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
   const [limit, setLimit] = useState(String(props.draft.limit));
   const state = useAsync<Json>();
   const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
+  const handoffEvidence = Array.isArray(props.draft.evidence) ? props.draft.evidence : [];
   useEffect(() => {
     setQuery(props.draft.query);
     setDbPath(props.draft.dbPath);
@@ -1241,15 +1243,30 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
   }, [props.draft]);
   const updateQuery = (value: string) => {
     setQuery(value);
-    props.onDraftChange({ query: value, dbPath, limit: Number(limit) || DEFAULT_CHAT_LIMIT });
+    props.onDraftChange({
+      query: value,
+      dbPath,
+      limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+      evidence: props.draft.evidence,
+    });
   };
   const updateDbPath = (value: string) => {
     setDbPath(value);
-    props.onDraftChange({ query, dbPath: value, limit: Number(limit) || DEFAULT_CHAT_LIMIT });
+    props.onDraftChange({
+      query,
+      dbPath: value,
+      limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+      evidence: props.draft.evidence,
+    });
   };
   const updateLimit = (value: string) => {
     setLimit(value);
-    props.onDraftChange({ query, dbPath, limit: Number(value) || DEFAULT_CHAT_LIMIT });
+    props.onDraftChange({
+      query,
+      dbPath,
+      limit: Number(value) || DEFAULT_CHAT_LIMIT,
+      evidence: props.draft.evidence,
+    });
   };
   const ask = () =>
     state.run(() =>
@@ -1272,6 +1289,9 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
         </Field>
       </div>
       <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
+      {handoffEvidence.length > 0 && (
+        <RagEvidenceCards title="AI確認に渡した根拠" results={handoffEvidence} />
+      )}
       <ActionRow>
         <button className="primary" onClick={() => void ask()}>
           確認する
@@ -1282,7 +1302,7 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
         <div className="answer">
           <h3>回答</h3>
           <p>{String(state.data.answer ?? state.data.text ?? "回答がありません。")}</p>
-          {ragResults.length > 0 && <RagCitationList results={ragResults} />}
+          {ragResults.length > 0 && <RagEvidenceCards title="回答時に照合した根拠" results={ragResults} />}
           <JsonDetails data={state.data} />
         </div>
       )}
@@ -1290,36 +1310,45 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
   );
 }
 
-function RagCitationList({ results }: { results: Json[] }) {
-  const rows = results.map((result, index) => {
-    const citation = asJson(result.citation) ?? {};
-    return {
-      number: index + 1,
-      label: String(citation.label ?? shortPath(String(result.source ?? ""))),
-      report_id: String(citation.report_id ?? "-"),
-      integrity_status: String(citation.integrity_status ?? "-"),
-      chunk_index: String(citation.chunk_index ?? result.chunk_index ?? "-"),
-      score: formatScore(citation.score ?? result.score),
-      source: shortPath(String(citation.source ?? result.source ?? "")),
-    };
-  });
+function RagEvidenceCards({ title, results }: { title: string; results: Json[] }) {
   return (
-    <section className="detail-section citation-list" aria-label="引用・根拠">
-      <h4>引用・根拠</h4>
-      <SimpleTable
-        rows={rows}
-        columns={[
-          ["number", "#"],
-          ["label", "引用"],
-          ["report_id", "レポートID"],
-          ["integrity_status", "整合性"],
-          ["chunk_index", "チャンク"],
-          ["score", "スコア"],
-          ["source", "文書"],
-        ]}
-      />
+    <section className="detail-section evidence-cards" aria-label={title}>
+      <h4>{title}</h4>
+      <div className="evidence-card-list">
+        {results.map((result, index) => {
+          const citation = evidenceSummary(result, index);
+          return (
+            <article className="evidence-card" key={ragResultKey(result, index)}>
+              <header>
+                <b>[{citation.number}] {citation.label}</b>
+                <span>{citation.score}</span>
+              </header>
+              <p>{previewText(result.text, 240)}</p>
+              <div className="rag-meta">
+                <span>文書: {citation.source}</span>
+                <span>チャンク: {citation.chunk_index}</span>
+                {citation.report_id !== "-" && <span>レポートID: {citation.report_id}</span>}
+                {citation.integrity_status !== "-" && <span>整合性: {citation.integrity_status}</span>}
+              </div>
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
+}
+
+function evidenceSummary(result: Json, index: number) {
+  const citation = asJson(result.citation) ?? {};
+  return {
+    number: index + 1,
+    label: String(citation.label ?? shortPath(String(result.source ?? ""))),
+    report_id: String(citation.report_id ?? "-"),
+    integrity_status: String(citation.integrity_status ?? "-"),
+    chunk_index: String(citation.chunk_index ?? result.chunk_index ?? "-"),
+    score: formatScore(citation.score ?? result.score),
+    source: shortPath(String(citation.source ?? result.source ?? "")),
+  };
 }
 
 function MarketResult({ data, mode }: { data: Json; mode: string }) {
@@ -2291,7 +2320,8 @@ function buildRagChatPrompt(query: string, results: Json[]): string {
       const source = shortPath(String(result.source ?? ""));
       const rawLabel = citation.label ?? source;
       const label = String(rawLabel || `根拠${index + 1}`);
-      return `- [${index + 1}] ${label}${source ? ` / ${source}` : ""}`;
+      const preview = previewText(result.text, 180);
+      return `- [${index + 1}] ${label}${source ? ` / ${source}` : ""}\n  要約: ${preview}`;
     })
     .filter(Boolean);
   const citationBlock =
