@@ -286,7 +286,7 @@ def fund_profile_csv_template(*, include_examples: bool = False) -> dict[str, ob
 
 
 def load_holdings_csv(path: str | Path) -> list[InvestmentHolding]:
-    return load_holdings_csv_text(Path(path).read_text(encoding="utf-8"))
+    return load_holdings_csv_text(Path(path).read_text(encoding="utf-8-sig"))
 
 
 def load_holdings_csv_text(text: str) -> list[InvestmentHolding]:
@@ -298,7 +298,7 @@ def load_holdings_csv_text(text: str) -> list[InvestmentHolding]:
 
 
 def load_funds_csv(path: str | Path) -> list[FundProfile]:
-    return load_funds_csv_text(Path(path).read_text(encoding="utf-8"))
+    return load_funds_csv_text(Path(path).read_text(encoding="utf-8-sig"))
 
 
 def load_funds_csv_text(text: str) -> list[FundProfile]:
@@ -309,8 +309,19 @@ def load_funds_csv_text(text: str) -> list[FundProfile]:
     return funds
 
 
+def _csv_body(text: str) -> str:
+    """Trim whitespace and a leading UTF-8 BOM (common in Excel/Windows CSVs).
+
+    ``str.strip`` does not remove the BOM (U+FEFF), so without this the first
+    header cell parses as ``"﻿asset_type"`` and the required-column check
+    fails with a misleading "missing column" error.
+    """
+
+    return text.strip().lstrip("﻿")
+
+
 def _read_rows(text: str, *, required: tuple[str, ...]) -> list[dict[str, str]]:
-    reader = csv.DictReader(io.StringIO(text.strip()))
+    reader = csv.DictReader(io.StringIO(_csv_body(text)))
     fieldnames = set(reader.fieldnames or [])
     missing = [column for column in required if column not in fieldnames]
     if missing:
@@ -327,7 +338,7 @@ def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | Non
     if isinstance(path, str) and path.strip():
         csv_path = Path(path)
         if csv_path.is_file():
-            return _csv_fieldnames(csv_path.read_text(encoding="utf-8"))
+            return _csv_fieldnames(csv_path.read_text(encoding="utf-8-sig"))
 
     raw_holdings = payload.get("holdings")
     if isinstance(raw_holdings, list) and raw_holdings:
@@ -340,7 +351,7 @@ def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | Non
 
 
 def _csv_fieldnames(text: str) -> set[str]:
-    reader = csv.DictReader(io.StringIO(text.strip()))
+    reader = csv.DictReader(io.StringIO(_csv_body(text)))
     return {str(field) for field in (reader.fieldnames or [])}
 
 
