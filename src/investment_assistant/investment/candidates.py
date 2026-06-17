@@ -141,7 +141,11 @@ def _fund_candidate(
         conditions.append(f"信託報酬 {screen.max_expense_ratio:g}% 以下")
     if screen.nisa_eligible_only:
         conditions.append("NISA対象")
-    if screen.min_diversification_score is not None:
+    if (
+        screen.min_diversification_score is not None
+        and fund.diversification_score is not None
+        and fund.diversification_score >= screen.min_diversification_score
+    ):
         conditions.append(f"分散度 {screen.min_diversification_score:g} 以上")
     return {
         "asset_type": "fund",
