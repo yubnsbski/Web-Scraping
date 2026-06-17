@@ -47,3 +47,24 @@ def test_dividend_yield_percent_and_fraction_are_both_set() -> None:
     parsed = parse_yahoo_japan_quote_html(_dl("配当利回り", "（会社予想）3.20%"))
     assert parsed["dividend_yield_percent"] == 3.2
     assert parsed["dividend_yield"] == 0.032
+
+
+def test_price_extracted_with_portfolio_prefix() -> None:
+    html = "<section>ＫＤＤＩ(株)9433情報・通信ポートフォリオに追加5,018前日比+11(+0.22%)</section>"
+    assert parse_yahoo_japan_quote_html(html)["price"] == 5018.0
+
+
+def test_price_extracted_without_portfolio_prefix() -> None:
+    # Layouts that lack 'ポートフォリオに追加' previously dropped the price even
+    # though the number sits right before 前日比.
+    html = "<section>タマホーム(株)1419：株価情報2,887前日比-13(-0.45%)</section>"
+    assert parse_yahoo_japan_quote_html(html)["price"] == 2887.0
+
+
+def test_price_extracted_from_genzaine_label() -> None:
+    html = "<section>現在値412前日比+2</section>"
+    assert parse_yahoo_japan_quote_html(html)["price"] == 412.0
+
+
+def test_no_price_when_no_price_context() -> None:
+    assert "price" not in parse_yahoo_japan_quote_html(_dl("PER", "(連)14.12倍"))
