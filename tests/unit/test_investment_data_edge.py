@@ -67,3 +67,12 @@ def test_funds_csv_with_utf8_bom_parses() -> None:
     body = _FUNDS_HEADER + "F001,All World,global_equity,0.1,reinvest,true,user_csv\n"
     funds = load_funds_csv_text("﻿" + body)
     assert [f.fund_code for f in funds] == ["F001"]
+
+
+def test_holdings_csv_with_lone_cr_line_endings_parses() -> None:
+    # Excel "save as CSV" can emit lone-CR endings, which previously raised
+    # "new-line character seen in unquoted field".
+    header = _HOLDINGS_HEADER.rstrip("\n")
+    row = "stock,8306,MUFG,100,1000,tokutei,nisa_growth,user_csv,1200,,"
+    holdings = load_holdings_csv_text(header + "\r" + row + "\r")
+    assert [h.ticker_or_fund_code for h in holdings] == ["8306"]
