@@ -1084,12 +1084,46 @@ td {
   border-top: 1px solid var(--line);
 }
 
-.citation-list {
+.evidence-cards {
   background: #f7fafc;
 }
 
-.citation-list .table-wrap {
-  max-height: 280px;
+.evidence-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.evidence-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.evidence-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.evidence-card header b {
+  overflow-wrap: anywhere;
+}
+
+.evidence-card header span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.evidence-card p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .quick-queries {
