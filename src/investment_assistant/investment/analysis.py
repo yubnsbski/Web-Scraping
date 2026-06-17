@@ -675,6 +675,7 @@ def _tax_wrapper(value: str) -> str:
     aliases = {
         "new_nisa": "nisa",
         "nisa_growth": "nisa_growth",
+        "growth_nisa": "nisa_growth",
         "growth": "nisa_growth",
         "つみたて": "nisa_tsumitate",
         "nisa_tsumitate": "nisa_tsumitate",
