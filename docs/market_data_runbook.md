@@ -7,6 +7,7 @@
 - ライブ取得（Yahoo直叩き）は **robots.txt とネットワーク**に依存し、環境によっては空になる。
 - **確実に動くのは「ファイル取込（inbox）」**：手動エクスポートしたCSVを所定パスに置くだけ。
 - 「全件 daily_bars」で行数が少ないのは **J-Quants が契約必須**だから（ユニバースを変えても直らない）。
+- **「全株式（国内株式）」のユニバースは JPX の公開銘柄一覧から構築**する（下記）。未構築だと `domestic`/`prime` は財務CSVの数十件に縮退する。
 
 ## データ種別とエンドポイント
 
@@ -20,6 +21,52 @@
 | ファイル取込（inbox） | `POST /api/market/inbox` | **ローカルCSV（取得なし）** | ネットワーク不要・確実 |
 
 その他: `POST /api/market/prices`（最新終値）、`/api/market/ohlcv`、`/api/market/bars`。
+
+## 全株式（国内株式）ユニバースの構築
+
+`bars/universe` の `universe` に `domestic`/`all`/`prime`/`standard`/`growth` を指定したとき、**JPX由来のユニバースCSVがあればそれを使う**。無ければ従来どおり財務CSV（少数）にフォールバックする。全件を取りたいときは、まず一度だけユニバースを構築する。
+
+1. JPX の「東証上場銘柄一覧」`data_j.xls` を入手（公開・契約不要）し、CSVに保存（Shift_JIS/CP932 のままでよい）。
+   - 配布元: JPX「その他統計資料」内の上場銘柄一覧。
+2. ユニバースCSVを構築（素の証券コードに整形、ETF/REIT/出資証券/外国株を除外）:
+
+   ```bash
+   investment-assistant market-universe-build --jpx data_j.csv \
+     --output local_docs/market/domestic_universe.csv --scope domestic
+   # → {"ticker_count": 3900+, "output_path": "local_docs/market/domestic_universe.csv"}
+   ```
+
+   `--scope` は `domestic|all|prime|standard|growth`。市場区分で絞り込める。
+
+   > Windows PowerShell では行継続が `\` ではなくバッククオート `` ` `` のため、**1行で書く**のが安全:
+   > ```powershell
+   > investment-assistant market-universe-build --jpx data_j.csv --output local_docs/market/domestic_universe.csv --scope domestic
+   > ```
+
+3. 既定パス（`local_docs/market/domestic_universe.csv`）以外に置く場合は環境変数で指定:
+
+   ```bash
+   export MARKET_DOMESTIC_UNIVERSE_PATH=/path/to/domestic_universe.csv
+   ```
+
+4. 全件 OHLCV を取得（**ネットワークが通る環境**で。コードは `.T` を自動付与）:
+
+   ```bash
+   # API 経由（フロントの「データ更新」と同じ経路）
+   curl -s localhost:8000/api/market/bars/universe -d '{"universe":"domestic"}'
+   # CLI 経由（レジストリ/明示ティッカーの場合）
+   MARKET_ALLOW_ROBOTS_BYPASS=1 investment-assistant market-ohlcv \
+     --tickers $(cut -d, -f1 local_docs/market/domestic_universe.csv | tail -n +2 | paste -sd,) \
+     --max 0 --range 1mo --output-dir local_docs/market/ohlcv
+   ```
+
+   > Windows PowerShell の場合（`curl` は `Invoke-WebRequest` のエイリアスなので別構文）:
+   > ```powershell
+   > Invoke-RestMethod -Uri http://localhost:8000/api/market/bars/universe `
+   >   -Method Post -ContentType 'application/json' -Body '{"universe":"domestic"}'
+   > ```
+
+> 注: 隔離実行環境（外向きHTTPが403/遮断）では手順4は空になる。その場合は許可付きのネットワークポリシーで環境を作り直すか、手元の通信可能な環境で実行する。ユニバース構築（手順1–3）はネットワーク不要。
 
 ## ライブ取得が空になる主因
 
@@ -67,6 +114,7 @@ ticker,date,close,volume
 
 ## 「取得行数が少ない（例: 81行で一定）」の切り分け
 
+- まず**ユニバースが縮退していないか**を確認。`domestic`/`prime` でユニバースCSV未構築だと財務CSVの数十件に落ちる（上記「全株式ユニバースの構築」で解消）。レスポンスの `universe_source` が `domestic_universe:...` なら全件、`financials_csv:...` なら縮退している。
 - 行数が**ユニバース件数に依らず一定**なら、それは銘柄ループのバグではなく**データソース側の制限**。
 - 全件 `daily_bars` の少数行は、**J-Quants が契約必須**（provider policy 上 `jquants` は `contract_required`、`_ALWAYS_ALLOWED` ではない）であるため。無料/未契約ティアは遅延・限定データしか返さない。
 - 対処: 有効な **J-Quants 有料契約**を使う、または日付窓を契約プランの範囲に合わせる。Yahoo 系（本Runbookの対象）とは独立。
