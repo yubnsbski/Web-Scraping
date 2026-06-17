@@ -199,7 +199,7 @@ function DataUpdatePanel(props: {
   onOpenDetail: (code: string) => void;
 }) {
   const [mode, setMode] = useState<"financials" | "ohlcv" | "intraday" | "inbox">("financials");
-  const [scope, setScope] = useState<"tickers" | "nikkei225" | "financials_csv">("tickers");
+  const [scope, setScope] = useState<"tickers" | "nikkei225" | "financials_csv" | "domestic">("tickers");
   const [tickers, setTickers] = useState("8306,9433,7203");
   const [range, setRange] = useState("1mo");
   const [maxCount, setMaxCount] = useState("20");
@@ -237,7 +237,7 @@ function DataUpdatePanel(props: {
 
   const executeUpdate = async (
     selectedMode: "financials" | "ohlcv" | "intraday" | "inbox" = mode,
-    selectedScope: "tickers" | "nikkei225" | "financials_csv" = scope,
+    selectedScope: "tickers" | "nikkei225" | "financials_csv" | "domestic" = scope,
   ) => {
     if (selectedMode === "inbox") {
       const result = await run(() => api<Json>("/api/market/inbox", {}));
@@ -325,6 +325,7 @@ function DataUpdatePanel(props: {
             <option value="tickers">入力した銘柄</option>
             <option value="nikkei225">日経225</option>
             <option value="financials_csv">財務CSVの全銘柄</option>
+            <option value="domestic">全国内株式（JPX一覧）</option>
           </select>
         </Field>
         <Field label="上限件数">
