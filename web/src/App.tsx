@@ -1076,9 +1076,11 @@ function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
   const [limit, setLimit] = useState("8");
   const [hybrid, setHybrid] = useState(true);
+  const [selectedEvidence, setSelectedEvidence] = useState<Record<string, boolean>>({});
   const searchState = useAsync<Json>();
   const statsState = useAsync<Json>();
   const results = Array.isArray(searchState.data?.results) ? (searchState.data.results as Json[]) : [];
+  const selectedResults = results.filter((result, index) => selectedEvidence[ragResultKey(result, index)] !== false);
 
   const search = () =>
     searchState.run(() =>
@@ -1092,7 +1094,7 @@ function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
 
   const sendToChat = () => {
     props.onAskDraft({
-      query: buildRagChatPrompt(query, results),
+      query: buildRagChatPrompt(query, selectedResults),
       dbPath,
       limit: Number(limit) || DEFAULT_CHAT_LIMIT,
     });
@@ -1108,6 +1110,12 @@ function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
   useEffect(() => {
     void refreshStats();
   }, []);
+
+  useEffect(() => {
+    setSelectedEvidence(
+      Object.fromEntries(results.map((result, index) => [ragResultKey(result, index), true])),
+    );
+  }, [searchState.data]);
 
   return (
     <section className="screen">
@@ -1138,14 +1146,20 @@ function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
         <button className="primary" onClick={() => void search()}>
           検索
         </button>
-        <button onClick={sendToChat}>AI確認へ送る</button>
+        <button onClick={sendToChat}>AI確認へ送る（{selectedResults.length}件）</button>
         <button onClick={() => void refreshStats()}>索引を確認</button>
       </ActionRow>
       <Status loading={searchState.loading || statsState.loading} error={searchState.error || statsState.error} />
       {statsState.data && <RagStatsSummary data={statsState.data} />}
       {searchState.data && (
         <ResultBlock title="検索結果" meta={`${results.length}件 / ${hybrid ? "hybrid" : "keyword"}`}>
-          <RagSearchResults results={results} />
+          <RagSearchResults
+            results={results}
+            selectedEvidence={selectedEvidence}
+            onToggleEvidence={(key, value) => {
+              setSelectedEvidence((prev) => ({ ...prev, [key]: value }));
+            }}
+          />
           <JsonDetails data={searchState.data} />
         </ResultBlock>
       )}
@@ -1167,7 +1181,12 @@ function RagStatsSummary({ data }: { data: Json }) {
   );
 }
 
-function RagSearchResults({ results }: { results: Json[] }) {
+function RagSearchResults(props: {
+  results: Json[];
+  selectedEvidence?: Record<string, boolean>;
+  onToggleEvidence?: (key: string, value: boolean) => void;
+}) {
+  const { results, selectedEvidence, onToggleEvidence } = props;
   if (results.length === 0) {
     return <p className="muted">一致する根拠は見つかりませんでした。</p>;
   }
@@ -1175,10 +1194,24 @@ function RagSearchResults({ results }: { results: Json[] }) {
     <div className="rag-results">
       {results.map((result, index) => {
         const citation = asJson(result.citation) ?? {};
+        const key = ragResultKey(result, index);
+        const checked = selectedEvidence?.[key] !== false;
         return (
-          <article className="rag-result" key={String(result.chunk_id ?? `${result.source}-${index}`)}>
+          <article className={checked ? "rag-result selected" : "rag-result"} key={key}>
             <header>
-              <b>{String(citation.label ?? `#${index + 1}`)}</b>
+              <div className="rag-title">
+                <b>{String(citation.label ?? `#${index + 1}`)}</b>
+                {onToggleEvidence && (
+                  <label className="rag-select">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) => onToggleEvidence(key, event.target.checked)}
+                    />
+                    <span>AI確認に使う</span>
+                  </label>
+                )}
+              </div>
               <span>{formatScore(citation.score ?? result.score)}</span>
             </header>
             <p>{previewText(result.text, 360)}</p>
@@ -2264,6 +2297,10 @@ function buildRagChatPrompt(query: string, results: Json[]): string {
   const citationBlock =
     citations.length > 0 ? `\n\n確認済み根拠候補:\n${citations.join("\n")}` : "";
   return `「${trimmedQuery}」について、RAGの根拠を引用しながら、投資助言にならない形で要点・不確実性・追加確認事項を簡潔に説明して。${citationBlock}`;
+}
+
+function ragResultKey(result: Json, index: number): string {
+  return String(result.chunk_id ?? `${result.source ?? "source"}-${result.chunk_index ?? index}`);
 }
 
 function previewText(value: unknown, maxLength: number): string {

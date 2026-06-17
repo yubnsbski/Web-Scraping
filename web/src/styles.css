@@ -1112,6 +1112,11 @@ td {
   background: #fbfcfe;
 }
 
+.rag-result.selected {
+  border-color: rgba(15, 118, 110, 0.38);
+  background: #f4fbf9;
+}
+
 .rag-result header {
   display: flex;
   justify-content: space-between;
@@ -1119,7 +1124,12 @@ td {
   align-items: flex-start;
 }
 
-.rag-result header b {
+.rag-title {
+  display: grid;
+  gap: 6px;
+}
+
+.rag-title b {
   overflow-wrap: anywhere;
 }
 
@@ -1127,6 +1137,21 @@ td {
   color: var(--accent);
   font-size: 12px;
   font-weight: 800;
+}
+
+.rag-select {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rag-select input {
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
 }
 
 .rag-result p {
