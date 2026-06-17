@@ -76,6 +76,7 @@ from investment_assistant.rag.search import (
     diversify_results,
     hybrid_search,
     search_chunks,
+    search_result_to_dict,
 )
 from investment_assistant.rag.store import (
     DEFAULT_RAG_DB_PATH,
@@ -765,7 +766,7 @@ def run_rag_search(
         results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
     else:
         results = search_chunks(store, query=query, limit=limit)
-    return [asdict(result) for result in results]
+    return [search_result_to_dict(result) for result in results]
 
 
 
@@ -794,14 +795,16 @@ def _run_rag_search_for_source(
             continue
 
         results.append(
-            {
-                "chunk_id": chunk.chunk_id,
-                "source": chunk.source,
-                "chunk_index": chunk.chunk_index,
-                "score": float(score),
-                "text": chunk.text,
-                "metadata": chunk.metadata,
-            }
+            search_result_to_dict(
+                SearchResult(
+                    chunk_id=chunk.chunk_id,
+                    source=chunk.source,
+                    chunk_index=chunk.chunk_index,
+                    score=float(score),
+                    text=chunk.text,
+                    metadata=chunk.metadata,
+                )
+            )
         )
 
     ranked = sorted(results, key=_search_result_sort_key)
@@ -905,7 +908,7 @@ def run_rag_answer_context(
     return {
         "query": query,
         "context": build_answer_context(results),
-        "results": [asdict(result) for result in results],
+        "results": [search_result_to_dict(result) for result in results],
     }
 
 
@@ -1008,7 +1011,7 @@ def run_orchestrate_answer(
     outcome = orchestrator.run(query=query, context=context)
     payload = outcome.to_dict()
     payload["context"] = context
-    payload["results"] = [asdict(result) for result in results]
+    payload["results"] = [search_result_to_dict(result) for result in results]
     payload["source_filter"] = source_filter
     payload["call_real_api"] = call_real_api
     payload["perspectives"] = list(config.perspectives[: config.n_drafts])

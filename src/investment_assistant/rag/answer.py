@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from investment_assistant.llm.service import LlmResponse, LlmService
-from investment_assistant.rag.search import build_answer_context, search_chunks
+from investment_assistant.rag.search import (
+    build_answer_context,
+    search_chunks,
+    search_result_to_dict,
+)
 from investment_assistant.rag.store import RagStore
 
 RAG_ANSWER_TASK_TYPE = "rag_answer"
@@ -95,7 +97,7 @@ def generate_rag_answer(
         "query": query,
         "answer": response.text,
         "context": context,
-        "results": [asdict(result) for result in results],
+        "results": [search_result_to_dict(result) for result in results],
         "llm": _response_to_dict(response),
         "disclaimer": DISCLAIMER,
     }

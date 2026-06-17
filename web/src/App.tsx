@@ -1055,6 +1055,7 @@ function ReportPanel(props: {
 function ChatPanel() {
   const [query, setQuery] = useState("KDDIの配当利回りと根拠を、投資助言にならない形で確認して");
   const state = useAsync<Json>();
+  const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
   const ask = () =>
     state.run(() =>
       api<Json>("/api/rag/answer", {
@@ -1077,9 +1078,42 @@ function ChatPanel() {
         <div className="answer">
           <h3>回答</h3>
           <p>{String(state.data.answer ?? state.data.text ?? "回答がありません。")}</p>
+          {ragResults.length > 0 && <RagCitationList results={ragResults} />}
           <JsonDetails data={state.data} />
         </div>
       )}
+    </section>
+  );
+}
+
+function RagCitationList({ results }: { results: Json[] }) {
+  const rows = results.map((result, index) => {
+    const citation = asJson(result.citation) ?? {};
+    return {
+      number: index + 1,
+      label: String(citation.label ?? shortPath(String(result.source ?? ""))),
+      report_id: String(citation.report_id ?? "-"),
+      integrity_status: String(citation.integrity_status ?? "-"),
+      chunk_index: String(citation.chunk_index ?? result.chunk_index ?? "-"),
+      score: formatScore(citation.score ?? result.score),
+      source: shortPath(String(citation.source ?? result.source ?? "")),
+    };
+  });
+  return (
+    <section className="detail-section citation-list" aria-label="引用・根拠">
+      <h4>引用・根拠</h4>
+      <SimpleTable
+        rows={rows}
+        columns={[
+          ["number", "#"],
+          ["label", "引用"],
+          ["report_id", "レポートID"],
+          ["integrity_status", "整合性"],
+          ["chunk_index", "チャンク"],
+          ["score", "スコア"],
+          ["source", "文書"],
+        ]}
+      />
     </section>
   );
 }
@@ -2036,6 +2070,12 @@ function formatBytes(value: unknown): string {
   if (bytes < 1024) return `${Math.round(bytes)} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toLocaleString("ja-JP", { maximumFractionDigits: 1 })} KB`;
   return `${(bytes / (1024 * 1024)).toLocaleString("ja-JP", { maximumFractionDigits: 1 })} MB`;
+}
+
+function formatScore(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return numeric.toLocaleString("ja-JP", { maximumFractionDigits: 4 });
 }
 
 function formatFreshness(item: Json): string {

@@ -748,6 +748,9 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(
     )
     assert status == 200
     assert markdown["auto_trading"] is False
+    assert markdown["markdown"].startswith("---\n")
+    assert "doc_type: \"investment_report\"" in markdown["markdown"]
+    assert f"report_id: \"{history_summary['id']}\"" in markdown["markdown"]
     assert "## Saved Report" in markdown["markdown"]
     assert f"id: {history_summary['id']}" in markdown["markdown"]
     assert "integrity_status: ok" in markdown["markdown"]
@@ -795,6 +798,12 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(
     )
     assert status == 200
     assert saved_search["results"]
+    first_saved_result = saved_search["results"][0]
+    assert first_saved_result["metadata"]["doc_type"] == "investment_report"
+    assert first_saved_result["metadata"]["report_id"] == history_summary["id"]
+    assert first_saved_result["citation"]["report_id"] == history_summary["id"]
+    assert first_saved_result["citation"]["integrity_status"] == "ok"
+    assert "chunk" in first_saved_result["citation"]["label"]
 
     higher_price_csv = holdings_csv.replace("user_csv,1200,,", "user_csv,1300,,")
     status, newer_report = handle_api(
