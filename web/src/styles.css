@@ -849,6 +849,13 @@ h3 {
   white-space: pre-wrap;
 }
 
+.markdown-library {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
 .report-history {
   gap: 10px;
 }

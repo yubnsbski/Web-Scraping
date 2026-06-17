@@ -776,6 +776,18 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(
     assert saved_markdown["index_after_save"] is True
     assert saved_markdown["indexed"]["chunks_indexed"] >= 1
 
+    status, markdown_library = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/markdown/library",
+        {"output_dir": "local_docs/reports"},
+    )
+    assert status == 200
+    assert markdown_library["count"] == 1
+    assert markdown_library["docs"][0]["path"] == saved_markdown["saved_path"]
+    assert markdown_library["docs"][0]["title"] == "投資月次レポート"
+    assert markdown_library["docs"][0]["report_id"] == history_summary["id"]
+    assert markdown_library["docs"][0]["integrity_status"] == "ok"
+
     status, saved_search = handle_api(
         "POST",
         "/api/rag/search",

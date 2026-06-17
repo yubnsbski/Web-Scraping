@@ -1582,9 +1582,43 @@ function ReportHistoryComparison({ data }: { data: Json }) {
   );
 }
 
+function ReportMarkdownLibrary({ data }: { data: Json }) {
+  const docs = Array.isArray(data.docs) ? (data.docs as Json[]) : [];
+  return (
+    <section className="detail-section markdown-library" aria-label="保存済みレポート文書">
+      <h4>保存済みMarkdown</h4>
+      <div className="detail-metrics">
+        <DetailFact label="保存先" value={String(data.output_dir ?? "-")} />
+        <DetailFact label="件数" value={`${String(data.count ?? docs.length)}件`} />
+        <DetailFact label="用途" value="RAG検索用" tone="safe" />
+        <DetailFact label="自動売買" value={data.auto_trading ? "有効" : "なし"} tone={data.auto_trading ? undefined : "safe"} />
+      </div>
+      <SimpleTable
+        rows={docs.map((doc) => ({
+          ...doc,
+          size_bytes: formatBytes(doc.size_bytes),
+          modified_at: formatDateTime(doc.modified_at),
+          saved_at: formatDateTime(doc.saved_at),
+        }))}
+        columns={[
+          ["filename", "ファイル"],
+          ["title", "タイトル"],
+          ["report_id", "レポートID"],
+          ["integrity_status", "整合性"],
+          ["size_bytes", "サイズ"],
+          ["modified_at", "更新"],
+          ["path", "パス"],
+        ]}
+      />
+      <p className="muted">ここにあるMarkdownは `local_docs/reports` 配下のローカル生成物です。Gitには含めません。</p>
+    </section>
+  );
+}
+
 function ReportResult({ data }: { data: Json }) {
   const markdownState = useAsync<Json>();
   const saveMarkdownState = useAsync<Json>();
+  const markdownLibraryState = useAsync<Json>();
   const [markdownNotice, setMarkdownNotice] = useState("");
   const [markdownActionError, setMarkdownActionError] = useState<string | null>(null);
   const kpis = Array.isArray(data.kpis) ? data.kpis : [];
@@ -1648,8 +1682,16 @@ function ReportResult({ data }: { data: Json }) {
       const indexed = asJson(result.indexed);
       const chunks = indexed?.chunks_indexed ?? "-";
       setMarkdownNotice(`ローカル保存しました: ${String(result.saved_path)} / RAG ${String(chunks)}チャンク`);
+      void loadMarkdownLibrary();
     }
   };
+  const loadMarkdownLibrary = () =>
+    markdownLibraryState.run(() =>
+      api<Json>("/api/reports/investment-monthly/markdown/library", {
+        output_dir: "local_docs/reports",
+        limit: 20,
+      }),
+    );
   return (
     <div className="report-print-area">
       <ResultBlock title={String(data.title ?? "投資月次レポート")} meta={auditOk ? "監査OK" : auditStatus}>
@@ -1662,16 +1704,18 @@ function ReportResult({ data }: { data: Json }) {
             <button onClick={() => void copyMarkdown()}>コピー</button>
             <button onClick={() => void downloadMarkdown()}>.md保存</button>
             <button onClick={() => void saveMarkdownToRag()}>RAG保存</button>
+            <button onClick={() => void loadMarkdownLibrary()}>保存一覧</button>
           </div>
           <span>
             PDFは印刷保存、.md保存は端末へのダウンロード、RAG保存はlocal_docs/reportsへ登録します。
           </span>
         </div>
         <Status
-          loading={markdownState.loading || saveMarkdownState.loading}
-          error={markdownState.error || saveMarkdownState.error || markdownActionError}
+          loading={markdownState.loading || saveMarkdownState.loading || markdownLibraryState.loading}
+          error={markdownState.error || saveMarkdownState.error || markdownLibraryState.error || markdownActionError}
         />
         {markdownNotice && <p className="notice safe">{markdownNotice}</p>}
+        {markdownLibraryState.data && <ReportMarkdownLibrary data={markdownLibraryState.data} />}
         {markdown && (
           <details className="markdown-preview">
             <summary>Markdownを確認</summary>
@@ -1984,6 +2028,14 @@ function formatRows(item: Json): string {
     return `${String(item.row_count)}件${tickerCount}`;
   }
   return "-";
+}
+
+function formatBytes(value: unknown): string {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "-";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toLocaleString("ja-JP", { maximumFractionDigits: 1 })} KB`;
+  return `${(bytes / (1024 * 1024)).toLocaleString("ja-JP", { maximumFractionDigits: 1 })} MB`;
 }
 
 function formatFreshness(item: Json): string {

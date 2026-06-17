@@ -929,6 +929,10 @@ _ROUTES: dict[tuple[str, str], Handler] = {
         "POST",
         "/api/reports/investment-monthly/markdown/save",
     ): report_api.investment_report_markdown_save,
+    (
+        "POST",
+        "/api/reports/investment-monthly/markdown/library",
+    ): report_api.investment_report_markdown_library,
     ("GET", "/api/reports/investment-monthly/history"): report_api.investment_report_history,
     ("POST", "/api/reports/investment-monthly/history"): report_api.investment_report_history,
     (
