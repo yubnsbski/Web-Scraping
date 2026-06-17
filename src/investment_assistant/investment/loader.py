@@ -321,7 +321,9 @@ def _csv_body(text: str) -> str:
 
 
 def _read_rows(text: str, *, required: tuple[str, ...]) -> list[dict[str, str]]:
-    reader = csv.DictReader(io.StringIO(_csv_body(text)))
+    # newline="" lets csv handle CRLF / lone-CR (Excel exports) without raising
+    # "new-line character seen in unquoted field".
+    reader = csv.DictReader(io.StringIO(_csv_body(text), newline=""))
     fieldnames = set(reader.fieldnames or [])
     missing = [column for column in required if column not in fieldnames]
     if missing:
@@ -351,7 +353,7 @@ def _payload_holding_fieldnames(payload: Mapping[str, object]) -> set[str] | Non
 
 
 def _csv_fieldnames(text: str) -> set[str]:
-    reader = csv.DictReader(io.StringIO(_csv_body(text)))
+    reader = csv.DictReader(io.StringIO(_csv_body(text), newline=""))
     return {str(field) for field in (reader.fieldnames or [])}
 
 

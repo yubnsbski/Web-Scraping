@@ -84,7 +84,9 @@ def parse_jpx_rows(text: str) -> list[dict[str, str]]:
     """Parse JPX listed-issues CSV text into ``{code, name, segment}`` rows."""
 
     body = text.strip().lstrip("﻿")
-    reader = csv.DictReader(io.StringIO(body))
+    # newline="" lets csv handle CRLF / lone-CR endings (Excel exports) itself;
+    # without it a stray CR raises "new-line character seen in unquoted field".
+    reader = csv.DictReader(io.StringIO(body, newline=""))
     rows: list[dict[str, str]] = []
     for raw in reader:
         code = _normalize_code(_pick(raw, _CODE_KEYS))
@@ -174,7 +176,7 @@ def load_domestic_universe_tickers(
     """Read tickers back from a built universe CSV, filtered by scope."""
 
     raw = Path(path).read_bytes()
-    reader = csv.DictReader(io.StringIO(_decode_bytes(raw).strip().lstrip("﻿")))
+    reader = csv.DictReader(io.StringIO(_decode_bytes(raw).strip().lstrip("﻿"), newline=""))
     marker = _scope_marker(scope)
     out: list[str] = []
     seen: set[str] = set()

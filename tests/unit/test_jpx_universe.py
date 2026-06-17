@@ -43,6 +43,26 @@ def test_bom_and_pre_suffixed_codes_are_normalized() -> None:
     assert ju.domestic_tickers(bom_csv, scope="domestic") == ["7203"]
 
 
+def test_crlf_and_lone_cr_line_endings_parse() -> None:
+    header = "コード,銘柄名,市場・商品区分"
+    body = ["7203,トヨタ,プライム（内国株式）", "8306,三菱UFJ,プライム（内国株式）"]
+    crlf = "\r\n".join([header, *body]) + "\r\n"
+    lone_cr = "\r".join([header, *body]) + "\r"  # Excel/Mac exports; previously crashed
+    assert ju.domestic_tickers(crlf, scope="domestic") == ["7203", "8306"]
+    assert ju.domestic_tickers(lone_cr, scope="domestic") == ["7203", "8306"]
+
+
+def test_build_universe_from_lone_cr_file(tmp_path: Path) -> None:
+    header = "コード,銘柄名,市場・商品区分"
+    text = "\r".join([header, "7203,トヨタ,プライム（内国株式）"]) + "\r"
+    src = tmp_path / "data_j.csv"
+    src.write_bytes(text.encode("cp932"))
+    out = tmp_path / "uni.csv"
+    summary = ju.build_domestic_universe_csv(src, output_path=out, scope="domestic")
+    assert summary["ticker_count"] == 1
+    assert ju.load_domestic_universe_tickers(out, scope="domestic") == ["7203"]
+
+
 def test_build_and_reload_universe_csv_round_trips(tmp_path: Path) -> None:
     # Source written as CP932 (Shift_JIS), as the real JPX export is.
     src = tmp_path / "data_j.csv"
