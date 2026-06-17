@@ -37,6 +37,12 @@
    ```
 
    `--scope` は `domestic|all|prime|standard|growth`。市場区分で絞り込める。
+
+   > Windows PowerShell では行継続が `\` ではなくバッククオート `` ` `` のため、**1行で書く**のが安全:
+   > ```powershell
+   > investment-assistant market-universe-build --jpx data_j.csv --output local_docs/market/domestic_universe.csv --scope domestic
+   > ```
+
 3. 既定パス（`local_docs/market/domestic_universe.csv`）以外に置く場合は環境変数で指定:
 
    ```bash
@@ -53,6 +59,12 @@
      --tickers $(cut -d, -f1 local_docs/market/domestic_universe.csv | tail -n +2 | paste -sd,) \
      --max 0 --range 1mo --output-dir local_docs/market/ohlcv
    ```
+
+   > Windows PowerShell の場合（`curl` は `Invoke-WebRequest` のエイリアスなので別構文）:
+   > ```powershell
+   > Invoke-RestMethod -Uri http://localhost:8000/api/market/bars/universe `
+   >   -Method Post -ContentType 'application/json' -Body '{"universe":"domestic"}'
+   > ```
 
 > 注: 隔離実行環境（外向きHTTPが403/遮断）では手順4は空になる。その場合は許可付きのネットワークポリシーで環境を作り直すか、手元の通信可能な環境で実行する。ユニバース構築（手順1–3）はネットワーク不要。
 
