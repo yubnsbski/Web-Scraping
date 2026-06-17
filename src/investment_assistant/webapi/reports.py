@@ -8,12 +8,16 @@ payloads into those deterministic calls.
 
 from __future__ import annotations
 
+import re
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
 from investment_assistant.webapi.errors import ApiError
 
 JsonDict = dict[str, Any]
+_DEFAULT_REPORT_DOCS_DIR = Path("local_docs") / "reports"
 
 
 def investment_monthly_report(body: JsonDict) -> JsonDict:
@@ -121,6 +125,35 @@ def investment_report_markdown(body: JsonDict) -> JsonDict:
     }
 
 
+def investment_report_markdown_save(body: JsonDict) -> JsonDict:
+    from investment_assistant import cli
+    from investment_assistant.investment.report_markdown import render_investment_report_markdown
+    from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+
+    report = _report_from_body_or_history(body)
+    markdown = render_investment_report_markdown(report)
+    output_dir = _safe_report_docs_dir(body.get("output_dir"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_path = _unique_path(output_dir / _report_markdown_filename(report, body.get("filename")))
+    save_path.write_text(markdown, encoding="utf-8")
+
+    index_after_save = _as_bool(body.get("index_after_save"), True)
+    indexed = None
+    if index_after_save:
+        indexed = cli.run_rag_index(
+            path=save_path,
+            db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
+        )
+    return {
+        "saved_path": str(save_path),
+        "chars": len(markdown),
+        "index_after_save": index_after_save,
+        "indexed": indexed,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def investment_report_audit(body: JsonDict) -> JsonDict:
     from investment_assistant.investment.report_audit import audit_investment_report
 
@@ -174,6 +207,38 @@ def _entry_history_summary(entry: JsonDict) -> JsonDict:
         if entry.get(key) is not None:
             out[key] = entry.get(key)
     return out
+
+
+def _safe_report_docs_dir(raw: object) -> Path:
+    value = str(raw or _DEFAULT_REPORT_DOCS_DIR).strip() or str(_DEFAULT_REPORT_DOCS_DIR)
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ApiError("output_dir must be a relative path under local_docs")
+    if not path.parts or path.parts[0] != "local_docs":
+        raise ApiError("output_dir must be under local_docs")
+    return path
+
+
+def _report_markdown_filename(report: JsonDict, raw: object) -> str:
+    if isinstance(raw, str) and raw.strip():
+        stem = Path(raw.strip()).stem
+    else:
+        history = report.get("history")
+        report_id = ""
+        if isinstance(history, dict):
+            report_id = str(history.get("id") or "")
+        generated = str(report.get("generated_at") or "")
+        stamp = generated[:19].replace(":", "").replace("-", "").replace("T", "-")
+        stem = f"investment-report-{report_id or stamp or 'latest'}"
+    safe_stem = re.sub(r"[^0-9A-Za-z_.-]+", "-", stem).strip("-_.")
+    return f"{safe_stem or 'investment-report'}.md"
+
+
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    return path.with_name(f"{path.stem}-{stamp}{path.suffix}")
 
 
 def _target_planner_holdings(holdings: list[Any]) -> list[dict[str, object]]:

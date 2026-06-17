@@ -422,6 +422,16 @@ def test_manual_doc_save_requires_text() -> None:
     assert "text" in payload["error"]
 
 
+def test_report_markdown_save_rejects_non_local_docs_output() -> None:
+    status, payload = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/markdown/save",
+        {"report": {"title": "sample"}, "output_dir": "../outside"},
+    )
+    assert status == 400
+    assert "local_docs" in payload["error"]
+
+
 def test_scoring_rank_from_csv_text() -> None:
     status, payload = handle_api("POST", "/api/scoring/rank", {"csv_text": SCORING_CSV, "limit": 2})
     assert status == 200
@@ -529,7 +539,9 @@ def test_portfolio_target_reverse_calc_endpoint() -> None:
     assert body["target"]["reachable"] is True
 
 
-def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) -> None:
+def test_investment_mvp_routes_import_analyze_screen_and_report(
+    tmp_path: Path, monkeypatch
+) -> None:
     holdings_csv = (
         "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,"
         "source,current_price,annual_income,distribution_per_unit\n"
@@ -746,6 +758,31 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(tmp_path: Path) 
     assert "market_value" in markdown["markdown"]
     assert "portfolio.concentration.current" in markdown["markdown"]
     assert "## Disclaimer" in markdown["markdown"]
+
+    monkeypatch.chdir(tmp_path)
+    report_rag_db = tmp_path / "report_rag.sqlite"
+    status, saved_markdown = handle_api(
+        "POST",
+        "/api/reports/investment-monthly/markdown/save",
+        {
+            "history_dir": str(tmp_path / "report_history"),
+            "id": history_summary["id"],
+            "output_dir": "local_docs/reports",
+            "db_path": str(report_rag_db),
+        },
+    )
+    assert status == 200
+    assert Path(saved_markdown["saved_path"]).is_file()
+    assert saved_markdown["index_after_save"] is True
+    assert saved_markdown["indexed"]["chunks_indexed"] >= 1
+
+    status, saved_search = handle_api(
+        "POST",
+        "/api/rag/search",
+        {"query": "market_value", "db_path": str(report_rag_db)},
+    )
+    assert status == 200
+    assert saved_search["results"]
 
     higher_price_csv = holdings_csv.replace("user_csv,1200,,", "user_csv,1300,,")
     status, newer_report = handle_api(
