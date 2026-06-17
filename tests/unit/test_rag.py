@@ -183,6 +183,10 @@ def test_search_results_include_front_matter_metadata_in_context(tmp_path) -> No
     path.write_text(
         "---\n"
         'source_url: "https://example.com/funds"\n'
+        "doc_type: investment_report\n"
+        'title: "KDDI monthly report"\n'
+        "report_id: report-202606\n"
+        "integrity_status: ok\n"
         "fetched_at: 2026-06-06T00:00:00Z\n"
         "status_code: 200\n"
         'content_type: "text/html; charset=utf-8"\n'
@@ -208,8 +212,13 @@ def test_search_results_include_front_matter_metadata_in_context(tmp_path) -> No
     context = build_answer_context(results)
 
     assert results[0].metadata["source_url"] == "https://example.com/funds"
+    assert results[0].metadata["doc_type"] == "investment_report"
+    assert results[0].metadata["report_id"] == "report-202606"
     assert results[0].metadata["fetched_at"] == "2026-06-06T00:00:00Z"
     assert "source_url=https://example.com/funds" in context
+    assert "doc_type=investment_report" in context
+    assert "report_id=report-202606" in context
+    assert "integrity_status=ok" in context
     assert "fetched_at=2026-06-06T00:00:00Z" in context
     assert "status_code=200" in context
     assert "content_type=text/html; charset=utf-8" in context

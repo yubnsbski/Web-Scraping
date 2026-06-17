@@ -12,14 +12,17 @@ def render_investment_report_markdown(report: Mapping[str, object]) -> str:
     """Render a generated investment report as review-friendly Markdown."""
 
     publish_audit = _mapping(report.get("publish_audit"))
-    lines = [
-        f"# {_text(report.get('title'), 'Investment monthly report')}",
-        "",
-        f"- generated_at: {_text(report.get('generated_at'), '-')}",
-        f"- auto_trading: {_bool_text(report.get('auto_trading'))}",
-        f"- call_real_api: {_bool_text(report.get('call_real_api'))}",
-        "",
-    ]
+    lines = _front_matter_lines(report)
+    lines.extend(
+        [
+            f"# {_text(report.get('title'), 'Investment monthly report')}",
+            "",
+            f"- generated_at: {_text(report.get('generated_at'), '-')}",
+            f"- auto_trading: {_bool_text(report.get('auto_trading'))}",
+            f"- call_real_api: {_bool_text(report.get('call_real_api'))}",
+            "",
+        ]
+    )
     _extend_saved_report(lines, report)
     lines.extend(
         [
@@ -95,6 +98,38 @@ def render_investment_report_markdown(report: Mapping[str, object]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _front_matter_lines(report: Mapping[str, object]) -> list[str]:
+    history = _mapping(report.get("history"))
+    values: dict[str, object] = {
+        "doc_type": "investment_report",
+        "title": _text(report.get("title"), "Investment monthly report"),
+        "generated_at": _text(report.get("generated_at"), "-"),
+        "auto_trading": _bool_text(report.get("auto_trading")),
+        "call_real_api": _bool_text(report.get("call_real_api")),
+    }
+    if history is not None:
+        values.update(
+            {
+                "report_id": _text(history.get("id"), "-"),
+                "saved_at": _text(history.get("saved_at"), "-"),
+                "integrity_status": _text(history.get("integrity_status"), "unknown"),
+                "report_hash": _text(history.get("report_hash"), "-"),
+            }
+        )
+    lines = ["---"]
+    for key, value in values.items():
+        if str(value).lower() in {"true", "false"}:
+            lines.append(f"{key}: {str(value).lower()}")
+        else:
+            lines.append(f'{key}: "{_front_matter_value(value)}"')
+    lines.extend(["---", ""])
+    return lines
+
+
+def _front_matter_value(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _extend_saved_report(lines: list[str], report: Mapping[str, object]) -> None:

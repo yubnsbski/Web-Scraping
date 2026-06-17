@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
 
 from investment_assistant.rag.embeddings import Embedder, HashingEmbedder, cosine
 from investment_assistant.rag.store import RagStore, StoredChunk
 from investment_assistant.rag.tokenize import tokenize
 
-_CONTEXT_METADATA_KEYS = ("source_url", "fetched_at", "status_code", "content_type")
+_CONTEXT_METADATA_KEYS = (
+    "source_url",
+    "fetched_at",
+    "status_code",
+    "content_type",
+    "doc_type",
+    "title",
+    "report_id",
+    "saved_at",
+    "integrity_status",
+    "generated_at",
+)
 DEFAULT_MAX_CONTEXT_CHARS = 10000
 DEFAULT_HYBRID_ALPHA = 0.5
 # Near-duplicate threshold (token Jaccard) for diversity selection.
@@ -26,6 +39,47 @@ class SearchResult:
     score: float
     text: str
     metadata: dict[str, str] = field(default_factory=dict)
+
+
+def search_result_to_dict(result: SearchResult) -> dict[str, Any]:
+    """Return a JSON-friendly result with a compact citation object."""
+
+    return {
+        "chunk_id": result.chunk_id,
+        "source": result.source,
+        "chunk_index": result.chunk_index,
+        "score": result.score,
+        "text": result.text,
+        "metadata": dict(result.metadata),
+        "citation": citation_for_result(result),
+    }
+
+
+def citation_for_result(result: SearchResult) -> dict[str, Any]:
+    """Build a stable citation label for local files and saved reports."""
+
+    metadata = result.metadata
+    title = metadata.get("title") or _source_title(result.source)
+    report_id = metadata.get("report_id") or ""
+    label_parts = [title]
+    if report_id:
+        label_parts.append(f"id {report_id}")
+    label_parts.append(f"chunk {result.chunk_index}")
+    return {
+        "label": " / ".join(label_parts),
+        "title": title,
+        "source": result.source,
+        "chunk_index": result.chunk_index,
+        "chunk_id": result.chunk_id,
+        "score": result.score,
+        "doc_type": metadata.get("doc_type"),
+        "source_url": metadata.get("source_url"),
+        "fetched_at": metadata.get("fetched_at"),
+        "report_id": metadata.get("report_id"),
+        "saved_at": metadata.get("saved_at"),
+        "integrity_status": metadata.get("integrity_status"),
+        "generated_at": metadata.get("generated_at"),
+    }
 
 
 def search_chunks(store: RagStore, *, query: str, limit: int = 5) -> list[SearchResult]:
@@ -277,6 +331,11 @@ def _format_context_header(index: int, result: SearchResult) -> str:
         if result.metadata.get(key)
     )
     return f"{base} {metadata}" if metadata else base
+
+
+def _source_title(source: str) -> str:
+    name = Path(source).name
+    return Path(name).stem or source
 
 
 def _score_chunk(chunk: StoredChunk, terms: list[str]) -> int:
