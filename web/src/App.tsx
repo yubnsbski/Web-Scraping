@@ -1584,6 +1584,7 @@ function ReportHistoryComparison({ data }: { data: Json }) {
 
 function ReportResult({ data }: { data: Json }) {
   const markdownState = useAsync<Json>();
+  const saveMarkdownState = useAsync<Json>();
   const [markdownNotice, setMarkdownNotice] = useState("");
   const [markdownActionError, setMarkdownActionError] = useState<string | null>(null);
   const kpis = Array.isArray(data.kpis) ? data.kpis : [];
@@ -1633,6 +1634,22 @@ function ReportResult({ data }: { data: Json }) {
       setMarkdownActionError(caught instanceof Error ? caught.message : String(caught));
     }
   };
+  const saveMarkdownToRag = async () => {
+    setMarkdownNotice("");
+    setMarkdownActionError(null);
+    const result = await saveMarkdownState.run(() =>
+      api<Json>("/api/reports/investment-monthly/markdown/save", {
+        report: data,
+        output_dir: "local_docs/reports",
+        index_after_save: true,
+      }),
+    );
+    if (result?.saved_path) {
+      const indexed = asJson(result.indexed);
+      const chunks = indexed?.chunks_indexed ?? "-";
+      setMarkdownNotice(`ローカル保存しました: ${String(result.saved_path)} / RAG ${String(chunks)}チャンク`);
+    }
+  };
   return (
     <div className="report-print-area">
       <ResultBlock title={String(data.title ?? "投資月次レポート")} meta={auditOk ? "監査OK" : auditStatus}>
@@ -1644,10 +1661,16 @@ function ReportResult({ data }: { data: Json }) {
             <button onClick={() => void generateMarkdown()}>Markdown生成</button>
             <button onClick={() => void copyMarkdown()}>コピー</button>
             <button onClick={() => void downloadMarkdown()}>.md保存</button>
+            <button onClick={() => void saveMarkdownToRag()}>RAG保存</button>
           </div>
-          <span>PDFは印刷保存、Markdownはレビューや後編集に使えます。数値・根拠・免責を同じ内容で出力します。</span>
+          <span>
+            PDFは印刷保存、.md保存は端末へのダウンロード、RAG保存はlocal_docs/reportsへ登録します。
+          </span>
         </div>
-        <Status loading={markdownState.loading} error={markdownState.error || markdownActionError} />
+        <Status
+          loading={markdownState.loading || saveMarkdownState.loading}
+          error={markdownState.error || saveMarkdownState.error || markdownActionError}
+        />
         {markdownNotice && <p className="notice safe">{markdownNotice}</p>}
         {markdown && (
           <details className="markdown-preview">
