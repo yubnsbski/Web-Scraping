@@ -6,6 +6,7 @@ type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" 
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 
 const FINANCIALS_PATH = "examples/financials_sample.csv";
+const DEFAULT_CHAT_QUERY = "KDDIの配当利回りと根拠を、投資助言にならない形で確認して";
 
 const SAMPLE_HOLDINGS_CSV = [
   "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of",
@@ -41,6 +42,7 @@ export function App() {
   const [analysis, setAnalysis] = useState<Json | null>(null);
   const [candidates, setCandidates] = useState<Json | null>(null);
   const [report, setReport] = useState<Json | null>(null);
+  const [chatQuery, setChatQuery] = useState(DEFAULT_CHAT_QUERY);
   const [detailRequest, setDetailRequest] = useState<DetailRequest>({
     code: "8306",
     assetType: "stock",
@@ -147,8 +149,15 @@ export function App() {
             onReport={setReport}
           />
         )}
-        {tab === "rag" && <RagSearchPanel />}
-        {tab === "chat" && <ChatPanel />}
+        {tab === "rag" && (
+          <RagSearchPanel
+            onAskQuery={(value) => {
+              setChatQuery(value);
+              setTab("chat");
+            }}
+          />
+        )}
+        {tab === "chat" && <ChatPanel draftQuery={chatQuery} onDraftQuery={setChatQuery} />}
       </main>
     </div>
   );
@@ -1055,7 +1064,7 @@ function ReportPanel(props: {
   );
 }
 
-function RagSearchPanel() {
+function RagSearchPanel(props: { onAskQuery: (value: string) => void }) {
   const [query, setQuery] = useState("配当 利回り 根拠");
   const [dbPath, setDbPath] = useState(".cache/investment_assistant/rag.sqlite");
   const [limit, setLimit] = useState("8");
@@ -1073,6 +1082,10 @@ function RagSearchPanel() {
         hybrid,
       }),
     );
+
+  const sendToChat = () => {
+    props.onAskQuery(buildRagChatPrompt(query, results));
+  };
 
   const refreshStats = () =>
     statsState.run(() =>
@@ -1114,6 +1127,7 @@ function RagSearchPanel() {
         <button className="primary" onClick={() => void search()}>
           検索
         </button>
+        <button onClick={sendToChat}>AI確認へ送る</button>
         <button onClick={() => void refreshStats()}>索引を確認</button>
       </ActionRow>
       <Status loading={searchState.loading || statsState.loading} error={searchState.error || statsState.error} />
@@ -1170,10 +1184,17 @@ function RagSearchResults({ results }: { results: Json[] }) {
   );
 }
 
-function ChatPanel() {
-  const [query, setQuery] = useState("KDDIの配当利回りと根拠を、投資助言にならない形で確認して");
+function ChatPanel(props: { draftQuery: string; onDraftQuery: (value: string) => void }) {
+  const [query, setQuery] = useState(props.draftQuery);
   const state = useAsync<Json>();
   const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
+  useEffect(() => {
+    setQuery(props.draftQuery);
+  }, [props.draftQuery]);
+  const updateQuery = (value: string) => {
+    setQuery(value);
+    props.onDraftQuery(value);
+  };
   const ask = () =>
     state.run(() =>
       api<Json>("/api/rag/answer", {
@@ -1185,7 +1206,7 @@ function ChatPanel() {
   return (
     <section className="screen">
       <ScreenTitle title="AI確認" body="RAGの根拠を確認するための補助チャットです。数値判断は決定論エンジンを優先します。" />
-      <textarea value={query} onChange={(e) => setQuery(e.target.value)} />
+      <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
       <ActionRow>
         <button className="primary" onClick={() => void ask()}>
           確認する
@@ -2194,6 +2215,23 @@ function formatScore(value: unknown): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "-";
   return numeric.toLocaleString("ja-JP", { maximumFractionDigits: 4 });
+}
+
+function buildRagChatPrompt(query: string, results: Json[]): string {
+  const trimmedQuery = query.trim() || "RAG検索結果";
+  const citations = results
+    .slice(0, 5)
+    .map((result, index) => {
+      const citation = asJson(result.citation) ?? {};
+      const source = shortPath(String(result.source ?? ""));
+      const rawLabel = citation.label ?? source;
+      const label = String(rawLabel || `根拠${index + 1}`);
+      return `- [${index + 1}] ${label}${source ? ` / ${source}` : ""}`;
+    })
+    .filter(Boolean);
+  const citationBlock =
+    citations.length > 0 ? `\n\n確認済み根拠候補:\n${citations.join("\n")}` : "";
+  return `「${trimmedQuery}」について、RAGの根拠を引用しながら、投資助言にならない形で要点・不確実性・追加確認事項を簡潔に説明して。${citationBlock}`;
 }
 
 function previewText(value: unknown, maxLength: number): string {
