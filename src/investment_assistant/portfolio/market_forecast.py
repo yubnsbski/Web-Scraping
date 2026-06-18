@@ -93,10 +93,16 @@ def forecast_ticker(
 
     series = timeseries_from_daily_bars(daily_bars_csv, ticker)
     if len(series) < _MIN_OBSERVATIONS:
-        msg = (
-            f"not enough observations for {ticker}: {len(series)} "
-            f"(need >= {_MIN_OBSERVATIONS}); fetch a longer OHLCV range"
-        )
+        if not series:
+            msg = (
+                f"no daily-bars data for {ticker}; fetch its OHLCV first "
+                "(データ更新 → 株価四本値・出来高)"
+            )
+        else:
+            msg = (
+                f"not enough observations for {ticker}: {len(series)} "
+                f"(need >= {_MIN_OBSERVATIONS}); fetch a longer OHLCV range"
+            )
         raise ValueError(msg)
     return _forecast_from_series(
         series, horizon=horizon, include_ml=include_ml, evaluate=evaluate
