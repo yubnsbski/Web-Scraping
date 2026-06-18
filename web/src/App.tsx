@@ -983,6 +983,7 @@ function DetailPanel(props: {
   const [code, setCode] = useState(props.detailRequest.code);
   const [assetType, setAssetType] = useState<"stock" | "fund">(props.detailRequest.assetType);
   const state = useAsync<Json>();
+  const forecast = useAsync<Json>();
   const load = (targetCode = code, targetAssetType = assetType) =>
     state.run(() =>
       api<Json>("/api/investment/detail", {
@@ -1019,10 +1020,51 @@ function DetailPanel(props: {
         <button className="primary" onClick={() => void load()}>
           詳細を表示
         </button>
+        {assetType === "stock" && (
+          <button
+            className="ghost"
+            disabled={forecast.loading || !code.trim()}
+            title="取得済みのdaily_barsから次5営業日の終値を統計的に予測します"
+            onClick={() =>
+              void forecast.run(() =>
+                api<Json>("/api/market/forecast", { ticker: code.trim(), horizon: 5 }),
+              )
+            }
+          >
+            {forecast.loading ? "予測中..." : "株価予測（5日）"}
+          </button>
+        )}
       </ActionRow>
       <Status loading={state.loading} error={state.error} />
       {state.data && <DetailResult data={state.data} onMove={props.onMove} />}
+      <Status loading={forecast.loading} error={forecast.error} />
+      {forecast.data && <ForecastResult data={forecast.data} />}
     </section>
+  );
+}
+
+function ForecastResult({ data }: { data: Json }) {
+  const values: number[] = Array.isArray(data.forecast) ? (data.forecast as number[]) : [];
+  const rmse = data.backtest_rmse;
+  return (
+    <div className="detail-section rag-stats" aria-label="株価予測">
+      <h3>株価予測（統計的推定・投資助言ではありません）</h3>
+      <p className="hint">
+        直近終値 {Math.round(Number(data.last_close)).toLocaleString()} 円（{String(data.last_date)}） /
+        観測 {String(data.observations)} 営業日
+      </p>
+      <ol className="forecast-list">
+        {values.map((value, index) => (
+          <li key={index}>
+            +{index + 1}営業日後: <b>{Math.round(value).toLocaleString()} 円</b>
+          </li>
+        ))}
+      </ol>
+      <p className="hint">
+        バックテスト最良モデル: {String(data.backtest_best_model ?? "-")} / RMSE{" "}
+        {typeof rmse === "number" ? rmse.toFixed(4) : "-"}
+      </p>
+    </div>
   );
 }
 
