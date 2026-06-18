@@ -120,10 +120,31 @@ def _latest_closes(daily_bars_csv: str | Path | None) -> dict[str, tuple[str, st
     return latest
 
 
+def _forecast_line(forecast: Mapping[str, object] | None) -> str | None:
+    """One-line statistical forecast summary for an evidence note (non-advisory)."""
+
+    if not forecast:
+        return None
+    values = forecast.get("forecast")
+    if not isinstance(values, list) or not values:
+        return None
+    parts = [f"+1営業日 {round(float(values[0])):,} 円"]
+    if len(values) > 1:
+        parts.append(f"+{len(values)}営業日 {round(float(values[-1])):,} 円")
+    model = forecast.get("backtest_best_model")
+    rmse = forecast.get("backtest_rmse")
+    suffix = ""
+    if model:
+        suffix = f"（最良モデル {model}"
+        suffix += f", RMSE {rmse:.4f}）" if isinstance(rmse, int | float) else "）"
+    return "予測（統計推定・非助言）: " + " / ".join(parts) + suffix
+
+
 def render_market_evidence_markdown(
     row: Mapping[str, str],
     *,
     latest_close: tuple[str, str] | None = None,
+    forecast: Mapping[str, object] | None = None,
 ) -> str | None:
     """Render one ticker's market evidence note, or ``None`` if it has no code."""
 
@@ -159,6 +180,9 @@ def render_market_evidence_markdown(
     tags = _feature_tags(row)
     if tags:
         lines.extend(["", f"特徴: {' / '.join(tags)}"])
+    forecast_line = _forecast_line(forecast)
+    if forecast_line is not None:
+        lines.extend(["", forecast_line])
     lines.extend(
         [
             "",
@@ -174,16 +198,20 @@ def build_market_evidence_docs(
     financials_csv: str | Path,
     output_dir: str | Path,
     daily_bars_csv: str | Path | None = None,
+    include_forecast: bool = False,
+    forecast_horizon: int = 5,
 ) -> JsonDict:
     """Write one Markdown evidence note per ticker; return a summary.
 
     The notes land in ``output_dir`` as ``<ticker>.md`` (stable source per
     ticker, so re-running refreshes rather than duplicates), ready for
-    ``rag-index-dir`` to ingest.
+    ``rag-index-dir`` to ingest. With ``include_forecast`` and a daily-bars CSV,
+    each note also carries a statistical next-horizon forecast.
     """
 
     rows = _read_csv(financials_csv)
     closes = _latest_closes(daily_bars_csv)
+    forecasts = _forecasts_for(daily_bars_csv, include_forecast, forecast_horizon)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -193,7 +221,9 @@ def build_market_evidence_docs(
         ticker = _pick(row, _FIN_TICKER_KEYS)
         if not ticker or ticker in seen:
             continue
-        markdown = render_market_evidence_markdown(row, latest_close=closes.get(ticker))
+        markdown = render_market_evidence_markdown(
+            row, latest_close=closes.get(ticker), forecast=forecasts.get(ticker)
+        )
         if markdown is None:
             continue
         seen.add(ticker)
@@ -206,6 +236,21 @@ def build_market_evidence_docs(
         "output_dir": str(out),
         "documents_written": written,
         "with_daily_close": bool(closes),
+        "with_forecast": bool(forecasts),
         "auto_trading": False,
         "call_real_api": False,
     }
+
+
+def _forecasts_for(
+    daily_bars_csv: str | Path | None, include_forecast: bool, horizon: int
+) -> dict[str, dict[str, object]]:
+    if not include_forecast or daily_bars_csv is None or not Path(daily_bars_csv).is_file():
+        return {}
+    # Imported lazily so the (optional) forecasting dependency stays off the
+    # default evidence-build path.
+    from investment_assistant.portfolio.market_forecast import forecast_all_tickers
+
+    return forecast_all_tickers(
+        daily_bars_csv, horizon=horizon, include_ml=False, evaluate=True
+    )

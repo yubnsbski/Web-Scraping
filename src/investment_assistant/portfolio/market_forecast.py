@@ -98,7 +98,14 @@ def forecast_ticker(
             f"(need >= {_MIN_OBSERVATIONS}); fetch a longer OHLCV range"
         )
         raise ValueError(msg)
+    return _forecast_from_series(
+        series, horizon=horizon, include_ml=include_ml, evaluate=evaluate
+    )
 
+
+def _forecast_from_series(
+    series: TimeSeries, *, horizon: int, include_ml: bool, evaluate: bool
+) -> JsonDict:
     forecast = run_forecast(series, horizon=max(int(horizon), 1), include_ml=include_ml)
     result: JsonDict = {
         "ticker": series.name,
@@ -131,3 +138,56 @@ def forecast_ticker(
         except (ValueError, ZeroDivisionError):
             result["backtest_rmse"] = None
     return result
+
+
+def _series_map_from_daily_bars(daily_bars_csv: str | Path) -> dict[str, TimeSeries]:
+    """Read the daily-bars CSV once and return a close-price series per ticker."""
+
+    groups: dict[str, list[tuple[str, float]]] = {}
+    for row in _read_rows(daily_bars_csv):
+        ticker = _normalize_ticker(_ticker_of(row))
+        date = str(row.get("date") or "").strip()
+        close_text = str(row.get("close") or "").strip()
+        if not ticker or not date or not close_text:
+            continue
+        try:
+            close = float(close_text.replace(",", ""))
+        except ValueError:
+            continue
+        if close > 0:
+            groups.setdefault(ticker, []).append((date, close))
+    out: dict[str, TimeSeries] = {}
+    for ticker, points in groups.items():
+        points.sort(key=lambda item: item[0])
+        out[ticker] = TimeSeries(
+            dates=tuple(d for d, _ in points),
+            values=tuple(c for _, c in points),
+            name=ticker,
+        )
+    return out
+
+
+def forecast_all_tickers(
+    daily_bars_csv: str | Path,
+    *,
+    horizon: int = 5,
+    include_ml: bool = True,
+    evaluate: bool = False,
+) -> dict[str, JsonDict]:
+    """Forecast every ticker in the daily-bars CSV that has enough history.
+
+    Reads the CSV once. Tickers with too few observations (or that raise during
+    fitting) are skipped rather than aborting the batch.
+    """
+
+    out: dict[str, JsonDict] = {}
+    for ticker, series in _series_map_from_daily_bars(daily_bars_csv).items():
+        if len(series) < _MIN_OBSERVATIONS:
+            continue
+        try:
+            out[ticker] = _forecast_from_series(
+                series, horizon=horizon, include_ml=include_ml, evaluate=evaluate
+            )
+        except (ValueError, ZeroDivisionError):
+            continue
+    return out
