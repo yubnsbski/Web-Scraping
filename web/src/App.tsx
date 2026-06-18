@@ -4,7 +4,8 @@ import { api } from "./api";
 type Json = Record<string, any>;
 type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" | "rag" | "chat";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
-type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[] };
+type RagSearchDraft = { query: string; dbPath: string; limit: string; version: number };
+type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[]; searchQuery?: string };
 
 const FINANCIALS_PATH = "examples/financials_sample.csv";
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
@@ -45,6 +46,12 @@ export function App() {
   const [analysis, setAnalysis] = useState<Json | null>(null);
   const [candidates, setCandidates] = useState<Json | null>(null);
   const [report, setReport] = useState<Json | null>(null);
+  const [ragDraft, setRagDraft] = useState<RagSearchDraft>({
+    query: "配当 利回り 根拠",
+    dbPath: DEFAULT_RAG_DB_PATH,
+    limit: "8",
+    version: 0,
+  });
   const [chatDraft, setChatDraft] = useState<ChatDraft>({
     query: DEFAULT_CHAT_QUERY,
     dbPath: DEFAULT_RAG_DB_PATH,
@@ -158,13 +165,24 @@ export function App() {
         )}
         {tab === "rag" && (
           <RagSearchPanel
+            draft={ragDraft}
+            onDraftChange={setRagDraft}
             onAskDraft={(draft) => {
               setChatDraft(draft);
               setTab("chat");
             }}
           />
         )}
-        {tab === "chat" && <ChatPanel draft={chatDraft} onDraftChange={setChatDraft} />}
+        {tab === "chat" && (
+          <ChatPanel
+            draft={chatDraft}
+            onDraftChange={setChatDraft}
+            onSearchAgain={(draft) => {
+              setRagDraft(draft);
+              setTab("rag");
+            }}
+          />
+        )}
       </main>
     </div>
   );
@@ -1071,16 +1089,22 @@ function ReportPanel(props: {
   );
 }
 
-function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
-  const [query, setQuery] = useState("配当 利回り 根拠");
-  const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
-  const [limit, setLimit] = useState("8");
+function RagSearchPanel(props: {
+  draft: RagSearchDraft;
+  onDraftChange: (value: RagSearchDraft) => void;
+  onAskDraft: (value: ChatDraft) => void;
+}) {
+  const { draft } = props;
+  const { query, dbPath, limit } = draft;
   const [hybrid, setHybrid] = useState(true);
   const [selectedEvidence, setSelectedEvidence] = useState<Record<string, boolean>>({});
   const searchState = useAsync<Json>();
   const statsState = useAsync<Json>();
   const results = Array.isArray(searchState.data?.results) ? (searchState.data.results as Json[]) : [];
   const selectedResults = results.filter((result, index) => selectedEvidence[ragResultKey(result, index)] !== false);
+  const updateDraft = (patch: Partial<Omit<RagSearchDraft, "version">>) => {
+    props.onDraftChange({ ...draft, ...patch });
+  };
 
   const search = () =>
     searchState.run(() =>
@@ -1098,6 +1122,7 @@ function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
       dbPath,
       limit: Number(limit) || DEFAULT_CHAT_LIMIT,
       evidence: selectedResults,
+      searchQuery: query,
     });
   };
 
@@ -1126,19 +1151,19 @@ function RagSearchPanel(props: { onAskDraft: (value: ChatDraft) => void }) {
       />
       <div className="form-grid">
         <Field label="検索語">
-          <input value={query} onChange={(event) => setQuery(event.target.value)} />
+          <input value={query} onChange={(event) => updateDraft({ query: event.target.value })} />
         </Field>
         <Field label="RAG DB">
-          <input value={dbPath} onChange={(event) => setDbPath(event.target.value)} />
+          <input value={dbPath} onChange={(event) => updateDraft({ dbPath: event.target.value })} />
         </Field>
         <Field label="件数">
-          <input value={limit} onChange={(event) => setLimit(event.target.value)} inputMode="numeric" />
+          <input value={limit} onChange={(event) => updateDraft({ limit: event.target.value })} inputMode="numeric" />
         </Field>
         <Check label="ハイブリッド検索" checked={hybrid} onChange={setHybrid} />
       </div>
       <div className="quick-queries" aria-label="検索例">
         {["配当 利回り 根拠", "market_value", "NISA 枠", "集中リスク", "integrity_status ok"].map((item) => (
-          <button key={item} className="table-action" onClick={() => setQuery(item)}>
+          <button key={item} className="table-action" onClick={() => updateDraft({ query: item })}>
             {item}
           </button>
         ))}
@@ -1229,7 +1254,11 @@ function RagSearchResults(props: {
   );
 }
 
-function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) => void }) {
+function ChatPanel(props: {
+  draft: ChatDraft;
+  onDraftChange: (value: ChatDraft) => void;
+  onSearchAgain: (value: RagSearchDraft) => void;
+}) {
   const [query, setQuery] = useState(props.draft.query);
   const [dbPath, setDbPath] = useState(props.draft.dbPath);
   const [limit, setLimit] = useState(String(props.draft.limit));
@@ -1249,6 +1278,7 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
       dbPath,
       limit: Number(limit) || DEFAULT_CHAT_LIMIT,
       evidence: props.draft.evidence,
+      searchQuery: props.draft.searchQuery,
     });
   };
   const updateDbPath = (value: string) => {
@@ -1258,6 +1288,7 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
       dbPath: value,
       limit: Number(limit) || DEFAULT_CHAT_LIMIT,
       evidence: props.draft.evidence,
+      searchQuery: props.draft.searchQuery,
     });
   };
   const updateLimit = (value: string) => {
@@ -1267,6 +1298,15 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
       dbPath,
       limit: Number(value) || DEFAULT_CHAT_LIMIT,
       evidence: props.draft.evidence,
+      searchQuery: props.draft.searchQuery,
+    });
+  };
+  const searchAgain = () => {
+    props.onSearchAgain({
+      query: props.draft.searchQuery ?? suggestedRagQueryFromChat(query),
+      dbPath,
+      limit: String(Number(limit) || DEFAULT_CHAT_LIMIT),
+      version: Date.now(),
     });
   };
   const ask = () =>
@@ -1297,6 +1337,7 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
         <button className="primary" onClick={() => void ask()}>
           確認する
         </button>
+        <button onClick={searchAgain}>根拠を追加検索</button>
       </ActionRow>
       <Status loading={state.loading} error={state.error} />
       {state.data && (
@@ -2369,6 +2410,13 @@ function buildRagChatPrompt(query: string, results: Json[]): string {
   const citationBlock =
     citations.length > 0 ? `\n\n確認済み根拠候補:\n${citations.join("\n")}` : "";
   return `「${trimmedQuery}」について、RAGの根拠を引用しながら、投資助言にならない形で要点・不確実性・追加確認事項を簡潔に説明して。${citationBlock}`;
+}
+
+function suggestedRagQueryFromChat(query: string): string {
+  const trimmed = query.trim();
+  const quoted = trimmed.match(/^「(.+?)」について/);
+  if (quoted?.[1]?.trim()) return quoted[1].trim();
+  return trimmed.slice(0, 120) || "配当 利回り 根拠";
 }
 
 function ragResultKey(result: Json, index: number): string {
