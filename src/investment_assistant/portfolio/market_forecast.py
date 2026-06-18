@@ -191,3 +191,46 @@ def forecast_all_tickers(
         except (ValueError, ZeroDivisionError):
             continue
     return out
+
+
+def screen_by_forecast(
+    daily_bars_csv: str | Path,
+    *,
+    horizon: int = 5,
+    include_ml: bool = False,
+    top: int = 0,
+) -> list[JsonDict]:
+    """Rank tickers by forecast expected return over ``horizon`` (descending).
+
+    ``expected_return_pct`` is ``(forecast_close / last_close - 1) * 100`` using
+    the final forecast step. Ties break by ticker for a stable order. ``top``
+    caps the list (``0`` = all). Non-advisory statistical screen.
+    """
+
+    forecasts = forecast_all_tickers(
+        daily_bars_csv, horizon=horizon, include_ml=include_ml, evaluate=True
+    )
+    rows: list[JsonDict] = []
+    for ticker, forecast in forecasts.items():
+        values = forecast.get("forecast")
+        last_close = forecast.get("last_close")
+        if not isinstance(values, list) or not values:
+            continue
+        if not isinstance(last_close, int | float) or last_close <= 0:
+            continue
+        forecast_close = float(values[-1])
+        expected_return_pct = round((forecast_close / float(last_close) - 1.0) * 100.0, 4)
+        rows.append(
+            {
+                "ticker": ticker,
+                "last_close": float(last_close),
+                "forecast_close": round(forecast_close, 4),
+                "expected_return_pct": expected_return_pct,
+                "horizon": forecast.get("horizon"),
+                "backtest_best_model": forecast.get("backtest_best_model"),
+                "backtest_rmse": forecast.get("backtest_rmse"),
+                "observations": forecast.get("observations"),
+            }
+        )
+    rows.sort(key=lambda item: (-float(item["expected_return_pct"]), str(item["ticker"])))
+    return rows[: top] if top and top > 0 else rows

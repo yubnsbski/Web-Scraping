@@ -1488,6 +1488,22 @@ def main(argv: list[str] | None = None) -> int:
         "--no-evaluate", action="store_true", help="Skip the walk-forward RMSE backtest"
     )
 
+    forecast_screen_parser = subparsers.add_parser(
+        "market-forecast-screen",
+        help="Rank all tickers in daily_bars.csv by forecast expected return",
+    )
+    forecast_screen_parser.add_argument(
+        "--daily-bars-csv", default="local_docs/market/daily_bars.csv"
+    )
+    forecast_screen_parser.add_argument("--horizon", type=int, default=5)
+    forecast_screen_parser.add_argument("--top", type=int, default=50)
+    forecast_screen_parser.add_argument(
+        "--output", default="local_docs/market/forecast_screen.csv"
+    )
+    forecast_screen_parser.add_argument(
+        "--no-ml", action="store_true", help="Skip scikit-learn models (classical only)"
+    )
+
     rag_stats_parser = subparsers.add_parser("rag-stats")
     rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_stats_parser.add_argument(
@@ -1759,6 +1775,38 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             include_ml=not args.no_ml,
             evaluate=not args.no_evaluate,
         )
+    if command == "market-forecast-screen":
+        from investment_assistant.portfolio._market_common import render_csv
+        from investment_assistant.portfolio.market_forecast import screen_by_forecast
+
+        ranked = screen_by_forecast(
+            args.daily_bars_csv,
+            horizon=args.horizon,
+            include_ml=not args.no_ml,
+            top=args.top,
+        )
+        columns = (
+            "ticker",
+            "last_close",
+            "forecast_close",
+            "expected_return_pct",
+            "horizon",
+            "backtest_best_model",
+            "backtest_rmse",
+            "observations",
+        )
+        output_path = reject_path_traversal(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(render_csv(columns, ranked), encoding="utf-8-sig")
+        return {
+            "ranked_count": len(ranked),
+            "top": args.top,
+            "horizon": args.horizon,
+            "output_path": str(output_path),
+            "top_results": ranked[:10],
+            "auto_trading": False,
+            "call_real_api": False,
+        }
     if command == "rag-stats":
         keywords = tuple(
             keyword.strip()
