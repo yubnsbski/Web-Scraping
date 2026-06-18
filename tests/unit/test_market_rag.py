@@ -55,6 +55,42 @@ def test_render_returns_none_without_ticker() -> None:
     assert render_market_evidence_markdown({"name": "no code"}) is None
 
 
+def test_market_cap_rendered_as_readable_oku_yen() -> None:
+    md = render_market_evidence_markdown(
+        {"ticker": "9433", "name": "KDDI", "market_cap": "6300000000000"}
+    )
+    assert md is not None
+    # 6.3e12 yen -> 63,000 億円 (raw digit string is not shown).
+    assert "時価総額: 63,000 億円" in md
+    assert "6300000000000" not in md
+
+
+def test_feature_tags_for_value_and_dividend_intent() -> None:
+    md = render_market_evidence_markdown(
+        {
+            "ticker": "1",
+            "name": "X",
+            "per": "9.5",
+            "pbr": "0.9",
+            "dividend_yield_percent": "4.2",
+            "dps": "140",
+        }
+    )
+    assert md is not None
+    assert "高配当" in md
+    assert "低PER（割安圏）" in md
+    assert "PBR1倍割れ（資産妙味）" in md
+
+
+def test_no_dividend_tag_for_zero_yield() -> None:
+    md = render_market_evidence_markdown(
+        {"ticker": "130A", "name": "Growth", "dividend_yield_percent": "0", "dps": "0"}
+    )
+    assert md is not None
+    assert "無配・低配当" in md
+    assert "高配当" not in md
+
+
 def test_build_writes_one_doc_per_ticker_with_latest_close(tmp_path: Path) -> None:
     fin = tmp_path / "fin.csv"
     fin.write_text(_FIN_CSV, encoding="utf-8")
