@@ -119,6 +119,11 @@ export function App() {
           <DataUpdatePanel
             financialsPath={financialsPath}
             setFinancialsPath={setFinancialsPath}
+            ragDbPath={ragDraft.dbPath}
+            setRagDbPath={(dbPath) => {
+              setRagDraft((prev) => ({ ...prev, dbPath }));
+              setChatDraft((prev) => ({ ...prev, dbPath }));
+            }}
             onMarket={setMarketSnapshot}
             onOpenDetail={(code) => {
               setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
@@ -234,6 +239,8 @@ function Dashboard(props: {
 function DataUpdatePanel(props: {
   financialsPath: string;
   setFinancialsPath: (value: string) => void;
+  ragDbPath: string;
+  setRagDbPath: (value: string) => void;
   onMarket: (value: Json) => void;
   onOpenDetail: (code: string) => void;
 }) {
@@ -334,6 +341,11 @@ function DataUpdatePanel(props: {
         onRefresh={refreshDataView}
         onRunAction={(action) => void runInventoryAction(action)}
         runningAction={loading}
+      />
+      <RagDocumentRegisterPanel
+        dbPath={props.ragDbPath}
+        onDbPathChange={props.setRagDbPath}
+        onRegistered={refreshDataView}
       />
       <FinancialsPreviewPanel
         data={financialsPreview.data}
@@ -694,6 +706,110 @@ function DataInventory(props: {
         ))}
         {datasets.length === 0 && !props.loading && <p className="muted">まだ状態を取得していません。</p>}
       </div>
+    </section>
+  );
+}
+
+function RagDocumentRegisterPanel(props: {
+  dbPath: string;
+  onDbPathChange: (value: string) => void;
+  onRegistered: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [manualTitle, setManualTitle] = useState("投資メモ");
+  const [manualSourceUrl, setManualSourceUrl] = useState("");
+  const [manualText, setManualText] = useState("");
+  const state = useAsync<Json>();
+
+  const registerFile = async () => {
+    if (!file) return;
+    const contentBase64 = await fileToBase64(file);
+    const result = await state.run(() =>
+      api<Json>("/api/rag/index-file", {
+        filename: file.name,
+        content_base64: contentBase64,
+        db_path: props.dbPath,
+      }),
+    );
+    if (result) props.onRegistered();
+  };
+
+  const registerManualText = async () => {
+    const result = await state.run(() =>
+      api<Json>("/api/manual-doc/save", {
+        title: manualTitle,
+        source_url: manualSourceUrl,
+        text: manualText,
+        db_path: props.dbPath,
+      }),
+    );
+    if (result) {
+      setManualText("");
+      props.onRegistered();
+    }
+  };
+
+  const verification = asJson(state.data?.verification);
+  const indexed = asJson(state.data?.indexed);
+  return (
+    <section className="inventory">
+      <header className="inventory-head">
+        <div>
+          <h3>RAGへ登録</h3>
+          <p>PDF、HTML、CSV、Markdown、TXTを同じRAG DBに登録し、検索反映を確認します。</p>
+        </div>
+        <InventoryPill
+          label="反映"
+          value={verification ? String(verification.status ?? "-") : "未実行"}
+          tone={verification?.reflected ? "ready" : state.data ? "warn" : "muted"}
+        />
+      </header>
+      <div className="form-grid">
+        <Field label="RAG DB">
+          <input value={props.dbPath} onChange={(event) => props.onDbPathChange(event.target.value)} />
+        </Field>
+        <Field label="ファイル登録">
+          <input
+            type="file"
+            accept=".pdf,.html,.htm,.csv,.md,.markdown,.txt,text/*,application/pdf"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+        </Field>
+        <Field label="手動タイトル">
+          <input value={manualTitle} onChange={(event) => setManualTitle(event.target.value)} />
+        </Field>
+        <Field label="出典URL">
+          <input value={manualSourceUrl} onChange={(event) => setManualSourceUrl(event.target.value)} />
+        </Field>
+      </div>
+      <textarea
+        value={manualText}
+        onChange={(event) => setManualText(event.target.value)}
+        placeholder="ここに資料の本文や要約を貼り付け"
+        spellCheck={false}
+      />
+      <ActionRow>
+        <button disabled={!file || state.loading} onClick={() => void registerFile()}>
+          ファイルを登録
+        </button>
+        <button className="primary" disabled={!manualText.trim() || state.loading} onClick={() => void registerManualText()}>
+          手動本文を登録
+        </button>
+      </ActionRow>
+      <Status loading={state.loading} error={state.error} />
+      {state.data && (
+        <ResultBlock
+          title="RAG登録結果"
+          meta={`DB ${shortPath(String(state.data.db_path ?? props.dbPath))} / ${String(indexed?.chunks_indexed ?? 0)} chunks`}
+        >
+          {verification?.reflected ? (
+            <p className="notice safe">登録内容を検索で確認できました。</p>
+          ) : (
+            <p className="notice warn">登録は実行されましたが、検索反映の確認が不足しています。</p>
+          )}
+          <JsonDetails data={state.data} />
+        </ResultBlock>
+      )}
     </section>
   );
 }
@@ -2716,6 +2832,17 @@ async function copyTextToClipboard(text: string): Promise<void> {
   } finally {
     document.body.removeChild(textarea);
   }
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const chunks: string[] = [];
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.slice(index, index + chunkSize);
+    chunks.push(String.fromCharCode(...chunk));
+  }
+  return btoa(chunks.join(""));
 }
 
 function downloadTextFile(filename: string, text: string, type: string): void {

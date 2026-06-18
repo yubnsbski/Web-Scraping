@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import re
 import tempfile
@@ -20,6 +22,7 @@ from investment_assistant.financials.evidence import (
     build_financial_evidence,
 )
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
+from investment_assistant.rag.chunker import SUPPORTED_DOCUMENT_EXTENSIONS, load_document
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 from investment_assistant.webapi import data_status as data_status_api
 from investment_assistant.webapi import edinet as edinet_api
@@ -250,10 +253,67 @@ def _orchestrate(body: JsonDict) -> JsonDict:
 
 
 def _rag_index_dir(body: JsonDict) -> JsonDict:
-    return cli.run_rag_index_dir(
+    result = cli.run_rag_index_dir(
         path=_require_str(body, "path"),
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
     )
+    result["supported_extensions"] = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
+    result["auto_trading"] = False
+    result["call_real_api"] = False
+    return result
+
+
+def _rag_index_file(body: JsonDict) -> JsonDict:
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+    max_chars = _as_int(body.get("max_chars"), 800)
+    overlap_chars = _as_int(body.get("overlap_chars"), 120)
+    path_value = body.get("path")
+    content_base64 = body.get("content_base64")
+
+    if isinstance(path_value, str) and path_value.strip():
+        save_path = Path(path_value.strip())
+        saved_from_upload = False
+    else:
+        if not isinstance(content_base64, str) or not content_base64.strip():
+            raise ApiError("provide either path or content_base64")
+        filename = str(body.get("filename") or "rag-document.txt")
+        try:
+            content = base64.b64decode(content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ApiError("content_base64 is not valid base64") from exc
+        if len(content) > _MAX_RAG_UPLOAD_BYTES:
+            raise ApiError(f"file is too large: max {_MAX_RAG_UPLOAD_BYTES} bytes")
+        save_path = _unique_path(
+            Path("local_docs") / "manual_uploads" / _safe_upload_filename(filename)
+        )
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.write_bytes(content)
+        saved_from_upload = True
+
+    _require_supported_rag_file(save_path)
+    indexed = cli.run_rag_index(
+        path=save_path,
+        db_path=db_path,
+        max_chars=max_chars,
+        overlap_chars=overlap_chars,
+    )
+    document = load_document(save_path)
+    verification = _verify_rag_reflection(
+        db_path=db_path,
+        source=str(save_path),
+        text=document.text,
+        query=str(body.get("verification_query") or "").strip(),
+    )
+    return {
+        "saved_path": str(save_path),
+        "saved_from_upload": saved_from_upload,
+        "db_path": db_path,
+        "indexed": indexed,
+        "verification": verification,
+        "supported_extensions": sorted(SUPPORTED_DOCUMENT_EXTENSIONS),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _manual_doc_save(body: JsonDict) -> JsonDict:
@@ -282,11 +342,21 @@ def _manual_doc_save(body: JsonDict) -> JsonDict:
     save_path.write_text(content, encoding="utf-8")
 
     indexed = cli.run_rag_index(path=save_path, db_path=db_path)
+    verification = _verify_rag_reflection(
+        db_path=db_path,
+        source=str(save_path),
+        text=text,
+        query=str(body.get("verification_query") or "").strip(),
+    )
     return {
         "saved_path": str(save_path),
         "chars": len(text),
         "source_url": source_url or None,
         "indexed": indexed,
+        "verification": verification,
+        "db_path": db_path,
+        "auto_trading": False,
+        "call_real_api": False,
     }
 
 
@@ -524,6 +594,7 @@ _SAMPLE_SP500 = str(
     Path(__file__).resolve().parents[3] / "examples" / "sp500_monthly_sample.csv"
 )
 _MAX_MANUAL_TEXT_CHARS = 200_000
+_MAX_RAG_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def _request_api_key(body: JsonDict) -> str:
@@ -852,6 +923,69 @@ def _safe_manual_doc_filename(title: str) -> str:
     return f"{safe}.txt"
 
 
+def _safe_upload_filename(filename: str) -> str:
+    path = Path(filename)
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_DOCUMENT_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_DOCUMENT_EXTENSIONS))
+        raise ApiError(
+            f"unsupported RAG file extension: {suffix or '(none)'}; supported: {supported}"
+        )
+    normalized = re.sub(r"[^0-9A-Za-z._-]+", "-", path.stem).strip("-_.")
+    safe_stem = normalized[:80] if normalized else "rag-document"
+    return f"{safe_stem}{suffix}"
+
+
+def _require_supported_rag_file(path: Path) -> None:
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_DOCUMENT_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_DOCUMENT_EXTENSIONS))
+        raise ApiError(
+            f"unsupported RAG file extension: {suffix or '(none)'}; supported: {supported}"
+        )
+
+
+def _verify_rag_reflection(
+    *,
+    db_path: str,
+    source: str,
+    text: str,
+    query: str,
+) -> JsonDict:
+    verification_query = query or _verification_query_from_text(text)
+    if not verification_query:
+        return {
+            "query": "",
+            "result_count": 0,
+            "source_result_count": 0,
+            "reflected": False,
+            "status": "empty_document",
+        }
+    results = cli.run_rag_search(
+        query=verification_query,
+        db_path=db_path,
+        limit=5,
+        hybrid=True,
+    )
+    source_results = [item for item in results if str(item.get("source")) == source]
+    return {
+        "query": verification_query,
+        "result_count": len(results),
+        "source_result_count": len(source_results),
+        "top_sources": [str(item.get("source")) for item in results[:3]],
+        "reflected": bool(source_results),
+        "status": "reflected" if source_results else "not_found",
+    }
+
+
+def _verification_query_from_text(text: str) -> str:
+    for line in text.splitlines():
+        normalized = " ".join(line.split())
+        if len(normalized) >= 4:
+            return normalized[:120]
+    return ""
+
+
 def _unique_path(path: Path) -> Path:
     if not path.exists():
         return path
@@ -894,6 +1028,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/rag/answer"): _rag_answer,
     ("POST", "/api/orchestrate"): _orchestrate,
     ("POST", "/api/rag/index-dir"): _rag_index_dir,
+    ("POST", "/api/rag/index-file"): _rag_index_file,
     ("POST", "/api/manual-doc/save"): _manual_doc_save,
     ("POST", "/api/scoring/rank"): _scoring_rank,
     ("POST", "/api/scoring/stocks"): _scoring_stocks,

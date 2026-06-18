@@ -140,10 +140,17 @@ def investment_report_markdown_save(body: JsonDict) -> JsonDict:
     index_after_save = _as_bool(body.get("index_after_save"), True)
     db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
     indexed = None
+    verification = None
     if index_after_save:
         indexed = cli.run_rag_index(
             path=save_path,
             db_path=db_path,
+        )
+        verification = _verify_rag_reflection(
+            db_path=db_path,
+            source=str(save_path),
+            text=markdown,
+            query=str(body.get("verification_query") or "").strip(),
         )
     return {
         "saved_path": str(save_path),
@@ -151,6 +158,7 @@ def investment_report_markdown_save(body: JsonDict) -> JsonDict:
         "index_after_save": index_after_save,
         "db_path": db_path,
         "indexed": indexed,
+        "verification": verification,
         "auto_trading": False,
         "call_real_api": False,
     }
@@ -262,6 +270,49 @@ def _unique_path(path: Path) -> Path:
         return path
     stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     return path.with_name(f"{path.stem}-{stamp}{path.suffix}")
+
+
+def _verify_rag_reflection(
+    *,
+    db_path: str,
+    source: str,
+    text: str,
+    query: str,
+) -> JsonDict:
+    from investment_assistant import cli
+
+    verification_query = query or _verification_query_from_text(text)
+    if not verification_query:
+        return {
+            "query": "",
+            "result_count": 0,
+            "source_result_count": 0,
+            "reflected": False,
+            "status": "empty_document",
+        }
+    results = cli.run_rag_search(
+        query=verification_query,
+        db_path=db_path,
+        limit=5,
+        hybrid=True,
+    )
+    source_results = [item for item in results if str(item.get("source")) == source]
+    return {
+        "query": verification_query,
+        "result_count": len(results),
+        "source_result_count": len(source_results),
+        "top_sources": [str(item.get("source")) for item in results[:3]],
+        "reflected": bool(source_results),
+        "status": "reflected" if source_results else "not_found",
+    }
+
+
+def _verification_query_from_text(text: str) -> str:
+    for line in text.splitlines():
+        normalized = " ".join(line.split())
+        if len(normalized) >= 4:
+            return normalized[:120]
+    return ""
 
 
 def _report_markdown_doc_summary(path: Path) -> JsonDict:

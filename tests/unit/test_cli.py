@@ -505,7 +505,8 @@ def test_cli_rag_index_dir_indexes_supported_files(tmp_path, capsys):
     nested_dir.mkdir(parents=True)
     (docs_dir / "memo.txt").write_text("投資判断はユーザーが行います。", encoding="utf-8")
     (nested_dir / "note.md").write_text("自動売買は行いません。", encoding="utf-8")
-    (docs_dir / "ignored.csv").write_text("name,value\nA,1\n", encoding="utf-8")
+    (docs_dir / "funds.csv").write_text("name,value\nA,1\n", encoding="utf-8")
+    (docs_dir / "ignored.xlsx").write_bytes(b"not indexed")
 
     index_exit = main(
         [
@@ -522,9 +523,10 @@ def test_cli_rag_index_dir_indexes_supported_files(tmp_path, capsys):
     )
     assert index_exit == 0
     index_output = json.loads(capsys.readouterr().out)
-    assert index_output["files_indexed"] == 2
-    assert index_output["chunks_indexed"] == 2
-    assert str(docs_dir / "ignored.csv") in index_output["skipped_files"]
+    assert index_output["files_indexed"] == 3
+    assert index_output["chunks_indexed"] == 3
+    assert str(docs_dir / "funds.csv") in index_output["indexed_sources"]
+    assert str(docs_dir / "ignored.xlsx") in index_output["skipped_files"]
 
     search_exit = main(
         [

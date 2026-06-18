@@ -1,19 +1,23 @@
 """Directory indexing helpers for local RAG documents.
 
-This is the single source of truth for walking a directory and indexing safe,
-text-like files into the local RAG store. The CLI delegates here so file
-selection rules live in one place.
+This is the single source of truth for walking a directory and indexing safe
+local RAG documents into the store. The CLI delegates here so file selection
+rules live in one place.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from investment_assistant.rag.chunker import chunk_text, load_document
+from investment_assistant.rag.chunker import (
+    SUPPORTED_DOCUMENT_EXTENSIONS,
+    chunk_text,
+    load_document,
+)
 from investment_assistant.rag.embeddings import Embedder
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH, RagStore
 
-INDEX_EXTENSIONS = frozenset({".md", ".markdown", ".txt"})
+INDEX_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
 EXCLUDED_DIRS = frozenset(
     {".cache", ".git", "__pycache__", ".venv", "venv", "artifacts", "data", "models", "rag_index"}
 )
@@ -21,7 +25,7 @@ EXCLUDED_SUFFIXES = frozenset({".db", ".sqlite", ".sqlite3"})
 
 
 def iter_indexable_files(root: Path) -> list[Path]:
-    """Return supported, text-like files under ``root`` in stable order."""
+    """Return supported local RAG files under ``root`` in stable order."""
 
     return [
         path

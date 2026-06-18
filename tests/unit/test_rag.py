@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from investment_assistant.cli import run_rag_index_dir
+from investment_assistant.cli import run_rag_index, run_rag_index_dir
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.search import build_answer_context, search_chunks
 from investment_assistant.rag.store import RagStore
@@ -108,14 +108,16 @@ def test_run_rag_index_dir_indexes_supported_files_recursively(tmp_path) -> None
     cache_dir.mkdir()
     first = docs_dir / "memo.txt"
     second = nested_dir / "note.md"
-    ignored_csv = docs_dir / "funds.csv"
+    csv_doc = docs_dir / "funds.csv"
+    ignored_xlsx = docs_dir / "funds.xlsx"
     ignored_db = docs_dir / "rag.sqlite"
     ignored_env = docs_dir / ".env"
     ignored_cache_doc = cache_dir / "cached.md"
     binary_txt = docs_dir / "binary.txt"
     first.write_text("投資判断はユーザーが行います。", encoding="utf-8")
     second.write_text("自動売買は行いません。", encoding="utf-8")
-    ignored_csv.write_text("name,value\nA,1\n", encoding="utf-8")
+    csv_doc.write_text("name,value\nA,1\n", encoding="utf-8")
+    ignored_xlsx.write_bytes(b"not an indexed document")
     ignored_db.write_text("sqlite", encoding="utf-8")
     ignored_env.write_text("SECRET=value", encoding="utf-8")
     ignored_cache_doc.write_text("cache should be skipped", encoding="utf-8")
@@ -126,18 +128,19 @@ def test_run_rag_index_dir_indexes_supported_files_recursively(tmp_path) -> None
     store = RagStore(db_path)
     chunks = store.list_chunks()
 
-    assert result["files_indexed"] == 2
-    assert result["chunks_indexed"] == 2
+    assert result["files_indexed"] == 3
+    assert result["chunks_indexed"] == 3
     assert str(first) in result["indexed_sources"]
     assert str(second) in result["indexed_sources"]
+    assert str(csv_doc) in result["indexed_sources"]
     skipped = result["skipped_files"]
     assert isinstance(skipped, list)
-    assert str(ignored_csv) in skipped
+    assert str(ignored_xlsx) in skipped
     assert str(ignored_db) in skipped
     assert str(ignored_env) in skipped
     assert str(ignored_cache_doc) in skipped
     assert str(binary_txt) in skipped
-    assert {chunk.source for chunk in chunks} == {str(first), str(second)}
+    assert {chunk.source for chunk in chunks} == {str(first), str(second), str(csv_doc)}
 
 
 def test_run_rag_index_dir_handles_empty_directory(tmp_path) -> None:
@@ -150,6 +153,47 @@ def test_run_rag_index_dir_handles_empty_directory(tmp_path) -> None:
     assert result["chunks_indexed"] == 0
     assert result["indexed_sources"] == []
     assert result["skipped_files"] == []
+
+
+def test_load_document_supports_html_csv_and_simple_pdf(tmp_path) -> None:
+    html_path = tmp_path / "policy.html"
+    csv_path = tmp_path / "funds.csv"
+    pdf_path = tmp_path / "notice.pdf"
+    html_path.write_text(
+        "<html><head><title>Investor note</title></head>"
+        "<body><script>ignore()</script><h1>Dividend policy</h1><p>DOE focus</p></body></html>",
+        encoding="utf-8",
+    )
+    csv_path.write_text("ticker,name,policy\n9432,NTT,stable dividend\n", encoding="utf-8")
+    pdf_path.write_bytes(
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Length 64 >>\nstream\n"
+        b"BT /F1 12 Tf 72 720 Td (Simple PDF dividend evidence) Tj ET\n"
+        b"endstream\nendobj\n%%EOF"
+    )
+
+    assert "Dividend policy" in load_document(html_path).text
+    assert "policy=stable dividend" in load_document(csv_path).text
+    assert "Simple PDF dividend evidence" in load_document(pdf_path).text
+
+
+def test_run_rag_index_searches_uploaded_pdf_like_document(tmp_path) -> None:
+    db_path = tmp_path / "rag.sqlite"
+    pdf_path = tmp_path / "notice.pdf"
+    pdf_path.write_bytes(
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Length 64 >>\nstream\n"
+        b"BT /F1 12 Tf 72 720 Td (Acme capital allocation evidence) Tj ET\n"
+        b"endstream\nendobj\n%%EOF"
+    )
+
+    result = run_rag_index(path=pdf_path, db_path=db_path)
+    store = RagStore(db_path)
+    results = search_chunks(store, query="capital allocation", limit=3)
+
+    assert result["chunks_indexed"] == 1
+    assert results
+    assert results[0].source == str(pdf_path)
 
 
 def test_load_document_extracts_front_matter_metadata(tmp_path) -> None:

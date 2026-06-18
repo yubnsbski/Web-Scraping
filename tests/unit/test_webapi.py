@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from investment_assistant.rag.chunker import chunk_text, load_document
@@ -406,6 +407,9 @@ def test_manual_doc_save_indexes_pasted_text(tmp_path, monkeypatch) -> None:
     assert status == 200
     assert Path(payload["saved_path"]).is_file()
     assert payload["indexed"]["chunks_indexed"] >= 1
+    assert payload["db_path"] == str(db)
+    assert payload["verification"]["reflected"] is True
+    assert payload["verification"]["source_result_count"] >= 1
 
     status, search_payload = handle_api(
         "POST",
@@ -414,6 +418,44 @@ def test_manual_doc_save_indexes_pasted_text(tmp_path, monkeypatch) -> None:
     )
     assert status == 200
     assert search_payload["results"]
+
+
+def test_rag_index_file_upload_indexes_and_verifies_same_db(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db = tmp_path / "rag.sqlite"
+    content = (
+        b"<html><head><title>Uploaded IR</title></head>"
+        b"<body><h1>Dividend policy</h1><p>DOE and stable dividend evidence.</p></body></html>"
+    )
+
+    status, payload = handle_api(
+        "POST",
+        "/api/rag/index-file",
+        {
+            "filename": "uploaded-ir.html",
+            "content_base64": base64.b64encode(content).decode("ascii"),
+            "db_path": str(db),
+            "verification_query": "stable dividend evidence",
+        },
+    )
+
+    assert status == 200
+    assert Path(payload["saved_path"]).is_file()
+    assert payload["db_path"] == str(db)
+    assert payload["indexed"]["db_path"] == str(db)
+    assert payload["indexed"]["chunks_indexed"] >= 1
+    assert payload["verification"]["reflected"] is True
+    assert payload["verification"]["source_result_count"] >= 1
+    assert ".pdf" in payload["supported_extensions"]
+
+    status, search_payload = handle_api(
+        "POST",
+        "/api/rag/search",
+        {"query": "stable dividend evidence", "db_path": str(db)},
+    )
+    assert status == 200
+    assert search_payload["results"]
+    assert search_payload["results"][0]["source"] == payload["saved_path"]
 
 
 def test_manual_doc_save_requires_text() -> None:
@@ -460,6 +502,7 @@ def test_available_routes_lists_endpoints() -> None:
     assert "GET /api/health" in routes
     assert "POST /api/rag/search" in routes
     assert "POST /api/rag/stats" in routes
+    assert "POST /api/rag/index-file" in routes
     assert "POST /api/manual-doc/save" in routes
     assert "POST /api/fetch-job/auto" in routes
     assert "POST /api/fetch-job/dry-run" in routes
@@ -780,6 +823,8 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(
     assert saved_markdown["db_path"] == str(report_rag_db)
     assert saved_markdown["indexed"]["chunks_indexed"] >= 1
     assert saved_markdown["indexed"]["db_path"] == str(report_rag_db)
+    assert saved_markdown["verification"]["reflected"] is True
+    assert saved_markdown["verification"]["source_result_count"] >= 1
 
     status, markdown_library = handle_api(
         "POST",
