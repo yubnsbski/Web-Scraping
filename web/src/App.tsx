@@ -1236,6 +1236,7 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
   const state = useAsync<Json>();
   const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
   const handoffEvidence = Array.isArray(props.draft.evidence) ? props.draft.evidence : [];
+  const answerText = String(state.data?.answer ?? state.data?.text ?? "回答がありません。");
   useEffect(() => {
     setQuery(props.draft.query);
     setDbPath(props.draft.dbPath);
@@ -1290,7 +1291,7 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
       </div>
       <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
       {handoffEvidence.length > 0 && (
-        <RagEvidenceCards title="AI確認に渡した根拠" results={handoffEvidence} />
+        <RagEvidenceCards title="AI確認に渡した根拠" results={handoffEvidence} idPrefix="handoff-evidence" />
       )}
       <ActionRow>
         <button className="primary" onClick={() => void ask()}>
@@ -1301,8 +1302,10 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
       {state.data && (
         <div className="answer">
           <h3>回答</h3>
-          <p>{String(state.data.answer ?? state.data.text ?? "回答がありません。")}</p>
-          {ragResults.length > 0 && <RagEvidenceCards title="回答時に照合した根拠" results={ragResults} />}
+          <CitationLinkedText text={answerText} citationCount={ragResults.length} targetPrefix="answer-evidence" />
+          {ragResults.length > 0 && (
+            <RagEvidenceCards title="回答時に照合した根拠" results={ragResults} idPrefix="answer-evidence" />
+          )}
           <JsonDetails data={state.data} />
         </div>
       )}
@@ -1310,7 +1313,42 @@ function ChatPanel(props: { draft: ChatDraft; onDraftChange: (value: ChatDraft) 
   );
 }
 
-function RagEvidenceCards({ title, results }: { title: string; results: Json[] }) {
+function CitationLinkedText(props: { text: string; citationCount: number; targetPrefix: string }) {
+  const { text, citationCount, targetPrefix } = props;
+  const parts: ReactNode[] = [];
+  const pattern = /\[(\d+)\]/g;
+  let cursor = 0;
+  let match = pattern.exec(text);
+  while (match) {
+    if (match.index > cursor) {
+      parts.push(text.slice(cursor, match.index));
+    }
+    const citationNumber = Number(match[1]);
+    const label = match[0];
+    if (Number.isInteger(citationNumber) && citationNumber >= 1 && citationNumber <= citationCount) {
+      parts.push(
+        <a
+          className="citation-link"
+          href={`#${targetPrefix}-${citationNumber}`}
+          key={`${targetPrefix}-${citationNumber}-${match.index}`}
+          aria-label={`根拠 ${citationNumber} へ移動`}
+        >
+          {label}
+        </a>,
+      );
+    } else {
+      parts.push(label);
+    }
+    cursor = match.index + label.length;
+    match = pattern.exec(text);
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return <div className="answer-text">{parts.length ? parts : text}</div>;
+}
+
+function RagEvidenceCards({ title, results, idPrefix }: { title: string; results: Json[]; idPrefix?: string }) {
   return (
     <section className="detail-section evidence-cards" aria-label={title}>
       <h4>{title}</h4>
@@ -1318,7 +1356,11 @@ function RagEvidenceCards({ title, results }: { title: string; results: Json[] }
         {results.map((result, index) => {
           const citation = evidenceSummary(result, index);
           return (
-            <article className="evidence-card" key={ragResultKey(result, index)}>
+            <article
+              className="evidence-card"
+              id={idPrefix ? `${idPrefix}-${citation.number}` : undefined}
+              key={ragResultKey(result, index)}
+            >
               <header>
                 <b>[{citation.number}] {citation.label}</b>
                 <span>{citation.score}</span>
