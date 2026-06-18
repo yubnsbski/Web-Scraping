@@ -105,3 +105,32 @@ def test_daily_refresh_can_skip_rag(tmp_path: Path) -> None:
     )
     assert result["rag"] is None
     assert result["daily_bars_count"] == 15
+
+
+def test_preflight_ready_when_tickers_and_paths_ok(tmp_path: Path) -> None:
+    from investment_assistant.cli_market import check_daily_refresh_readiness
+
+    report = check_daily_refresh_readiness(
+        tickers=["7203", "8306"],
+        daily_bars_path=tmp_path / "m" / "daily_bars.csv",
+        financials_path=tmp_path / "m" / "fin.csv",
+        rag_dir=tmp_path / "m" / "rag",
+    )
+    assert report["ready"] is True
+    assert report["tickers_count"] == 2
+    assert report["issues"] == []
+    # No fetching happened: no output files were written.
+    assert not (tmp_path / "m" / "daily_bars.csv").exists()
+
+
+def test_preflight_flags_missing_tickers(tmp_path: Path) -> None:
+    from investment_assistant.cli_market import check_daily_refresh_readiness
+
+    report = check_daily_refresh_readiness(
+        tickers=[],
+        daily_bars_path=tmp_path / "daily_bars.csv",
+        financials_path=tmp_path / "fin.csv",
+        rag_dir=tmp_path / "rag",
+    )
+    assert report["ready"] is False
+    assert any("no tickers" in issue for issue in report["issues"])
