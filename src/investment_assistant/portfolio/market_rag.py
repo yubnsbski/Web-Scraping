@@ -64,6 +64,44 @@ def _num_text(value: str) -> str | None:
     return text
 
 
+def _as_float(value: object) -> float | None:
+    text = _num_text(str(value or ""))
+    if text is None:
+        return None
+    try:
+        return float(text.replace(",", "").replace("%", "").replace("円", ""))
+    except ValueError:
+        return None
+
+
+def _format_yen(value_text: str | None) -> str | None:
+    """Render a raw-yen figure as a readable 億円 amount (e.g. 6.3兆 -> 63,000 億円)."""
+
+    amount = _as_float(value_text)
+    if amount is None:
+        return None
+    return f"{amount / 1e8:,.0f} 億円"
+
+
+def _feature_tags(row: Mapping[str, str]) -> list[str]:
+    """Keyword tags that make the note easier to retrieve by intent (e.g. 高配当)."""
+
+    tags: list[str] = []
+    yield_pct = _as_float(row.get("dividend_yield_percent"))
+    dps = _as_float(row.get("dps"))
+    per = _as_float(row.get("per"))
+    pbr = _as_float(row.get("pbr"))
+    if yield_pct is not None and yield_pct >= 4.0:
+        tags.append("高配当")
+    if (yield_pct == 0.0 or yield_pct is None) and (dps == 0.0 or dps is None):
+        tags.append("無配・低配当")
+    if per is not None and 0 < per < 10:
+        tags.append("低PER（割安圏）")
+    if pbr is not None and 0 < pbr < 1.0:
+        tags.append("PBR1倍割れ（資産妙味）")
+    return tags
+
+
 def _latest_closes(daily_bars_csv: str | Path | None) -> dict[str, tuple[str, str]]:
     """Map ticker -> (latest_date, latest_close) from the daily-bars CSV."""
 
@@ -107,11 +145,20 @@ def render_market_evidence_markdown(
         "",
     ]
     for column, label, unit in _METRIC_LINES:
+        if column == "market_cap":
+            readable = _format_yen(str(row.get(column) or ""))
+            if readable is not None:
+                lines.append(f"- {label}: {readable}")
+            continue
         value = _num_text(str(row.get(column) or ""))
         if value is not None:
             lines.append(f"- {label}: {value} {unit}")
     if latest_close is not None:
         lines.append(f"- 直近終値: {latest_close[1]} 円（{latest_close[0]} 時点）")
+
+    tags = _feature_tags(row)
+    if tags:
+        lines.extend(["", f"特徴: {' / '.join(tags)}"])
     lines.extend(
         [
             "",
