@@ -25,6 +25,7 @@ DEFAULT_MARKET_RAG_DIR = "local_docs/market/rag"
 
 __all__ = [
     "DEFAULT_YAHOO_FINANCIALS_PATH",
+    "check_daily_refresh_readiness",
     "run_market_daily_refresh",
     "run_market_financials",
     "run_market_inbox",
@@ -307,6 +308,48 @@ def run_market_daily_refresh(
         "financials_path": str(financials_path),
         "financials_matched": fin_result.get("matched_tickers"),
         "rag": rag_summary,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def check_daily_refresh_readiness(
+    *,
+    tickers: list[str],
+    daily_bars_path: str | Path = DEFAULT_DAILY_BARS_PATH,
+    financials_path: str | Path = DEFAULT_YAHOO_FINANCIALS_PATH,
+    rag_dir: str | Path = DEFAULT_MARKET_RAG_DIR,
+    build_rag: bool = True,
+) -> dict[str, object]:
+    """Pre-flight for ``market-daily-refresh``: validate config without fetching.
+
+    Lets a user confirm a scheduled job will work (tickers resolve, output paths
+    are writable) in a second, instead of waiting for the multi-hour live run.
+    """
+
+    resolved = [str(t).strip() for t in tickers if str(t).strip()]
+    issues: list[str] = []
+    if not resolved:
+        issues.append("no tickers resolved (build the universe or pass --tickers)")
+
+    targets: list[tuple[str, Path]] = [
+        ("daily_bars", Path(daily_bars_path).parent),
+        ("financials", Path(financials_path).parent),
+    ]
+    if build_rag:
+        targets.append(("rag_dir", Path(rag_dir)))
+    for label, directory in targets:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:  # pragma: no cover - platform-dependent
+            issues.append(f"{label} path not writable: {directory} ({exc})")
+
+    return {
+        "check": True,
+        "tickers_count": len(resolved),
+        "build_rag": build_rag,
+        "ready": not issues,
+        "issues": issues,
         "auto_trading": False,
         "call_real_api": False,
     }

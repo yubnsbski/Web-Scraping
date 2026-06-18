@@ -16,6 +16,9 @@ from investment_assistant.cli_market import (
     DEFAULT_YAHOO_FINANCIALS_PATH,
 )
 from investment_assistant.cli_market import (
+    check_daily_refresh_readiness as check_daily_refresh_readiness,
+)
+from investment_assistant.cli_market import (
     run_market_daily_refresh as run_market_daily_refresh,
 )
 from investment_assistant.cli_market import (
@@ -1535,6 +1538,11 @@ def main(argv: list[str] | None = None) -> int:
     daily_refresh_parser.add_argument(
         "--no-rag", action="store_true", help="Skip the RAG rebuild step"
     )
+    daily_refresh_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Validate config (tickers, writable paths) without fetching",
+    )
 
     rag_stats_parser = subparsers.add_parser("rag-stats")
     rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
@@ -1795,6 +1803,14 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             tickers = load_domestic_universe_tickers(args.universe_csv)
         else:
             tickers = []
+        if args.check:
+            return check_daily_refresh_readiness(
+                tickers=tickers,
+                daily_bars_path=args.daily_bars,
+                financials_path=args.financials_out,
+                rag_dir=args.rag_dir,
+                build_rag=not args.no_rag,
+            )
         if not tickers:
             print(
                 "no tickers: provide --tickers or build the universe first "

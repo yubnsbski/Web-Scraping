@@ -13,7 +13,12 @@
    python -m investment_assistant.cli market-universe-build --jpx data_j.csv --output local_docs/market/domestic_universe.csv --scope domestic
    ```
 2. リポジトリ同梱の `scripts/daily_refresh.ps1` を開き、先頭の `$Repo` を自分のパスに直す。
-3. 動作確認（少量で）:
+3. **まず設定だけ即チェック**（取得せず1秒で検証。`ready: true` なら7時ジョブも動く）:
+   ```powershell
+   python -m investment_assistant.cli market-daily-refresh --check
+   ```
+   `ready: false` のときは `issues` を解消（多くは STEP 1 のユニバース未作成）。
+4. 実取得を少量でテスト:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\daily_refresh.ps1
    ```
