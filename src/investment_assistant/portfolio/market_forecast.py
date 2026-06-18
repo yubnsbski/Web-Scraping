@@ -199,12 +199,17 @@ def screen_by_forecast(
     horizon: int = 5,
     include_ml: bool = False,
     top: int = 0,
+    max_abs_return_pct: float = 30.0,
 ) -> list[JsonDict]:
     """Rank tickers by forecast expected return over ``horizon`` (descending).
 
     ``expected_return_pct`` is ``(forecast_close / last_close - 1) * 100`` using
-    the final forecast step. Ties break by ticker for a stable order. ``top``
-    caps the list (``0`` = all). Non-advisory statistical screen.
+    the final forecast step. Forecasts whose magnitude exceeds
+    ``max_abs_return_pct`` are dropped as implausible extrapolation artifacts (a
+    short, volatile series can make a linear/drift model explode over several
+    steps); pass ``0`` to disable the guard. ``rmse_pct`` (backtest RMSE as a
+    share of last close) is added as a reliability hint. Ties break by ticker.
+    ``top`` caps the list (``0`` = all). Non-advisory statistical screen.
     """
 
     forecasts = forecast_all_tickers(
@@ -220,6 +225,15 @@ def screen_by_forecast(
             continue
         forecast_close = float(values[-1])
         expected_return_pct = round((forecast_close / float(last_close) - 1.0) * 100.0, 4)
+        if max_abs_return_pct and abs(expected_return_pct) > max_abs_return_pct:
+            # Implausible over a short horizon -> a model artifact, not a signal.
+            continue
+        rmse = forecast.get("backtest_rmse")
+        rmse_pct = (
+            round(float(rmse) / float(last_close) * 100.0, 4)
+            if isinstance(rmse, int | float)
+            else None
+        )
         rows.append(
             {
                 "ticker": ticker,
@@ -229,6 +243,7 @@ def screen_by_forecast(
                 "horizon": forecast.get("horizon"),
                 "backtest_best_model": forecast.get("backtest_best_model"),
                 "backtest_rmse": forecast.get("backtest_rmse"),
+                "rmse_pct": rmse_pct,
                 "observations": forecast.get("observations"),
             }
         )
