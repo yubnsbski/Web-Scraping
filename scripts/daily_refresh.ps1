@@ -10,7 +10,10 @@ Set-Location $Repo
 $env:MARKET_ALLOW_ROBOTS_BYPASS = "1"
 $env:MARKET_DOMESTIC_UNIVERSE_PATH = "$Repo\local_docs\market\domestic_universe.csv"
 
-$log = "$Repo\local_docs\logs\daily_refresh_{0:yyyyMMdd}.log" -f (Get-Date)
+# 実行ごとに一意のログ名（YYYYMMDD_HHmmss）。日付だけだと、同日に複数回（手動テスト
+# とスケジュールが重なる等）走ったとき同じログを奪い合い、後発が
+# 「別のプロセスが使用中」でロック失敗→タスクが LastTaskResult≠0 になる。一意名なら衝突しない。
+$log = "$Repo\local_docs\logs\daily_refresh_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date)
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 
 # 全工程: OHLCV -> daily_bars.csv 集約 -> 財務 -> RAG(予測込み)再構築。
