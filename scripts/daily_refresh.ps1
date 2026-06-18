@@ -17,3 +17,12 @@ New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 # まずは --max 300 程度で運用し、安定したら 0(全件) に。全件1年は数時間かかります。
 python -m investment_assistant.cli market-daily-refresh `
   --range 1y --max 300 *>&1 | Tee-Object -FilePath $log
+
+# python の終了コードをタスクスケジューラに伝播する。
+# これが無いと、取得が失敗しても LastTaskResult が 0(成功) になり、
+# 「毎朝ちゃんと動いているか」の判定が当てにならなくなる。
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Add-Content -Path $log -Value "ERROR: market-daily-refresh exited with code $code"
+}
+exit $code
