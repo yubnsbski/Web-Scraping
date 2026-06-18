@@ -9,6 +9,7 @@ import pytest
 from investment_assistant.portfolio.market_forecast import (
     forecast_all_tickers,
     forecast_ticker,
+    screen_by_forecast,
     timeseries_from_daily_bars,
 )
 
@@ -91,3 +92,35 @@ def test_forecast_all_tickers_reads_once_and_skips_short(tmp_path: Path) -> None
     out = forecast_all_tickers(path, horizon=3, include_ml=False)
     assert set(out) == {"7203"}
     assert len(out["7203"]["forecast"]) == 3
+
+
+def test_screen_ranks_by_expected_return_descending(tmp_path: Path) -> None:
+    lines = ["ticker,date,open,high,low,close,volume"]
+    for i in range(20):
+        up = 1000 + i * 20  # rising
+        flat = 2000  # flat
+        down = 3000 - i * 15  # falling
+        lines.append(f"7203,2026-05-{i + 1:02d},{up},{up},{up},{up},1")
+        lines.append(f"8306,2026-05-{i + 1:02d},{flat},{flat},{flat},{flat},1")
+        lines.append(f"9999,2026-05-{i + 1:02d},{down},{down},{down},{down},1")
+    path = tmp_path / "daily_bars.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    ranked = screen_by_forecast(path, horizon=5, include_ml=False)
+    tickers = [row["ticker"] for row in ranked]
+    assert tickers == ["7203", "8306", "9999"]  # high -> low expected return
+    assert ranked[0]["expected_return_pct"] > 0
+    assert ranked[-1]["expected_return_pct"] < 0
+    assert all("backtest_rmse" in row for row in ranked)
+
+
+def test_screen_top_caps_results(tmp_path: Path) -> None:
+    lines = ["ticker,date,open,high,low,close,volume"]
+    for t in ("7203", "8306", "9999"):
+        for i in range(20):
+            c = 1000 + i * 5
+            lines.append(f"{t},2026-05-{i + 1:02d},{c},{c},{c},{c},1")
+    path = tmp_path / "daily_bars.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert len(screen_by_forecast(path, top=2, include_ml=False)) == 2
