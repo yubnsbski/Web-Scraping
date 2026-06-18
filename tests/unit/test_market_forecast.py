@@ -68,3 +68,10 @@ def test_forecast_raises_for_too_few_points(tmp_path: Path) -> None:
     path = _bars(tmp_path, "7203", [1000.0, 1001.0, 1002.0])
     with pytest.raises(ValueError, match="not enough observations"):
         forecast_ticker(daily_bars_csv=path, ticker="7203", include_ml=False)
+
+
+def test_ticker_with_dot_t_suffix_matches_bare_code(tmp_path: Path) -> None:
+    path = _bars(tmp_path, "7203", [1000.0 + i for i in range(10)])
+    series = timeseries_from_daily_bars(path, "7203.T")
+    assert len(series) == 10
+    assert series.name == "7203"
