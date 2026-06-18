@@ -1,4 +1,4 @@
-# 毎日のファイナンスデータ自動更新（Windows タスクスケジューラから起動）。
+﻿# 毎日のファイナンスデータ自動更新（Windows タスクスケジューラから起動）。
 # 事前に一度だけ: market-universe-build でユニバースCSVを作成しておくこと。
 # 個人利用・非助言。Yahoo の利用規約と各自の責任の範囲で実行してください。
 
@@ -26,7 +26,7 @@ $py = "python -m investment_assistant.cli market-daily-refresh --range 6mo --max
 cmd /c "$py 1> ""$log"" 2>&1"
 $code = $LASTEXITCODE
 
-Write-Host "---- ログ末尾 ----"
+Write-Host "---- log tail ----"
 Get-Content $log -Tail 12 -ErrorAction SilentlyContinue
 
 # python の終了コードをタスクスケジューラに伝播する。
