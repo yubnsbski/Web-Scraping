@@ -1084,6 +1084,33 @@ td {
   border-top: 1px solid var(--line);
 }
 
+.answer-text {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.citation-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: #e9f7f4;
+  color: var(--accent);
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.citation-link:hover,
+.citation-link:focus-visible {
+  background: #d8f0ec;
+  outline: 2px solid rgba(15, 118, 110, 0.28);
+  outline-offset: 2px;
+}
+
 .evidence-cards {
   background: #f7fafc;
 }
@@ -1096,10 +1123,17 @@ td {
 .evidence-card {
   display: grid;
   gap: 8px;
+  scroll-margin-top: 16px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+}
+
+.evidence-card:target {
+  border-color: rgba(15, 118, 110, 0.58);
+  background: #f2fbf8;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
 }
 
 .evidence-card header {
