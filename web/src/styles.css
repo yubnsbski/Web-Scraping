@@ -768,6 +768,42 @@ h3 {
   color: var(--accent);
 }
 
+.quality-notice {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(180, 83, 9, 0.26);
+  border-radius: 8px;
+  background: #fff7ed;
+  color: var(--warn);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.quality-notice.safe {
+  border-color: rgba(15, 118, 110, 0.22);
+  background: #ecfdf5;
+  color: var(--accent);
+}
+
+.quality-notice strong {
+  color: inherit;
+}
+
+.quality-notice p,
+.quality-notice ul {
+  margin: 0;
+}
+
+.quality-notice ul {
+  padding-left: 18px;
+}
+
+.quality-action {
+  justify-self: flex-start;
+}
+
 .report-preflight {
   display: grid;
   gap: 12px;

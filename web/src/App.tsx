@@ -167,6 +167,7 @@ export function App() {
           <RagSearchPanel
             draft={ragDraft}
             onDraftChange={setRagDraft}
+            onOpenData={() => setTab("data")}
             onAskDraft={(draft) => {
               setChatDraft(draft);
               setTab("chat");
@@ -181,6 +182,7 @@ export function App() {
               setRagDraft(draft);
               setTab("rag");
             }}
+            onOpenData={() => setTab("data")}
           />
         )}
       </main>
@@ -1092,6 +1094,7 @@ function ReportPanel(props: {
 function RagSearchPanel(props: {
   draft: RagSearchDraft;
   onDraftChange: (value: RagSearchDraft) => void;
+  onOpenData: () => void;
   onAskDraft: (value: ChatDraft) => void;
 }) {
   const { draft } = props;
@@ -1102,6 +1105,7 @@ function RagSearchPanel(props: {
   const statsState = useAsync<Json>();
   const results = Array.isArray(searchState.data?.results) ? (searchState.data.results as Json[]) : [];
   const selectedResults = results.filter((result, index) => selectedEvidence[ragResultKey(result, index)] !== false);
+  const requestedLimit = Number(limit) || 8;
   const updateDraft = (patch: Partial<Omit<RagSearchDraft, "version">>) => {
     props.onDraftChange({ ...draft, ...patch });
   };
@@ -1111,7 +1115,7 @@ function RagSearchPanel(props: {
       api<Json>("/api/rag/search", {
         query,
         db_path: dbPath,
-        limit: Number(limit) || 8,
+        limit: requestedLimit,
         hybrid,
       }),
     );
@@ -1176,9 +1180,22 @@ function RagSearchPanel(props: {
         <button onClick={() => void refreshStats()}>索引を確認</button>
       </ActionRow>
       <Status loading={searchState.loading || statsState.loading} error={searchState.error || statsState.error} />
-      {statsState.data && <RagStatsSummary data={statsState.data} />}
+      {statsState.data && (
+        <>
+          <RagIndexQuality data={statsState.data} onOpenData={props.onOpenData} />
+          <RagStatsSummary data={statsState.data} />
+        </>
+      )}
       {searchState.data && (
         <ResultBlock title="検索結果" meta={`${results.length}件 / ${hybrid ? "hybrid" : "keyword"}`}>
+          <RagEvidenceQuality
+            title="検索結果の根拠量"
+            results={results}
+            requestedLimit={requestedLimit}
+            selectedCount={selectedResults.length}
+            actionLabel="データ更新へ"
+            onAction={props.onOpenData}
+          />
           <RagSearchResults
             results={results}
             selectedEvidence={selectedEvidence}
@@ -1190,6 +1207,19 @@ function RagSearchPanel(props: {
         </ResultBlock>
       )}
     </section>
+  );
+}
+
+function RagIndexQuality({ data, onOpenData }: { data: Json; onOpenData: () => void }) {
+  const warnings = ragIndexWarnings(data);
+  return (
+    <QualityNotice
+      title="RAGデータ量"
+      warnings={warnings}
+      okMessage="RAG索引には検索に使える文書とチャンクがあります。"
+      actionLabel="データ更新へ"
+      onAction={onOpenData}
+    />
   );
 }
 
@@ -1258,6 +1288,7 @@ function ChatPanel(props: {
   draft: ChatDraft;
   onDraftChange: (value: ChatDraft) => void;
   onSearchAgain: (value: RagSearchDraft) => void;
+  onOpenData: () => void;
 }) {
   const [query, setQuery] = useState(props.draft.query);
   const [dbPath, setDbPath] = useState(props.draft.dbPath);
@@ -1266,6 +1297,7 @@ function ChatPanel(props: {
   const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
   const handoffEvidence = Array.isArray(props.draft.evidence) ? props.draft.evidence : [];
   const answerText = String(state.data?.answer ?? state.data?.text ?? "回答がありません。");
+  const requestedLimit = Number(limit) || DEFAULT_CHAT_LIMIT;
   useEffect(() => {
     setQuery(props.draft.query);
     setDbPath(props.draft.dbPath);
@@ -1330,6 +1362,14 @@ function ChatPanel(props: {
         </Field>
       </div>
       <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
+      <RagEvidenceQuality
+        title="AI確認に渡す根拠量"
+        results={handoffEvidence}
+        requestedLimit={requestedLimit}
+        selectedCount={handoffEvidence.length}
+        actionLabel="データ更新へ"
+        onAction={props.onOpenData}
+      />
       {handoffEvidence.length > 0 && (
         <RagEvidenceCards title="AI確認に渡した根拠" results={handoffEvidence} idPrefix="handoff-evidence" />
       )}
@@ -1343,12 +1383,70 @@ function ChatPanel(props: {
       {state.data && (
         <div className="answer">
           <h3>回答</h3>
+          <RagEvidenceQuality
+            title="回答時の根拠量"
+            results={ragResults}
+            requestedLimit={requestedLimit}
+            actionLabel="データ更新へ"
+            onAction={props.onOpenData}
+          />
           <CitationLinkedText text={answerText} citationCount={ragResults.length} targetPrefix="answer-evidence" />
           {ragResults.length > 0 && (
             <RagEvidenceCards title="回答時に照合した根拠" results={ragResults} idPrefix="answer-evidence" />
           )}
           <JsonDetails data={state.data} />
         </div>
+      )}
+    </section>
+  );
+}
+
+function RagEvidenceQuality(props: {
+  title: string;
+  results: Json[];
+  requestedLimit: number;
+  selectedCount?: number;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  const warnings = ragEvidenceWarnings(props.results, props.requestedLimit, props.selectedCount);
+  return (
+    <QualityNotice
+      title={props.title}
+      warnings={warnings}
+      okMessage={`${props.results.length}件の根拠を確認できます。`}
+      actionLabel={props.actionLabel}
+      onAction={props.onAction}
+    />
+  );
+}
+
+function QualityNotice(props: {
+  title: string;
+  warnings: string[];
+  okMessage: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  const ok = props.warnings.length === 0;
+  return (
+    <section className={ok ? "quality-notice safe" : "quality-notice"} aria-label={props.title}>
+      <strong>{props.title}</strong>
+      {ok ? (
+        <p>{props.okMessage}</p>
+      ) : (
+        <>
+          <ul>
+            {props.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+          {props.onAction && props.actionLabel && (
+            <button className="table-action quality-action" onClick={props.onAction}>
+              {props.actionLabel}
+            </button>
+          )}
+        </>
       )}
     </section>
   );
@@ -2417,6 +2515,44 @@ function suggestedRagQueryFromChat(query: string): string {
   const quoted = trimmed.match(/^「(.+?)」について/);
   if (quoted?.[1]?.trim()) return quoted[1].trim();
   return trimmed.slice(0, 120) || "配当 利回り 根拠";
+}
+
+function ragIndexWarnings(data: Json): string[] {
+  const sources = Number(data.sources_count ?? 0);
+  const chunks = Number(data.chunks_count ?? 0);
+  const chars = Number(data.total_chars ?? 0);
+  const warnings: string[] = [];
+  if (!sources || !chunks) {
+    warnings.push("RAG索引に登録済み文書がありません。レポート保存・開示文書取得・RAG保存で根拠を追加してください。");
+    return warnings;
+  }
+  if (sources < 3) warnings.push(`登録文書が${sources}件です。比較や反証には複数ソースの追加が必要です。`);
+  if (chunks < 10) warnings.push(`検索チャンクが${chunks}件です。回答の根拠が薄くなりやすい状態です。`);
+  if (chars < 1000) warnings.push("登録テキスト量が少ないため、本文PDF/HTML/レポート本文の追加登録を推奨します。");
+  return warnings;
+}
+
+function ragEvidenceWarnings(results: Json[], requestedLimit: number, selectedCount?: number): string[] {
+  const warnings: string[] = [];
+  const count = results.length;
+  if (selectedCount !== undefined && selectedCount === 0) {
+    warnings.push("AI確認に渡す根拠が0件です。チェックを入れるか、追加検索してください。");
+  }
+  if (count === 0) {
+    warnings.push("一致する根拠が0件です。検索語を広げるか、データ更新で資料をRAGへ追加してください。");
+    return warnings;
+  }
+  if (count < 2) warnings.push("根拠が1件だけです。単一ソース依存のため、反証・比較には不足しています。");
+  if (requestedLimit > 0 && count < Math.min(requestedLimit, 5)) {
+    warnings.push(`要求件数${requestedLimit}件に対して${count}件のみです。検索語・登録データの見直しが必要です。`);
+  }
+  const badIntegrity = results.filter((result) => {
+    const citation = asJson(result.citation) ?? {};
+    const status = String(citation.integrity_status ?? result.integrity_status ?? "").toLowerCase();
+    return status && status !== "ok" && status !== "unknown" && status !== "-";
+  }).length;
+  if (badIntegrity > 0) warnings.push(`整合性が要確認の根拠が${badIntegrity}件あります。回答前に根拠カードを確認してください。`);
+  return warnings;
 }
 
 function ragResultKey(result: Json, index: number): string {
