@@ -39,6 +39,13 @@ def _read_rows(path: str | Path) -> list[dict[str, str]]:
     return [dict(row) for row in reader]
 
 
+def _normalize_ticker(value: str) -> str:
+    """Bare Tokyo code in upper case, tolerating a stray ``.T`` suffix."""
+
+    text = value.strip().upper()
+    return text[:-2] if text.endswith(".T") else text
+
+
 def _ticker_of(row: dict[str, str]) -> str:
     for key in _TICKER_KEYS:
         value = row.get(key)
@@ -50,10 +57,10 @@ def _ticker_of(row: dict[str, str]) -> str:
 def timeseries_from_daily_bars(daily_bars_csv: str | Path, ticker: str) -> TimeSeries:
     """Build a chronological close-price series for one ticker from daily bars."""
 
-    wanted = ticker.strip()
+    wanted = _normalize_ticker(ticker)
     points: list[tuple[str, float]] = []
     for row in _read_rows(daily_bars_csv):
-        if _ticker_of(row) != wanted:
+        if _normalize_ticker(_ticker_of(row)) != wanted:
             continue
         date = str(row.get("date") or "").strip()
         close_text = str(row.get("close") or "").strip()
@@ -94,7 +101,7 @@ def forecast_ticker(
 
     forecast = run_forecast(series, horizon=max(int(horizon), 1), include_ml=include_ml)
     result: JsonDict = {
-        "ticker": ticker,
+        "ticker": series.name,
         "observations": len(series),
         "last_date": series.dates[-1],
         "last_close": series.values[-1],

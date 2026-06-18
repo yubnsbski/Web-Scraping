@@ -124,6 +124,29 @@ def market_financials(body: JsonDict) -> JsonDict:
     return result
 
 
+def market_forecast(body: JsonDict) -> JsonDict:
+    """Forecast next-horizon closes for one ticker from the saved daily-bars CSV."""
+
+    from investment_assistant.portfolio.market_forecast import forecast_ticker
+
+    ticker = str(body.get("ticker") or "").strip()
+    if not ticker:
+        raise ApiError("ticker is required")
+    daily_bars_csv = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH)
+    if not Path(daily_bars_csv).is_file():
+        raise ApiError(f"daily bars CSV not found: {daily_bars_csv}")
+    try:
+        return forecast_ticker(
+            daily_bars_csv=daily_bars_csv,
+            ticker=ticker,
+            horizon=_as_int(body.get("horizon"), 5),
+            include_ml=_as_bool(body.get("include_ml"), True),
+            evaluate=_as_bool(body.get("evaluate"), True),
+        )
+    except ValueError as exc:
+        raise ApiError(str(exc), status=400) from exc
+
+
 def _index_financials_into_rag(financials_csv: str, body: JsonDict) -> JsonDict:
     """Build per-ticker RAG evidence from the just-saved financials CSV and index it.
 
