@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from investment_assistant.portfolio.market_forecast import (
+    forecast_all_tickers,
     forecast_ticker,
     timeseries_from_daily_bars,
 )
@@ -75,3 +76,18 @@ def test_ticker_with_dot_t_suffix_matches_bare_code(tmp_path: Path) -> None:
     series = timeseries_from_daily_bars(path, "7203.T")
     assert len(series) == 10
     assert series.name == "7203"
+
+
+def test_forecast_all_tickers_reads_once_and_skips_short(tmp_path: Path) -> None:
+    lines = ["ticker,date,open,high,low,close,volume"]
+    for i in range(20):  # 7203 has enough history
+        c = 1000 + i * 10
+        lines.append(f"7203,2026-05-{i + 1:02d},{c},{c},{c},{c},1")
+    for i in range(3):  # 8306 is too short -> skipped
+        lines.append(f"8306,2026-05-{i + 1:02d},500,500,500,500,1")
+    path = tmp_path / "daily_bars.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    out = forecast_all_tickers(path, horizon=3, include_ml=False)
+    assert set(out) == {"7203"}
+    assert len(out["7203"]["forecast"]) == 3

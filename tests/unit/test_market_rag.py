@@ -91,6 +91,42 @@ def test_no_dividend_tag_for_zero_yield() -> None:
     assert "高配当" not in md
 
 
+def test_forecast_line_embedded_when_provided() -> None:
+    md = render_market_evidence_markdown(
+        {"ticker": "7203", "name": "トヨタ", "price": "2000"},
+        forecast={"forecast": [2100.0, 2110.0, 2120.0], "backtest_best_model": "drift"},
+    )
+    assert md is not None
+    assert "予測（統計推定・非助言）" in md
+    assert "+1営業日 2,100 円" in md
+    assert "+3営業日 2,120 円" in md
+    assert "最良モデル drift" in md
+
+
+def test_no_forecast_line_without_forecast() -> None:
+    md = render_market_evidence_markdown({"ticker": "7203", "name": "トヨタ"})
+    assert md is not None
+    assert "予測" not in md
+
+
+def test_build_embeds_forecast_with_daily_bars(tmp_path: Path) -> None:
+    fin = tmp_path / "fin.csv"
+    fin.write_text("ticker,name,price\n7203,トヨタ,2000\n", encoding="utf-8")
+    bars = tmp_path / "bars.csv"
+    rows = ["ticker,date,open,high,low,close,volume"]
+    for i in range(20):
+        c = 2000 + i * 5
+        rows.append(f"7203,2026-05-{i + 1:02d},{c},{c},{c},{c},1")
+    bars.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    out = tmp_path / "rag"
+
+    result = build_market_evidence_docs(
+        financials_csv=fin, output_dir=out, daily_bars_csv=bars, include_forecast=True
+    )
+    assert result["with_forecast"] is True
+    assert "予測（統計推定・非助言）" in (out / "7203.md").read_text(encoding="utf-8")
+
+
 def test_build_writes_one_doc_per_ticker_with_latest_close(tmp_path: Path) -> None:
     fin = tmp_path / "fin.csv"
     fin.write_text(_FIN_CSV, encoding="utf-8")

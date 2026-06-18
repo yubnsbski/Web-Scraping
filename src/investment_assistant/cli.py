@@ -1466,6 +1466,11 @@ def main(argv: list[str] | None = None) -> int:
     market_rag_parser.add_argument(
         "--no-index", action="store_true", help="Only write notes; skip RAG indexing"
     )
+    market_rag_parser.add_argument(
+        "--forecast",
+        action="store_true",
+        help="Embed a statistical next-horizon forecast in each note (uses daily bars)",
+    )
 
     market_forecast_parser = subparsers.add_parser(
         "market-forecast",
@@ -1739,6 +1744,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             financials_csv=args.financials_csv,
             output_dir=args.output_dir,
             daily_bars_csv=daily_bars,
+            include_forecast=bool(args.forecast),
         )
         if not args.no_index and result["documents_written"]:
             result["index"] = run_rag_index_dir(path=args.output_dir, db_path=args.db_path)
