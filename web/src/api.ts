@@ -22,10 +22,15 @@ export async function api<T = unknown>(path: string, body?: unknown): Promise<T>
     data = null;
   }
   if (!response.ok) {
-    const message =
+    let message =
       data && typeof data === "object" && "error" in data
         ? String((data as { error: unknown }).error)
         : `HTTP ${response.status}`;
+    // A missing route almost always means the running server predates a pull;
+    // tell the user how to fix it instead of showing a cryptic endpoint string.
+    if (response.status === 404 || /no such endpoint/i.test(message)) {
+      message += "（サーバが古い可能性があります。最新コードでサーバを再起動してください）";
+    }
     throw new Error(message);
   }
   return data as T;
