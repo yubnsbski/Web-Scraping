@@ -777,7 +777,9 @@ def test_investment_mvp_routes_import_analyze_screen_and_report(
     assert status == 200
     assert Path(saved_markdown["saved_path"]).is_file()
     assert saved_markdown["index_after_save"] is True
+    assert saved_markdown["db_path"] == str(report_rag_db)
     assert saved_markdown["indexed"]["chunks_indexed"] >= 1
+    assert saved_markdown["indexed"]["db_path"] == str(report_rag_db)
 
     status, markdown_library = handle_api(
         "POST",

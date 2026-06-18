@@ -138,16 +138,18 @@ def investment_report_markdown_save(body: JsonDict) -> JsonDict:
     save_path.write_text(markdown, encoding="utf-8")
 
     index_after_save = _as_bool(body.get("index_after_save"), True)
+    db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
     indexed = None
     if index_after_save:
         indexed = cli.run_rag_index(
             path=save_path,
-            db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
+            db_path=db_path,
         )
     return {
         "saved_path": str(save_path),
         "chars": len(markdown),
         "index_after_save": index_after_save,
+        "db_path": db_path,
         "indexed": indexed,
         "auto_trading": False,
         "call_real_api": False,

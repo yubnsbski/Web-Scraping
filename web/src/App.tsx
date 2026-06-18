@@ -159,6 +159,7 @@ export function App() {
           <ReportPanel
             holdingsCsv={holdingsCsv}
             financialsPath={financialsPath}
+            ragDbPath={ragDraft.dbPath}
             candidates={candidates}
             onReport={setReport}
           />
@@ -1002,6 +1003,7 @@ function DetailPanel(props: {
 function ReportPanel(props: {
   holdingsCsv: string;
   financialsPath: string;
+  ragDbPath: string;
   candidates: Json | null;
   onReport: (value: Json) => void;
 }) {
@@ -1057,6 +1059,7 @@ function ReportPanel(props: {
             <DetailFact label="保有明細" value={`${holdingRows}行`} />
             <DetailFact label="財務CSV" value={shortPath(props.financialsPath) || "-"} />
             <DetailFact label="候補" value={`${candidateCount}件`} />
+            <DetailFact label="RAG DB" value={shortPath(props.ragDbPath) || "-"} />
             <DetailFact label="保存" value="履歴に保存" tone="safe" />
           </div>
         </div>
@@ -1086,7 +1089,7 @@ function ReportPanel(props: {
         error={state.error || historyState.error || loadState.error}
       />
       {historyState.data && <ReportHistoryTable data={historyState.data} onLoad={loadReport} onRefresh={refreshHistory} />}
-      {displayReport && <ReportResult data={displayReport} />}
+      {displayReport && <ReportResult data={displayReport} ragDbPath={props.ragDbPath} />}
     </section>
   );
 }
@@ -2063,7 +2066,7 @@ function ReportMarkdownLibrary({ data }: { data: Json }) {
   );
 }
 
-function ReportResult({ data }: { data: Json }) {
+function ReportResult({ data, ragDbPath }: { data: Json; ragDbPath: string }) {
   const markdownState = useAsync<Json>();
   const saveMarkdownState = useAsync<Json>();
   const markdownLibraryState = useAsync<Json>();
@@ -2123,13 +2126,17 @@ function ReportResult({ data }: { data: Json }) {
       api<Json>("/api/reports/investment-monthly/markdown/save", {
         report: data,
         output_dir: "local_docs/reports",
+        db_path: ragDbPath,
         index_after_save: true,
       }),
     );
     if (result?.saved_path) {
       const indexed = asJson(result.indexed);
       const chunks = indexed?.chunks_indexed ?? "-";
-      setMarkdownNotice(`ローカル保存しました: ${String(result.saved_path)} / RAG ${String(chunks)}チャンク`);
+      const indexedDbPath = String(indexed?.db_path ?? result.db_path ?? ragDbPath);
+      setMarkdownNotice(
+        `ローカル保存しました: ${String(result.saved_path)} / RAG ${String(chunks)}チャンク / DB ${shortPath(indexedDbPath)}`,
+      );
       void loadMarkdownLibrary();
     }
   };
@@ -2155,7 +2162,7 @@ function ReportResult({ data }: { data: Json }) {
             <button onClick={() => void loadMarkdownLibrary()}>保存一覧</button>
           </div>
           <span>
-            PDFは印刷保存、.md保存は端末へのダウンロード、RAG保存はlocal_docs/reportsへ登録します。
+            PDFは印刷保存、.md保存は端末へのダウンロード、RAG保存はlocal_docs/reportsへ保存し、現在のRAG DBへ登録します。
           </span>
         </div>
         <Status
