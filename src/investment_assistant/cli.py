@@ -1453,6 +1453,20 @@ def main(argv: list[str] | None = None) -> int:
     rag_index_dir_parser.add_argument("--overlap-chars", type=int, default=120)
     rag_index_dir_parser.add_argument("--embeddings", choices=["hashing", "gemini"])
 
+    market_rag_parser = subparsers.add_parser(
+        "market-rag-build",
+        help="Render per-ticker RAG evidence notes from market CSVs and index them",
+    )
+    market_rag_parser.add_argument(
+        "--financials-csv", default=str(DEFAULT_YAHOO_FINANCIALS_PATH)
+    )
+    market_rag_parser.add_argument("--daily-bars-csv", default="local_docs/market/daily_bars.csv")
+    market_rag_parser.add_argument("--output-dir", default="local_docs/market/rag")
+    market_rag_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    market_rag_parser.add_argument(
+        "--no-index", action="store_true", help="Only write notes; skip RAG indexing"
+    )
+
     rag_stats_parser = subparsers.add_parser("rag-stats")
     rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_stats_parser.add_argument(
@@ -1701,6 +1715,18 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             overlap_chars=args.overlap_chars,
             embeddings=args.embeddings,
         )
+    if command == "market-rag-build":
+        from investment_assistant.portfolio.market_rag import build_market_evidence_docs
+
+        daily_bars = args.daily_bars_csv if Path(args.daily_bars_csv).is_file() else None
+        result = build_market_evidence_docs(
+            financials_csv=args.financials_csv,
+            output_dir=args.output_dir,
+            daily_bars_csv=daily_bars,
+        )
+        if not args.no_index and result["documents_written"]:
+            result["index"] = run_rag_index_dir(path=args.output_dir, db_path=args.db_path)
+        return result
     if command == "rag-stats":
         keywords = tuple(
             keyword.strip()
