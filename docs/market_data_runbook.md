@@ -28,8 +28,15 @@
    $action  = New-ScheduledTaskAction -Execute "powershell.exe" `
      -Argument "-ExecutionPolicy Bypass -File `"$HOME\Documents\GitHub\Web-Scraping\scripts\daily_refresh.ps1`""
    $trigger = New-ScheduledTaskTrigger -Daily -At 7:00am
-   Register-ScheduledTask -TaskName "InvestmentDailyRefresh" -Action $action -Trigger $trigger -Description "毎朝7時に最新ファイナンスデータを取得"
+   # -WakeToRun: スリープ復帰 / -AllowStartIfOnBatteries + -DontStopIfGoingOnBatteries:
+   # ノートPCのバッテリー駆動でも実行（これが無いと既定で拒否され LastTaskResult=0x800710E0 になる）
+   $settings = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable `
+     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+   Register-ScheduledTask -TaskName "InvestmentDailyRefresh" -Action $action -Trigger $trigger `
+     -Settings $settings -Description "毎朝7時に最新ファイナンスデータを取得"
    ```
+   既に登録済みで `LastTaskResult` が `0x800710E0`(=2147946720) になる場合は、上の `$settings` を作って
+   `Set-ScheduledTask -TaskName "InvestmentDailyRefresh" -Settings $settings` で更新する。
 
 ### 重要な注意
 
