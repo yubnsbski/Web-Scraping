@@ -54,3 +54,31 @@ def test_market_rag_build_can_skip_indexing(tmp_path: Path) -> None:
 def test_market_rag_build_missing_csv_raises() -> None:
     with pytest.raises(ApiError, match="financials CSV not found"):
         market_api.market_rag_build({"financials_csv": "local_docs/_nope_financials.csv"})
+
+
+def test_index_financials_into_rag_builds_and_indexes(tmp_path: Path) -> None:
+    # The hook used by "市場財務指標の更新 + index_rag" to grow RAG with no extra step.
+    fin = tmp_path / "yahoo_financials.csv"
+    fin.write_text(_FIN_CSV, encoding="utf-8")
+    rag_dir = tmp_path / "rag"
+    db = tmp_path / "rag.sqlite"
+
+    rag = market_api._index_financials_into_rag(
+        str(fin),
+        {
+            "rag_output_dir": str(rag_dir),
+            "db_path": str(db),
+            "daily_bars_csv": str(tmp_path / "_no_bars.csv"),
+        },
+    )
+
+    assert rag["documents_written"] == 2
+    assert isinstance(rag.get("index"), dict)
+    assert (rag_dir / "9433.md").is_file()
+    assert db.is_file()
+
+
+def test_index_financials_into_rag_missing_csv_is_safe(tmp_path: Path) -> None:
+    rag = market_api._index_financials_into_rag(str(tmp_path / "nope.csv"), {})
+    assert rag["documents_written"] == 0
+    assert rag["skipped"] == "financials_csv_missing"

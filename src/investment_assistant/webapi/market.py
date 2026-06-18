@@ -117,7 +117,35 @@ def market_financials(body: JsonDict) -> JsonDict:
     )
     result["universe_source"] = universe_source
     result["max_count"] = max_count
+    if _as_bool(body.get("index_rag"), False) and result.get("saved"):
+        result["rag"] = _index_financials_into_rag(
+            str(result.get("output_path") or output_path), body
+        )
     return result
+
+
+def _index_financials_into_rag(financials_csv: str, body: JsonDict) -> JsonDict:
+    """Build per-ticker RAG evidence from the just-saved financials CSV and index it.
+
+    Lets a normal "市場財務指標の更新" grow the RAG store with no extra step.
+    """
+
+    from investment_assistant.portfolio.market_rag import build_market_evidence_docs
+    from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+
+    if not Path(financials_csv).is_file():
+        return {"documents_written": 0, "skipped": "financials_csv_missing"}
+    bars = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH)
+    rag = build_market_evidence_docs(
+        financials_csv=financials_csv,
+        output_dir=str(body.get("rag_output_dir") or "local_docs/market/rag"),
+        daily_bars_csv=bars if Path(bars).is_file() else None,
+    )
+    if rag["documents_written"]:
+        rag["index"] = cli.run_rag_index_dir(
+            path=rag["output_dir"], db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+        )
+    return rag
 
 
 def market_intraday(body: JsonDict) -> JsonDict:

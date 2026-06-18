@@ -242,6 +242,7 @@ function DataUpdatePanel(props: {
   const [tickers, setTickers] = useState("8306,9433,7203");
   const [range, setRange] = useState("1mo");
   const [maxCount, setMaxCount] = useState("20");
+  const [indexRag, setIndexRag] = useState(true);
   const { loading, error, data, run } = useAsync<Json>();
   const inventory = useAsync<Json>();
   const financialsPreview = useAsync<Json>();
@@ -299,6 +300,7 @@ function DataUpdatePanel(props: {
       save_csv: selectedMode !== "intraday",
     };
     if (selectedMode === "ohlcv") body.range = range;
+    if (selectedMode === "financials") body.index_rag = indexRag;
     if (selectedNeedsTickers) body.tickers = tickerList;
     else body.universe = selectedScope;
     if (selectedScope === "financials_csv") body.financials_csv = props.financialsPath;
@@ -380,6 +382,9 @@ function DataUpdatePanel(props: {
               <option value="1y">1年</option>
             </select>
           </Field>
+        )}
+        {mode === "financials" && (
+          <Check label="取得後にRAGへ登録" checked={indexRag} onChange={setIndexRag} />
         )}
         <Field label="財務CSV">
           <input value={props.financialsPath} onChange={(e) => props.setFinancialsPath(e.target.value)} />
