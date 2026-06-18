@@ -147,6 +147,34 @@ def market_forecast(body: JsonDict) -> JsonDict:
         raise ApiError(str(exc), status=400) from exc
 
 
+def market_forecast_screen(body: JsonDict) -> JsonDict:
+    """Rank tickers in the daily-bars CSV by forecast expected return."""
+
+    from investment_assistant.portfolio.market_forecast import screen_by_forecast
+
+    daily_bars_csv = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH)
+    if not Path(daily_bars_csv).is_file():
+        raise ApiError(f"daily bars CSV not found: {daily_bars_csv}")
+    try:
+        max_abs = float(body.get("max_abs_return", 30.0))
+    except (TypeError, ValueError):
+        max_abs = 30.0
+    ranked = screen_by_forecast(
+        daily_bars_csv,
+        horizon=_as_int(body.get("horizon"), 5),
+        include_ml=_as_bool(body.get("include_ml"), False),
+        top=_as_int(body.get("top"), 50),
+        max_abs_return_pct=max_abs,
+    )
+    return {
+        "ranked_count": len(ranked),
+        "horizon": _as_int(body.get("horizon"), 5),
+        "results": ranked,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def _index_financials_into_rag(financials_csv: str, body: JsonDict) -> JsonDict:
     """Build per-ticker RAG evidence from the just-saved financials CSV and index it.
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
 
 type Json = Record<string, any>;
-type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "report" | "rag" | "chat";
+type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 type RagSearchDraft = { query: string; dbPath: string; limit: string; version: number };
 type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[]; searchQuery?: string };
@@ -32,6 +32,7 @@ const TABS: Array<{ id: TabId; label: string; short: string }> = [
   { id: "holdings", label: "保有分析", short: "保有" },
   { id: "screen", label: "候補抽出", short: "候補" },
   { id: "detail", label: "詳細", short: "詳細" },
+  { id: "forecast", label: "予測スクリーニング", short: "予測" },
   { id: "report", label: "レポート", short: "報告" },
   { id: "rag", label: "RAG検索", short: "RAG" },
   { id: "chat", label: "AI確認", short: "AI" },
@@ -155,6 +156,10 @@ export function App() {
             onMove={setTab}
           />
         )}
+        {tab === "forecast" && <ForecastScreenPanel onOpenDetail={(code) => {
+          setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
+          setTab("detail");
+        }} />}
         {tab === "report" && (
           <ReportPanel
             holdingsCsv={holdingsCsv}
@@ -1039,6 +1044,85 @@ function DetailPanel(props: {
       {state.data && <DetailResult data={state.data} onMove={props.onMove} />}
       <Status loading={forecast.loading} error={forecast.error} />
       {forecast.data && <ForecastResult data={forecast.data} />}
+    </section>
+  );
+}
+
+function ForecastScreenPanel(props: { onOpenDetail: (code: string) => void }) {
+  const [horizon, setHorizon] = useState("5");
+  const [top, setTop] = useState("50");
+  const [maxAbsReturn, setMaxAbsReturn] = useState("30");
+  const screen = useAsync<Json>();
+  const results: Json[] = Array.isArray(screen.data?.results) ? (screen.data!.results as Json[]) : [];
+
+  const run = () =>
+    screen.run(() =>
+      api<Json>("/api/market/forecast/screen", {
+        horizon: Number(horizon) || 5,
+        top: Number(top) || 50,
+        max_abs_return: Number(maxAbsReturn) || 0,
+      }),
+    );
+
+  return (
+    <section className="screen">
+      <ScreenTitle
+        title="予測スクリーニング"
+        body="取得済みの株価系列から、銘柄ごとの期待リターンを統計的に予測してランキングします。買い推奨ではありません。"
+      />
+      <div className="form-grid tight">
+        <Field label="予測期間（営業日）">
+          <input value={horizon} inputMode="numeric" onChange={(e) => setHorizon(e.target.value)} />
+        </Field>
+        <Field label="上位件数">
+          <input value={top} inputMode="numeric" onChange={(e) => setTop(e.target.value)} />
+        </Field>
+        <Field label="妥当性上限（±%）">
+          <input value={maxAbsReturn} inputMode="numeric" onChange={(e) => setMaxAbsReturn(e.target.value)} />
+        </Field>
+      </div>
+      <ActionRow>
+        <button className="primary" disabled={screen.loading} onClick={() => void run()}>
+          {screen.loading ? "予測中..." : "予測スクリーニング実行"}
+        </button>
+      </ActionRow>
+      <Status loading={screen.loading} error={screen.error} />
+      {screen.data && (
+        <div className="detail-section">
+          <p className="hint">
+            {String(screen.data.ranked_count ?? results.length)} 件（期待リターン降順 /
+            {" "}非助言の統計推定）
+          </p>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>コード</th>
+                <th>直近終値</th>
+                <th>予測終値</th>
+                <th>期待リターン</th>
+                <th>RMSE%</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((row) => (
+                <tr key={String(row.ticker)}>
+                  <td>{String(row.ticker)}</td>
+                  <td>{Math.round(Number(row.last_close)).toLocaleString()}</td>
+                  <td>{Math.round(Number(row.forecast_close)).toLocaleString()}</td>
+                  <td>{Number(row.expected_return_pct).toFixed(2)}%</td>
+                  <td>{row.rmse_pct == null ? "-" : `${Number(row.rmse_pct).toFixed(2)}%`}</td>
+                  <td>
+                    <button className="table-action" onClick={() => props.onOpenDetail(String(row.ticker))}>
+                      詳細
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

@@ -47,3 +47,26 @@ def test_market_forecast_route_short_series_is_api_error(tmp_path: Path) -> None
     path.write_text(_HEADER + "7203,2026-05-01,1,1,1,1000,1\n", encoding="utf-8")
     with pytest.raises(ApiError, match="not enough observations"):
         market_api.market_forecast({"ticker": "7203", "daily_bars_csv": str(path)})
+
+
+def test_market_forecast_screen_route_ranks(tmp_path: Path) -> None:
+    lines = [_HEADER.rstrip("\n")]
+    for i in range(20):
+        up = 1000 + i * 20
+        down = 3000 - i * 15
+        lines.append(f"7203,2026-05-{i + 1:02d},{up},{up},{up},{up},1")
+        lines.append(f"9999,2026-05-{i + 1:02d},{down},{down},{down},{down},1")
+    path = tmp_path / "daily_bars.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = market_api.market_forecast_screen(
+        {"daily_bars_csv": str(path), "horizon": 5}
+    )
+    assert result["ranked_count"] == 2
+    assert [r["ticker"] for r in result["results"]] == ["7203", "9999"]
+    assert result["auto_trading"] is False
+
+
+def test_market_forecast_screen_route_missing_csv_raises() -> None:
+    with pytest.raises(ApiError, match="daily bars CSV not found"):
+        market_api.market_forecast_screen({"daily_bars_csv": "local_docs/_nope.csv"})
