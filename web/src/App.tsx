@@ -1538,6 +1538,7 @@ function ChatPanel(props: {
       {state.data && (
         <div className="answer">
           <h3>回答</h3>
+          <ForecastHighlights highlights={Array.isArray(state.data.highlights) ? (state.data.highlights as Json[]) : []} />
           <RagEvidenceQuality
             title="回答時の根拠量"
             results={ragResults}
@@ -1553,6 +1554,27 @@ function ChatPanel(props: {
         </div>
       )}
     </section>
+  );
+}
+
+function ForecastHighlights({ highlights }: { highlights: Json[] }) {
+  if (highlights.length === 0) return null;
+  return (
+    <div className="detail-section" aria-label="予測ハイライト">
+      <h4>予測ハイライト（統計推定・非助言）</h4>
+      <ul className="forecast-highlights">
+        {highlights.map((item, index) => (
+          <li key={`${String(item.ticker ?? item.source ?? index)}`}>
+            <b>
+              {item.name ? `${String(item.name)}` : ""}
+              {item.ticker ? `（${String(item.ticker)}）` : ""}
+            </b>
+            {item.forecast ? <div>予測: {String(item.forecast)}</div> : null}
+            {item.tags ? <div className="hint">特徴: {String(item.tags)}</div> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

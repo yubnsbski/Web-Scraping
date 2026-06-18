@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from investment_assistant.cli import run_rag_index_dir
+from investment_assistant.cli import run_rag_answer_context, run_rag_index_dir
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.search import build_answer_context, search_chunks
 from investment_assistant.rag.store import RagStore
@@ -98,6 +98,29 @@ def test_build_answer_context_formats_citations(tmp_path) -> None:
 
     assert "[1] source=" in context
     assert "自動売買は行いません" in context
+
+
+def test_answer_context_returns_forecast_highlights(tmp_path) -> None:
+    doc = tmp_path / "7203.md"
+    doc.write_text(
+        "# トヨタ（7203） 市場データ\n"
+        "特徴: 高配当（利回り≥3.5%）\n"
+        "予測（統計推定・非助言）: +1営業日 2,100 円 / +5営業日 2,120 円\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "rag.sqlite"
+    document = load_document(doc)
+    RagStore(db).upsert_document(
+        document,
+        chunk_text(source=document.source, text=document.text, content_hash=document.content_hash),
+    )
+
+    result = run_rag_answer_context(query="トヨタ 予測 配当", db_path=db, limit=5)
+
+    highlights = result["highlights"]
+    assert isinstance(highlights, list) and highlights
+    assert highlights[0]["ticker"] == "7203"
+    assert "2,100 円" in str(highlights[0]["forecast"])
 
 
 def test_run_rag_index_dir_indexes_supported_files_recursively(tmp_path) -> None:

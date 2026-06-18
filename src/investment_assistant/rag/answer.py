@@ -5,6 +5,7 @@ from __future__ import annotations
 from investment_assistant.llm.service import LlmResponse, LlmService
 from investment_assistant.rag.search import (
     build_answer_context,
+    evidence_highlights,
     search_chunks,
     search_result_to_dict,
 )
@@ -97,6 +98,7 @@ def generate_rag_answer(
         "query": query,
         "answer": response.text,
         "context": context,
+        "highlights": evidence_highlights(results),
         "results": [search_result_to_dict(result) for result in results],
         "llm": _response_to_dict(response),
         "disclaimer": DISCLAIMER,
