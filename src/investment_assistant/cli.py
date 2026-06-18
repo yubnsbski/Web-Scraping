@@ -1467,6 +1467,22 @@ def main(argv: list[str] | None = None) -> int:
         "--no-index", action="store_true", help="Only write notes; skip RAG indexing"
     )
 
+    market_forecast_parser = subparsers.add_parser(
+        "market-forecast",
+        help="Forecast next-horizon closes for a ticker from daily_bars.csv",
+    )
+    market_forecast_parser.add_argument("--ticker", required=True)
+    market_forecast_parser.add_argument(
+        "--daily-bars-csv", default="local_docs/market/daily_bars.csv"
+    )
+    market_forecast_parser.add_argument("--horizon", type=int, default=5)
+    market_forecast_parser.add_argument(
+        "--no-ml", action="store_true", help="Skip scikit-learn models (classical only)"
+    )
+    market_forecast_parser.add_argument(
+        "--no-evaluate", action="store_true", help="Skip the walk-forward RMSE backtest"
+    )
+
     rag_stats_parser = subparsers.add_parser("rag-stats")
     rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_stats_parser.add_argument(
@@ -1727,6 +1743,16 @@ def _dispatch(args: argparse.Namespace) -> object | None:
         if not args.no_index and result["documents_written"]:
             result["index"] = run_rag_index_dir(path=args.output_dir, db_path=args.db_path)
         return result
+    if command == "market-forecast":
+        from investment_assistant.portfolio.market_forecast import forecast_ticker
+
+        return forecast_ticker(
+            daily_bars_csv=args.daily_bars_csv,
+            ticker=args.ticker,
+            horizon=args.horizon,
+            include_ml=not args.no_ml,
+            evaluate=not args.no_evaluate,
+        )
     if command == "rag-stats":
         keywords = tuple(
             keyword.strip()
