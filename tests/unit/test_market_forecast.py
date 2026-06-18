@@ -72,6 +72,13 @@ def test_forecast_raises_for_too_few_points(tmp_path: Path) -> None:
         forecast_ticker(daily_bars_csv=path, ticker="7203", include_ml=False)
 
 
+def test_forecast_raises_clear_message_when_ticker_absent(tmp_path: Path) -> None:
+    # 7203 has bars; 8306 has none -> a distinct "fetch its OHLCV first" message.
+    path = _bars(tmp_path, "7203", [1000.0 + i for i in range(10)])
+    with pytest.raises(ValueError, match="no daily-bars data for 8306"):
+        forecast_ticker(daily_bars_csv=path, ticker="8306", include_ml=False)
+
+
 def test_ticker_with_dot_t_suffix_matches_bare_code(tmp_path: Path) -> None:
     path = _bars(tmp_path, "7203", [1000.0 + i for i in range(10)])
     series = timeseries_from_daily_bars(path, "7203.T")
