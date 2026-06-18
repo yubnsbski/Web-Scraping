@@ -16,6 +16,9 @@ from investment_assistant.cli_market import (
     DEFAULT_YAHOO_FINANCIALS_PATH,
 )
 from investment_assistant.cli_market import (
+    run_market_daily_refresh as run_market_daily_refresh,
+)
+from investment_assistant.cli_market import (
     run_market_financials as run_market_financials,
 )
 from investment_assistant.cli_market import (
@@ -1513,6 +1516,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Drop forecasts whose |expected return %%| exceeds this (0 = no filter)",
     )
 
+    daily_refresh_parser = subparsers.add_parser(
+        "market-daily-refresh",
+        help="One-shot daily refresh: OHLCV -> daily_bars, financials, RAG rebuild",
+    )
+    daily_refresh_parser.add_argument(
+        "--universe-csv", default="local_docs/market/domestic_universe.csv"
+    )
+    daily_refresh_parser.add_argument(
+        "--tickers", help="Comma-separated codes (overrides universe)"
+    )
+    daily_refresh_parser.add_argument("--range", default="1y")
+    daily_refresh_parser.add_argument("--max", type=int, default=0, help="Cap tickers (0=all)")
+    daily_refresh_parser.add_argument("--daily-bars", default="local_docs/market/daily_bars.csv")
+    daily_refresh_parser.add_argument("--financials-out", default=DEFAULT_YAHOO_FINANCIALS_PATH)
+    daily_refresh_parser.add_argument("--rag-dir", default="local_docs/market/rag")
+    daily_refresh_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    daily_refresh_parser.add_argument(
+        "--no-rag", action="store_true", help="Skip the RAG rebuild step"
+    )
+
     rag_stats_parser = subparsers.add_parser("rag-stats")
     rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_stats_parser.add_argument(
@@ -1760,6 +1783,33 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             max_chars=args.max_chars,
             overlap_chars=args.overlap_chars,
             embeddings=args.embeddings,
+        )
+    if command == "market-daily-refresh":
+        if args.tickers:
+            tickers = [t.strip() for t in str(args.tickers).split(",") if t.strip()]
+        elif Path(args.universe_csv).is_file():
+            from investment_assistant.portfolio.jpx_universe import (
+                load_domestic_universe_tickers,
+            )
+
+            tickers = load_domestic_universe_tickers(args.universe_csv)
+        else:
+            tickers = []
+        if not tickers:
+            print(
+                "no tickers: provide --tickers or build the universe first "
+                "(market-universe-build)"
+            )
+            return 2
+        return run_market_daily_refresh(
+            tickers=tickers,
+            range_=args.range,
+            max_count=int(args.max),
+            daily_bars_path=args.daily_bars,
+            financials_path=args.financials_out,
+            rag_dir=args.rag_dir,
+            rag_db_path=args.db_path,
+            build_rag=not args.no_rag,
         )
     if command == "market-rag-build":
         from investment_assistant.portfolio.market_rag import build_market_evidence_docs

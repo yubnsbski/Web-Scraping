@@ -7,6 +7,7 @@ public ``investment_assistant.cli.run_*`` API is unchanged.
 
 from __future__ import annotations
 
+import csv
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -19,9 +20,12 @@ from investment_assistant.portfolio._market_common import (
 )
 
 DEFAULT_YAHOO_FINANCIALS_PATH = "local_docs/market/yahoo_financials.csv"
+DEFAULT_DAILY_BARS_PATH = "local_docs/market/daily_bars.csv"
+DEFAULT_MARKET_RAG_DIR = "local_docs/market/rag"
 
 __all__ = [
     "DEFAULT_YAHOO_FINANCIALS_PATH",
+    "run_market_daily_refresh",
     "run_market_financials",
     "run_market_inbox",
     "run_market_ohlcv",
@@ -208,3 +212,101 @@ def run_yahoo_intraday(
     return _persist_or_inline(
         result, output_dir=output_dir, series_key="intraday", csv_writer=intraday_csv_text
     )
+
+
+def _write_daily_bars_csv(ohlcv: object, path: str | Path) -> int:
+    """Write the inline OHLCV map to a consolidated daily_bars CSV; return rows."""
+
+    out = reject_path_traversal(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=["ticker", "date", "open", "high", "low", "close", "volume"]
+        )
+        writer.writeheader()
+        if isinstance(ohlcv, dict):
+            for ticker, rows in ohlcv.items():
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    writer.writerow(
+                        {
+                            "ticker": str(ticker),
+                            "date": row.get("date"),
+                            "open": row.get("open"),
+                            "high": row.get("high"),
+                            "low": row.get("low"),
+                            "close": row.get("close"),
+                            "volume": row.get("volume"),
+                        }
+                    )
+                    count += 1
+    return count
+
+
+def run_market_daily_refresh(
+    *,
+    tickers: list[str],
+    range_: str = "1y",
+    daily_bars_path: str | Path = DEFAULT_DAILY_BARS_PATH,
+    financials_path: str | Path = DEFAULT_YAHOO_FINANCIALS_PATH,
+    rag_dir: str | Path = DEFAULT_MARKET_RAG_DIR,
+    rag_db_path: str | Path | None = None,
+    build_rag: bool = True,
+    max_count: int = 0,
+    fetch: Callable[[str], str] | None = None,
+    rate_limit_policy: MarketFetchPolicy | None = DEFAULT_YAHOO_RATE_LIMIT_POLICY,
+) -> dict[str, object]:
+    """One-shot daily refresh: OHLCV -> daily_bars.csv, financials, RAG rebuild.
+
+    Designed to be scheduled (e.g. Windows Task Scheduler at 07:00) so the latest
+    finance data is ready each morning. ``fetch`` is injectable for testing.
+    """
+
+    resolved = [str(t).strip() for t in tickers if str(t).strip()]
+    if max_count and max_count > 0:
+        resolved = resolved[:max_count]
+
+    ohlcv_result = run_market_ohlcv(
+        tickers=resolved, range_=range_, fetch=fetch, rate_limit_policy=rate_limit_policy
+    )
+    daily_bars_count = _write_daily_bars_csv(ohlcv_result.get("ohlcv"), daily_bars_path)
+
+    fin_result = run_market_financials(
+        tickers=resolved,
+        save=True,
+        output_path=financials_path,
+        fetch=fetch,
+        rate_limit_policy=rate_limit_policy,
+    )
+
+    rag_summary: dict[str, object] | None = None
+    if build_rag:
+        from investment_assistant.portfolio.market_rag import build_market_evidence_docs
+        from investment_assistant.rag.indexer import index_directory
+        from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+
+        db = str(rag_db_path) if rag_db_path is not None else str(DEFAULT_RAG_DB_PATH)
+        rag_summary = build_market_evidence_docs(
+            financials_csv=financials_path,
+            output_dir=rag_dir,
+            daily_bars_csv=daily_bars_path,
+            include_forecast=True,
+        )
+        if rag_summary.get("documents_written"):
+            rag_summary["index"] = index_directory(path=rag_dir, db_path=db)
+
+    return {
+        "tickers_count": len(resolved),
+        "range": range_,
+        "daily_bars_path": str(daily_bars_path),
+        "daily_bars_count": daily_bars_count,
+        "financials_path": str(financials_path),
+        "financials_matched": fin_result.get("matched_tickers"),
+        "rag": rag_summary,
+        "auto_trading": False,
+        "call_real_api": False,
+    }

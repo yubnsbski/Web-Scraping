@@ -2,6 +2,37 @@
 
 「データ更新」画面で**市場データが入らない / 取得行数が少ない**ときに、原因を切り分けて確実にデータを入れるための運用ガイド。コードの仕様ではなく**運用上の勘所**を中心にまとめる。
 
+## 毎日決まった時刻に最新データを揃える（自動更新）
+
+`market-daily-refresh` 1コマンドで **OHLCV → `daily_bars.csv` 集約 → 財務指標 → RAG（予測込み）再構築** を一括実行できる。Yahoo取得には**ネットワークが必要**＝**自分のPCで実行**する（クラウド/サンドボックスはネット遮断のため不可）。Windowsなら**タスクスケジューラ**で毎日起動する。
+
+### 手順（Windows・毎朝7時の例）
+
+1. 事前に一度だけ、JPXユニバースを作成（[全国内株式ユニバースの構築] 参照）:
+   ```powershell
+   python -m investment_assistant.cli market-universe-build --jpx data_j.csv --output local_docs/market/domestic_universe.csv --scope domestic
+   ```
+2. リポジトリ同梱の `scripts/daily_refresh.ps1` を開き、先頭の `$Repo` を自分のパスに直す。
+3. 動作確認（少量で）:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\daily_refresh.ps1
+   ```
+   `daily_bars_count` と `rag.documents_written` が増えればOK。`local_docs\logs\daily_refresh_*.log` にログが残る。
+4. タスクスケジューラに登録（管理者PowerShellで1回）:
+   ```powershell
+   $action  = New-ScheduledTaskAction -Execute "powershell.exe" `
+     -Argument "-ExecutionPolicy Bypass -File `"$HOME\Documents\GitHub\Web-Scraping\scripts\daily_refresh.ps1`""
+   $trigger = New-ScheduledTaskTrigger -Daily -At 7:00am
+   Register-ScheduledTask -TaskName "InvestmentDailyRefresh" -Action $action -Trigger $trigger -Description "毎朝7時に最新ファイナンスデータを取得"
+   ```
+
+### 重要な注意
+
+- **所要時間**：全件（約3,700銘柄）× 1年分はレート制限込みで**数時間**かかる。「7時に揃える」なら**起動を早朝（例: 2:00）**にするか、`scripts/daily_refresh.ps1` の `--max` を小さく（例: 300）して件数を絞る。`--max 0` で全件。
+- **PCの状態**：スリープ中は走らない。タスクのプロパティで「タスクの実行時にスリープを解除する」を有効化、または常時起動運用にする。
+- **robots/個人利用**：`MARKET_ALLOW_ROBOTS_BYPASS=1` はスクリプト内で設定済み（個人利用前提）。再配布・商用利用は不可。
+- **手動実行**：UIの「データ更新」からでも同等のことはできるが、毎日無人で回すなら本コマンド＋タスクスケジューラが確実。
+
 ## TL;DR
 
 - ライブ取得（Yahoo直叩き）は **robots.txt とネットワーク**に依存し、環境によっては空になる。
