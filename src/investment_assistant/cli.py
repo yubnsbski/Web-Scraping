@@ -903,11 +903,14 @@ def run_rag_answer_context(
 ) -> dict[str, object]:
     """Return citation-friendly local context for a query without calling an LLM."""
 
+    from investment_assistant.rag.search import evidence_highlights
+
     store = RagStore(db_path)
     results = search_chunks(store, query=query, limit=limit)
     return {
         "query": query,
         "context": build_answer_context(results),
+        "highlights": evidence_highlights(results),
         "results": [search_result_to_dict(result) for result in results],
     }
 

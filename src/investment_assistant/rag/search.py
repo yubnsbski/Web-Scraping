@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -238,6 +239,52 @@ def build_answer_context(
         blocks.append(block)
         used_chars += len(block) + 2
     return "\n\n".join(blocks)
+
+
+_FORECAST_PREFIX = "予測（統計推定・非助言）:"
+_TAGS_PREFIX = "特徴:"
+_TITLE_RE = re.compile(r"#\s*(.+?)（([0-9A-Za-z]+)）")
+
+
+def _line_value(text: str, prefix: str) -> str | None:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            value = stripped[len(prefix):].strip()
+            return value or None
+    return None
+
+
+def evidence_highlights(results: list[SearchResult]) -> list[dict[str, object]]:
+    """Pull structured forecast / feature highlights out of retrieved chunks.
+
+    Lets the answer surface a prediction and its grounds together without an LLM
+    call: market-evidence notes carry a "予測（統計推定・非助言）" line and a
+    "特徴" line, which this lifts (with the ticker/name) per source. Sources
+    without either are skipped.
+    """
+
+    out: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for result in results:
+        if result.source in seen:
+            continue
+        forecast = _line_value(result.text, _FORECAST_PREFIX)
+        tags = _line_value(result.text, _TAGS_PREFIX)
+        if forecast is None and tags is None:
+            continue
+        seen.add(result.source)
+        item: dict[str, object] = {"source": result.source}
+        title = _TITLE_RE.search(result.text)
+        if title:
+            item["name"] = title.group(1).strip()
+            item["ticker"] = title.group(2)
+        if forecast is not None:
+            item["forecast"] = forecast
+        if tags is not None:
+            item["tags"] = tags
+        out.append(item)
+    return out
 
 
 def boost_by_feedback(
