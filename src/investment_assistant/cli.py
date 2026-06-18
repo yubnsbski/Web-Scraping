@@ -1503,6 +1503,12 @@ def main(argv: list[str] | None = None) -> int:
     forecast_screen_parser.add_argument(
         "--no-ml", action="store_true", help="Skip scikit-learn models (classical only)"
     )
+    forecast_screen_parser.add_argument(
+        "--max-abs-return",
+        type=float,
+        default=30.0,
+        help="Drop forecasts whose |expected return %%| exceeds this (0 = no filter)",
+    )
 
     rag_stats_parser = subparsers.add_parser("rag-stats")
     rag_stats_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
@@ -1784,6 +1790,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             horizon=args.horizon,
             include_ml=not args.no_ml,
             top=args.top,
+            max_abs_return_pct=args.max_abs_return,
         )
         columns = (
             "ticker",
@@ -1793,6 +1800,7 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             "horizon",
             "backtest_best_model",
             "backtest_rmse",
+            "rmse_pct",
             "observations",
         )
         output_path = reject_path_traversal(args.output)

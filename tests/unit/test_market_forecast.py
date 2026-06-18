@@ -106,12 +106,35 @@ def test_screen_ranks_by_expected_return_descending(tmp_path: Path) -> None:
     path = tmp_path / "daily_bars.csv"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    ranked = screen_by_forecast(path, horizon=5, include_ml=False)
+    ranked = screen_by_forecast(path, horizon=5, include_ml=False, max_abs_return_pct=0.0)
     tickers = [row["ticker"] for row in ranked]
     assert tickers == ["7203", "8306", "9999"]  # high -> low expected return
     assert ranked[0]["expected_return_pct"] > 0
     assert ranked[-1]["expected_return_pct"] < 0
-    assert all("backtest_rmse" in row for row in ranked)
+    assert all("backtest_rmse" in row and "rmse_pct" in row for row in ranked)
+
+
+def test_screen_drops_implausible_extrapolation(tmp_path: Path) -> None:
+    # A late price explosion makes the drift/ensemble forecast blow up; the
+    # implausibility guard must keep that artifact out of the ranking.
+    lines = ["ticker,date,open,high,low,close,volume"]
+    for i in range(20):  # 1301 calm ~1% drift
+        c = 1000 + i
+        lines.append(f"1301,2026-05-{i + 1:02d},{c},{c},{c},{c},1")
+    spike = [100, 105, 110, 115, 120, 130, 140, 150, 170, 200, 260, 360, 520, 760, 1100]
+    for i, c in enumerate(spike):  # 9999 parabolic -> explosive forecast
+        lines.append(f"9999,2026-05-{i + 1:02d},{c},{c},{c},{c},1")
+    path = tmp_path / "daily_bars.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    guarded = {r["ticker"] for r in screen_by_forecast(path, include_ml=False)}
+    unguarded = {
+        r["ticker"]
+        for r in screen_by_forecast(path, include_ml=False, max_abs_return_pct=0.0)
+    }
+    assert "9999" not in guarded  # artifact filtered (default 30% guard)
+    assert "9999" in unguarded  # present without the guard
+    assert "1301" in guarded  # plausible name retained
 
 
 def test_screen_top_caps_results(tmp_path: Path) -> None:
