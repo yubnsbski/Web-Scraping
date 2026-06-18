@@ -13,20 +13,25 @@ $env:MARKET_DOMESTIC_UNIVERSE_PATH = "$Repo\local_docs\market\domestic_universe.
 $log = "$Repo\local_docs\logs\daily_refresh_{0:yyyyMMdd}.log" -f (Get-Date)
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 
-# Python は進捗ログを stderr に出力する。$ErrorActionPreference = "Stop" のままだと
-# PowerShell がその stderr 行を NativeCommandError(致命的)扱いして最初のログで中断する。
-# 取得処理の本当の成否は終了コードで判定するので、ここだけ Continue にする。
-$ErrorActionPreference = "Continue"
+# 全工程: OHLCV -> daily_bars.csv 集約 -> 財務 -> RAG(予測込み)再構築。
+#
+# Python は進捗ログを stderr に出す。PowerShell でそのまま実行すると stderr 行を
+# NativeCommandError 扱いして中断/警告表示してしまうため、リダイレクトは cmd 側で行い
+# stdout/stderr をまとめてログへ書く（PowerShell に stderr を渡さない）。これで
+# NativeCommandError は発生しない。本当の成否は終了コードで判定する。
+#
+# まずは控えめ(--range 6mo --max 100)で確実に完走させ、安定したら増やす:
+#   全件は --max 0、精度重視は --range 1y（重いので早朝起動推奨）。
+$py = "python -m investment_assistant.cli market-daily-refresh --range 6mo --max 100"
+cmd /c "$py 1> ""$log"" 2>&1"
+$code = $LASTEXITCODE
 
-# 全工程: OHLCV -> daily_bars.csv 集約 -> 財務 -> RAG(予測込み)再構築
-# まずは --max 300 程度で運用し、安定したら 0(全件) に。全件1年は数時間かかります。
-python -m investment_assistant.cli market-daily-refresh `
-  --range 1y --max 300 2>&1 | Tee-Object -FilePath $log
+Write-Host "---- ログ末尾 ----"
+Get-Content $log -Tail 12 -ErrorAction SilentlyContinue
 
 # python の終了コードをタスクスケジューラに伝播する。
 # これが無いと、取得が失敗しても LastTaskResult が 0(成功) になり、
 # 「毎朝ちゃんと動いているか」の判定が当てにならなくなる。
-$code = $LASTEXITCODE
 if ($code -ne 0) {
   Add-Content -Path $log -Value "ERROR: market-daily-refresh exited with code $code"
 }
