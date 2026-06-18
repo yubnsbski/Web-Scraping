@@ -261,7 +261,12 @@ def _unique_path(path: Path) -> Path:
     if not path.exists():
         return path
     stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-    return path.with_name(f"{path.stem}-{stamp}{path.suffix}")
+    candidate = path.with_name(f"{path.stem}-{stamp}{path.suffix}")
+    counter = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem}-{stamp}-{counter}{path.suffix}")
+        counter += 1
+    return candidate
 
 
 def _report_markdown_doc_summary(path: Path) -> JsonDict:
