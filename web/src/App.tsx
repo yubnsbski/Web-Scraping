@@ -245,6 +245,7 @@ function DataUpdatePanel(props: {
   const { loading, error, data, run } = useAsync<Json>();
   const inventory = useAsync<Json>();
   const financialsPreview = useAsync<Json>();
+  const ragBuild = useAsync<Json>();
   const tickerList = splitTickers(tickers);
   const isInbox = mode === "inbox";
   const needsTickers = !isInbox && (mode === "intraday" || scope === "tickers");
@@ -393,9 +394,29 @@ function DataUpdatePanel(props: {
         <button className="primary" disabled={loading || (needsTickers && tickerList.length === 0)} onClick={() => void update()}>
           {loading ? "更新中..." : "更新する"}
         </button>
+        <button
+          className="ghost"
+          disabled={ragBuild.loading}
+          title="取得済みの財務・株価CSVから銘柄ごとの根拠文書を作り、RAGに登録します"
+          onClick={() =>
+            void ragBuild
+              .run(() => api<Json>("/api/market/rag/build", {}))
+              .then((result) => {
+                if (result) refreshDataView();
+              })
+          }
+        >
+          {ragBuild.loading ? "RAG登録中..." : "市場データをRAGへ登録"}
+        </button>
       </ActionRow>
       <Status loading={loading} error={error} />
       {data && <MarketResult data={data} mode={mode} />}
+      <Status loading={ragBuild.loading} error={ragBuild.error} />
+      {ragBuild.data && (
+        <p className="hint">
+          RAG登録: {String(ragBuild.data.documents_written ?? 0)} 件の銘柄文書を生成・索引しました。
+        </p>
+      )}
     </section>
   );
 }

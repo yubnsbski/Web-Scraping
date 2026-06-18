@@ -133,6 +133,34 @@ def market_inbox(body: JsonDict) -> JsonDict:
     return cli.run_market_inbox(path=str(raw_path) if raw_path else None)
 
 
+def market_rag_build(body: JsonDict) -> JsonDict:
+    """Render per-ticker RAG evidence notes from the saved market CSVs and index them.
+
+    Lets the existing data-update flow grow the RAG store from data already
+    collected, with no network and no separate CLI step.
+    """
+
+    from investment_assistant.portfolio.market_rag import build_market_evidence_docs
+    from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+
+    financials_csv = str(body.get("financials_csv") or _DEFAULT_YAHOO_FINANCIALS_PATH)
+    if not Path(financials_csv).is_file():
+        raise ApiError(f"financials CSV not found: {financials_csv}")
+    raw_bars = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH)
+    daily_bars_csv = raw_bars if Path(raw_bars).is_file() else None
+    output_dir = str(body.get("output_dir") or "local_docs/market/rag")
+
+    result = build_market_evidence_docs(
+        financials_csv=financials_csv,
+        output_dir=output_dir,
+        daily_bars_csv=daily_bars_csv,
+    )
+    if _as_bool(body.get("index_after_build"), True) and result["documents_written"]:
+        db_path = str(body.get("db_path") or DEFAULT_RAG_DB_PATH)
+        result["index"] = cli.run_rag_index_dir(path=output_dir, db_path=db_path)
+    return result
+
+
 def _market_ticker_list(body: JsonDict) -> list[str]:
     """Accept ``tickers`` as a list or a comma-separated string; trim blanks."""
 
