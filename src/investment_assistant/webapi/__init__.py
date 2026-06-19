@@ -9,7 +9,11 @@ Gemini API calls.
 from investment_assistant.webapi.service import (
     ApiError,
     JsonDict,
+)
+from investment_assistant.webapi.service import (
     available_routes as _core_available_routes,
+)
+from investment_assistant.webapi.service import (
     handle_api as _core_handle_api,
 )
 from investment_assistant.webapi.yahoo_market import (
