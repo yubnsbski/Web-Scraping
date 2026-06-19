@@ -6,6 +6,31 @@ plus an optional static-file server for the built React/Vite frontend in
 Gemini API calls.
 """
 
-from investment_assistant.webapi.service import ApiError, available_routes, handle_api
+from investment_assistant.webapi.service import (
+    ApiError,
+    JsonDict,
+    available_routes as _core_available_routes,
+    handle_api as _core_handle_api,
+)
+from investment_assistant.webapi.yahoo_market import (
+    available_yahoo_market_routes,
+    handle_yahoo_market_api,
+)
 
-__all__ = ["ApiError", "available_routes", "handle_api"]
+
+def handle_api(
+    method: str,
+    path: str,
+    body: JsonDict | None = None,
+) -> tuple[int, JsonDict]:
+    yahoo_result = handle_yahoo_market_api(method, path, body)
+    if yahoo_result is not None:
+        return yahoo_result
+    return _core_handle_api(method, path, body)
+
+
+def available_routes() -> list[str]:
+    return sorted({*_core_available_routes(), *available_yahoo_market_routes()})
+
+
+__all__ = ["ApiError", "JsonDict", "available_routes", "handle_api"]
