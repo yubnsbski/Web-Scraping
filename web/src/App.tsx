@@ -12,19 +12,13 @@ const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const DEFAULT_CHAT_QUERY = "KDDIの配当利回りと根拠を、投資助言にならない形で確認して";
 const DEFAULT_CHAT_LIMIT = 5;
 
-const SAMPLE_HOLDINGS_CSV = [
-  "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of",
-  "stock,8306,三菱UFJフィナンシャル・グループ,100,1000,tokutei,nisa_growth,user_csv,1200,,,user_csv,2026-06-10",
-  "stock,9433,KDDI,100,2500,tokutei,taxable,user_csv,2708.5,,,yfinance,2026-06-16",
-  "fund,FND001,低コスト全世界株式,120,10000,nisa,nisa_tsumitate,user_csv,12500,,25,user_csv,2026-06-10",
-].join("\n");
+// Header-only defaults: no pre-loaded sample holdings/funds. Build your own
+// via the 銘柄選択 builder / 候補抽出, or use the "テンプレート" button for examples.
+const SAMPLE_HOLDINGS_CSV =
+  "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price,annual_income,distribution_per_unit,data_provider,price_as_of";
 
-const SAMPLE_FUNDS_CSV = [
-  "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score",
-  "FND001,低コスト全世界株式,global_equity,0.12,reinvest,true,user_csv,0.95",
-  "FND002,債券バランス型,balanced,0.35,distribution,true,user_csv,0.80",
-  "FND999,高コストテーマ型,theme,1.20,distribution,false,user_csv,0.40",
-].join("\n");
+const SAMPLE_FUNDS_CSV =
+  "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score";
 
 const TABS: Array<{ id: TabId; label: string; short: string }> = [
   { id: "dashboard", label: "全体", short: "全体" },
