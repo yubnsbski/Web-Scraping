@@ -18,6 +18,7 @@ def build_investment_monthly_report(
     candidates: Sequence[dict[str, object]] = (),
     target_result: Mapping[str, object] | None = None,
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    market_financials_csv: str | Path | None = None,
     runtime_mode: str = "development",
 ) -> dict[str, object]:
     """Build a non-advisory monthly report from computed facts."""
@@ -25,6 +26,7 @@ def build_investment_monthly_report(
     analysis = analyze_portfolio(
         holdings,
         financials_csv=financials_csv,
+        market_financials_csv=market_financials_csv,
         runtime_mode=runtime_mode,
     )
     summary = analysis["summary"]
