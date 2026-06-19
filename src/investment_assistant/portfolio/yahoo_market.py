@@ -1,4 +1,4 @@
-"""Yahoo! Finance market-data acquisition for the local single-user app."""
+"""Yahoo! Finance OHLCV and market-fundamental acquisition."""
 
 from __future__ import annotations
 
@@ -40,38 +40,15 @@ DEFAULT_YAHOO_FUNDAMENTALS_CSV = Path("local_docs/market/yahoo_financials.csv")
 ALLOWED_RANGES = frozenset({"5d", "1mo", "3mo", "6mo", "1y", "2y", "5y"})
 ALLOWED_INTERVALS = frozenset({"1d", "1wk", "1mo"})
 FUNDAMENTAL_COLUMNS = (
-    "ticker",
-    "name",
-    "price",
-    "per",
-    "pbr",
-    "dps",
-    "dividend_yield",
-    "dividend_yield_percent",
-    "eps",
-    "market_cap",
-    "as_of",
-    "provider_id",
-    "source_ref",
+    "ticker", "name", "price", "per", "pbr", "dps", "dividend_yield",
+    "dividend_yield_percent", "eps", "market_cap", "as_of", "provider_id", "source_ref",
 )
-_NUMERIC_FIELDS = {
-    "price",
-    "per",
-    "pbr",
-    "dps",
-    "dividend_yield",
-    "dividend_yield_percent",
-    "eps",
-    "market_cap",
-}
+_NUMERIC_FIELDS = frozenset(FUNDAMENTAL_COLUMNS[2:10])
 _QUOTE_FIELDS = {
-    "regularMarketPrice": "price",
-    "trailingPE": "per",
-    "priceToBook": "pbr",
+    "regularMarketPrice": "price", "trailingPE": "per", "priceToBook": "pbr",
     "trailingAnnualDividendRate": "dps",
     "trailingAnnualDividendYield": "dividend_yield",
-    "epsTrailingTwelveMonths": "eps",
-    "marketCap": "market_cap",
+    "epsTrailingTwelveMonths": "eps", "marketCap": "market_cap",
 }
 _HTML_FIELDS = {"PER": "per", "PBR": "pbr", "1株配当": "dps", "EPS": "eps"}
 _PRICE_PATTERNS = (
@@ -82,7 +59,7 @@ _PRICE_PATTERNS = (
 
 
 class YahooMarketError(RuntimeError):
-    """Raised when a Yahoo response cannot provide usable data."""
+    """Yahoo returned no usable, policy-allowed response."""
 
 
 class _Document(Protocol):
@@ -97,53 +74,41 @@ class _Fetcher(Protocol):
 
 
 def normalize_tickers(tickers: Iterable[object]) -> list[str]:
-    resolved: list[str] = []
+    output: list[str] = []
     seen: set[str] = set()
     for raw in tickers:
         ticker = str(raw or "").strip().upper()
         ticker = ticker[:-2] if ticker.endswith(".T") else ticker
         if ticker and ticker not in seen:
             seen.add(ticker)
-            resolved.append(ticker)
-    return resolved
+            output.append(ticker)
+    return output
 
 
 def parse_yahoo_chart(json_text: str, *, ticker: str, source_ref: str) -> list[DailyBarFact]:
     root = _json_dict(json_text)
-    chart = _dict_value(root, "chart")
-    result = _first_dict(_list_value(chart, "result"))
-    timestamps = _list_value(result, "timestamp")
-    indicators = _dict_value(result, "indicators")
-    quote = _first_dict(_list_value(indicators, "quote"))
-    adjclose = _first_dict(_list_value(indicators, "adjclose"))
-    meta = _dict_value(result, "meta")
-    offset = _number(meta.get("gmtoffset")) or 0.0
+    result = _first_dict(_list(_dict(root.get("chart")).get("result")))
+    timestamps = _list(result.get("timestamp"))
+    indicators = _dict(result.get("indicators"))
+    quote = _first_dict(_list(indicators.get("quote")))
+    adjusted = _first_dict(_list(indicators.get("adjclose")))
+    offset = _number(_dict(result.get("meta")).get("gmtoffset")) or 0.0
     if not timestamps or not quote:
         return []
-
     bars: list[DailyBarFact] = []
     for index, raw_timestamp in enumerate(timestamps):
         timestamp = _number(raw_timestamp)
-        if timestamp is None:
-            continue
-        open_value = _indexed_number(quote.get("open"), index)
-        high_value = _indexed_number(quote.get("high"), index)
-        low_value = _indexed_number(quote.get("low"), index)
-        close_value = _indexed_number(quote.get("close"), index)
-        if all(value is None for value in (open_value, high_value, low_value, close_value)):
+        values = tuple(_at(quote.get(key), index) for key in ("open", "high", "low", "close"))
+        if timestamp is None or all(value is None for value in values):
             continue
         bars.append(
             DailyBarFact(
                 ticker=ticker,
                 date=datetime.fromtimestamp(int(timestamp + offset), tz=UTC).date().isoformat(),
-                open=open_value,
-                high=high_value,
-                low=low_value,
-                close=close_value,
-                volume=_indexed_number(quote.get("volume"), index),
-                adjusted_close=_indexed_number(adjclose.get("adjclose"), index),
-                provider_id="yahoo_finance",
-                source_ref=source_ref,
+                open=values[0], high=values[1], low=values[2], close=values[3],
+                volume=_at(quote.get("volume"), index),
+                adjusted_close=_at(adjusted.get("adjclose"), index),
+                provider_id="yahoo_finance", source_ref=source_ref,
             )
         )
     return bars
@@ -151,36 +116,31 @@ def parse_yahoo_chart(json_text: str, *, ticker: str, source_ref: str) -> list[D
 
 def parse_yahoo_quote(json_text: str) -> dict[str, dict[str, object]]:
     root = _json_dict(json_text)
-    response = _dict_value(root, "quoteResponse")
-    results = _list_value(response, "result")
-    parsed: dict[str, dict[str, object]] = {}
-    for raw_item in results:
-        item = _as_dict(raw_item)
+    items = _list(_dict(root.get("quoteResponse")).get("result"))
+    output: dict[str, dict[str, object]] = {}
+    for raw_item in items:
+        item = _dict(raw_item)
         ticker = str(item.get("symbol") or "").strip().upper()
         ticker = ticker[:-2] if ticker.endswith(".T") else ticker
         if not ticker:
             continue
         row: dict[str, object] = {
-            "ticker": ticker,
-            "provider_id": "yahoo_finance",
-            "source_ref": "yahoo_v7_quote",
+            "ticker": ticker, "provider_id": "yahoo_finance", "source_ref": "yahoo_v7_quote"
         }
         name = item.get("longName") or item.get("shortName")
         if isinstance(name, str) and name.strip():
             row["name"] = name.strip()
-        for source_key, target_key in _QUOTE_FIELDS.items():
-            value = _number(item.get(source_key))
-            if value is not None:
-                row[target_key] = value
-        dividend_yield = _number(row.get("dividend_yield"))
-        if dividend_yield is not None:
-            row["dividend_yield_percent"] = dividend_yield * 100.0
-        parsed[ticker] = row
-    return parsed
+        for source, target in _QUOTE_FIELDS.items():
+            if (value := _number(item.get(source))) is not None:
+                row[target] = value
+        if (yield_value := _number(row.get("dividend_yield"))) is not None:
+            row["dividend_yield_percent"] = yield_value * 100.0
+        output[ticker] = row
+    return output
 
 
 def parse_yahoo_japan_html(html_text: str, *, ticker: str) -> dict[str, object]:
-    text = _clean_html(html_text)
+    plain = _clean_html(html_text)
     row: dict[str, object] = {
         "ticker": ticker,
         "provider_id": "yahoo_finance",
@@ -189,18 +149,21 @@ def parse_yahoo_japan_html(html_text: str, *, ticker: str) -> dict[str, object]:
     title = re.search(r"<title>(.*?)【", html_text, flags=re.DOTALL)
     if title and (name := _clean_html(title.group(1))):
         row["name"] = name
-    if (price := _extract_price(text)) is not None:
+    if (price := _extract_price(plain)) is not None:
         row["price"] = price
     for block in re.findall(r"<dl\b[^>]*>.*?</dl>", html_text, flags=re.DOTALL):
         block_text = _clean_html(block)
         value_text = _dl_value(block) or block_text
         for label, key in _HTML_FIELDS.items():
-            if block_text.startswith(label) and (value := _first_number(value_text)) is not None:
-                if key not in {"per", "pbr", "eps"} or value > 0:
-                    row[key] = value
+            value = _first_number(value_text)
+            if (
+                block_text.startswith(label)
+                and value is not None
+                and (key not in {"per", "pbr", "eps"} or value > 0)
+            ):
+                row[key] = value
         if block_text.startswith("配当利回り") and (value := _first_number(value_text)) is not None:
-            row["dividend_yield_percent"] = value
-            row["dividend_yield"] = value / 100.0
+            row.update(dividend_yield_percent=value, dividend_yield=value / 100.0)
         if block_text.startswith("時価総額") and (value := _first_number(value_text)) is not None:
             row["market_cap"] = _scale_market_cap(value, block_text)
     return row
@@ -236,23 +199,15 @@ def save_yahoo_fundamentals(
     writer = csv.DictWriter(output, fieldnames=list(FUNDAMENTAL_COLUMNS), lineterminator="\n")
     writer.writeheader()
     for ticker in sorted(rows):
-        writer.writerow(
-            {
-                column: _csv_value(ticker if column == "ticker" else rows[ticker].get(column))
-                for column in FUNDAMENTAL_COLUMNS
-            }
-        )
+        writer.writerow({key: _csv(ticker if key == "ticker" else rows[ticker].get(key))
+                         for key in FUNDAMENTAL_COLUMNS})
     target.write_text(output.getvalue(), encoding="utf-8-sig")
     return str(target)
 
 
 def refresh_yahoo_market(
-    tickers: Iterable[object],
-    *,
-    range_: str = "1mo",
-    interval: str = "1d",
-    fetch_ohlcv: bool = True,
-    fetch_fundamentals: bool = True,
+    tickers: Iterable[object], *, range_: str = "1mo", interval: str = "1d",
+    fetch_ohlcv: bool = True, fetch_fundamentals: bool = True,
     daily_bars_path: str | Path = DEFAULT_DAILY_BARS_CSV,
     current_prices_path: str | Path = DEFAULT_CURRENT_PRICES_CSV,
     fundamentals_path: str | Path = DEFAULT_YAHOO_FUNDAMENTALS_CSV,
@@ -265,11 +220,10 @@ def refresh_yahoo_market(
         raise ValueError("unsupported Yahoo range or interval")
     if not fetch_ohlcv and not fetch_fundamentals:
         raise ValueError("enable fetch_ohlcv and/or fetch_fundamentals")
-
-    market_fetcher: _Fetcher = fetcher or SafeFetcher(timeout_seconds=20.0)
+    client: _Fetcher = fetcher or SafeFetcher(timeout_seconds=20.0)
     failures: dict[str, list[str]] = {ticker: [] for ticker in resolved}
-    fetched_bars: dict[str, list[DailyBarFact]] = {}
-    fetch_sources: dict[str, str] = {}
+    fetched: dict[str, list[DailyBarFact]] = {}
+    sources: dict[str, str] = {}
 
     if fetch_ohlcv:
         for ticker in resolved:
@@ -277,123 +231,99 @@ def refresh_yahoo_market(
                 ticker=ticker.lower(), range_=range_, interval=interval
             )
             try:
-                body, source = _fetch_text(market_fetcher, url)
+                body, source = _fetch(client, url)
                 bars = parse_yahoo_chart(body, ticker=ticker, source_ref=url)
                 if bars:
-                    fetched_bars[ticker] = bars
-                    fetch_sources[ticker] = source
+                    fetched[ticker], sources[ticker] = bars, source
                 else:
                     failures[ticker].append("ohlcv_empty")
             except YahooMarketError as exc:
                 failures[ticker].append(f"ohlcv:{exc}")
 
-    incoming_bars = [bar for ticker_bars in fetched_bars.values() for bar in ticker_bars]
-    saved_bars = str(daily_bars_path)
-    saved_prices = str(current_prices_path)
-    if incoming_bars:
-        saved_bars = save_daily_bars(
-            merge_daily_bars(load_daily_bars(daily_bars_path), incoming_bars), daily_bars_path
+    all_bars = [bar for ticker_bars in fetched.values() for bar in ticker_bars]
+    bars_path, prices_path = str(daily_bars_path), str(current_prices_path)
+    if all_bars:
+        bars_path = save_daily_bars(
+            merge_daily_bars(load_daily_bars(daily_bars_path), all_bars), daily_bars_path
         )
-        price_facts = latest_price_facts_from_bars(incoming_bars, source_ref=saved_bars)
-        saved_prices = save_current_prices(
-            merge_market_price_facts(load_current_prices(current_prices_path).values(), price_facts),
-            current_prices_path,
+        price_facts = latest_price_facts_from_bars(all_bars, source_ref=bars_path)
+        stored = load_current_prices(current_prices_path)
+        prices_path = save_current_prices(
+            merge_market_price_facts(stored.values(), price_facts), current_prices_path
         )
 
-    latest_close = {
-        ticker: close
-        for ticker, ticker_bars in fetched_bars.items()
-        if (close := _latest_close(ticker_bars)) is not None
-    }
-    fundamentals: dict[str, dict[str, object]] = {}
-    if fetch_fundamentals:
-        fundamentals.update(_fetch_quote_batches(market_fetcher, resolved))
-        for ticker in resolved:
-            resolved_row: dict[str, object] | None = fundamentals.get(ticker)
-            needs_html = resolved_row is None or not any(
-                key in resolved_row
-                for key in ("per", "pbr", "dps", "dividend_yield", "eps", "market_cap")
-            )
-            if needs_html:
-                url = YAHOO_JAPAN_QUOTE_URL_TEMPLATE.format(ticker=ticker)
-                try:
-                    html, _ = _fetch_text(market_fetcher, url)
-                    html_row = parse_yahoo_japan_html(html, ticker=ticker)
-                    if len(html_row) > 3:
-                        resolved_row = _merge_missing(resolved_row, html_row)
-                        fundamentals[ticker] = resolved_row
-                    else:
-                        failures[ticker].append("fundamentals_empty")
-                except YahooMarketError as exc:
-                    failures[ticker].append(f"fundamentals:{exc}")
-            if resolved_row is not None:
-                if "price" not in resolved_row and ticker in latest_close:
-                    resolved_row["price"] = latest_close[ticker]
-                    resolved_row["source_ref"] = (
-                        f"{resolved_row.get('source_ref', '')}+chart_close"
-                    )
-                resolved_row["as_of"] = datetime.now(UTC).date().isoformat()
-
-    saved_fundamentals = str(fundamentals_path)
+    latest = {ticker: value for ticker, bars in fetched.items()
+              if (value := _latest_close(bars)) is not None}
+    fundamentals = (
+        _fetch_fundamentals(client, resolved, latest, failures)
+        if fetch_fundamentals
+        else {}
+    )
+    fundamentals_path_text = str(fundamentals_path)
     if fundamentals:
         merged = load_yahoo_fundamentals(fundamentals_path)
         merged.update(fundamentals)
-        saved_fundamentals = save_yahoo_fundamentals(merged, fundamentals_path)
+        fundamentals_path_text = save_yahoo_fundamentals(merged, fundamentals_path)
 
     errors = {ticker: messages for ticker, messages in failures.items() if messages}
-    completed = max(len(fetched_bars), len(fundamentals))
+    completed = max(len(fetched), len(fundamentals))
     status = "blocked" if completed == 0 else "partial" if errors else "completed"
     return {
-        "status": status,
-        "provider_id": "yahoo_finance",
-        "requested_count": len(resolved),
-        "tickers": resolved,
-        "ohlcv_ticker_count": len(fetched_bars),
-        "ohlcv_row_count": len(incoming_bars),
+        "status": status, "provider_id": "yahoo_finance", "requested_count": len(resolved),
+        "tickers": resolved, "ohlcv_ticker_count": len(fetched), "ohlcv_row_count": len(all_bars),
         "fundamentals_ticker_count": len(fundamentals),
-        "latest_bars": [
-            _bar_summary(ticker, ticker_bars)
-            for ticker, ticker_bars in sorted(fetched_bars.items())
-        ],
+        "latest_bars": [_summary(ticker, bars) for ticker, bars in sorted(fetched.items())],
         "fundamentals": [fundamentals[ticker] for ticker in sorted(fundamentals)],
-        "errors": errors,
-        "fetch_sources": fetch_sources,
-        "saved": {
-            "daily_bars_path": saved_bars,
-            "current_prices_path": saved_prices,
-            "fundamentals_path": saved_fundamentals,
-        },
-        "ohlcv_summary": summarize_daily_bars(incoming_bars),
-        "policy": {
-            "personal_use_only": True,
-            "robots_checked": True,
-            "rate_limited": True,
-            "redistribution": False,
-            "auto_trading": False,
-        },
-        "auto_trading": False,
-        "call_real_api": True,
+        "errors": errors, "fetch_sources": sources,
+        "saved": {"daily_bars_path": bars_path, "current_prices_path": prices_path,
+                  "fundamentals_path": fundamentals_path_text},
+        "ohlcv_summary": summarize_daily_bars(all_bars),
+        "policy": {"personal_use_only": True, "robots_checked": True, "rate_limited": True,
+                   "redistribution": False, "auto_trading": False},
+        "auto_trading": False, "call_real_api": True,
     }
 
 
-def _fetch_quote_batches(fetcher: _Fetcher, tickers: Sequence[str]) -> dict[str, dict[str, object]]:
+def _fetch_fundamentals(
+    client: _Fetcher, tickers: Sequence[str], latest: Mapping[str, float],
+    failures: dict[str, list[str]],
+) -> dict[str, dict[str, object]]:
     output: dict[str, dict[str, object]] = {}
     for start in range(0, len(tickers), 40):
-        batch = tickers[start : start + 40]
+        batch = tickers[start:start + 40]
         url = YAHOO_QUOTE_URL_TEMPLATE.format(symbols=",".join(f"{ticker}.T" for ticker in batch))
         try:
-            body, _ = _fetch_text(fetcher, url)
+            body, _ = _fetch(client, url)
+            parsed = parse_yahoo_quote(body)
+            for parsed_row in parsed.values():
+                parsed_row["source_ref"] = url
+            output.update(parsed)
         except YahooMarketError:
-            continue
-        parsed = parse_yahoo_quote(body)
-        for parsed_row in parsed.values():
-            parsed_row["source_ref"] = url
-        output.update(parsed)
+            pass
+    for ticker in tickers:
+        row = output.get(ticker)
+        if row is None or not any(key in row for key in ("per", "pbr", "dps", "eps", "market_cap")):
+            url = YAHOO_JAPAN_QUOTE_URL_TEMPLATE.format(ticker=ticker)
+            try:
+                html, _ = _fetch(client, url)
+                html_row = parse_yahoo_japan_html(html, ticker=ticker)
+                if len(html_row) > 3:
+                    row = _merge(row, html_row)
+                    output[ticker] = row
+                else:
+                    failures[ticker].append("fundamentals_empty")
+            except YahooMarketError as exc:
+                failures[ticker].append(f"fundamentals:{exc}")
+        if row is not None:
+            if "price" not in row and ticker in latest:
+                row["price"] = latest[ticker]
+                row["source_ref"] = f"{row.get('source_ref', '')}+chart_close"
+            row["as_of"] = datetime.now(UTC).date().isoformat()
     return output
 
 
-def _fetch_text(fetcher: _Fetcher, url: str) -> tuple[str, str]:
-    document = fetcher.fetch_document(url)
+def _fetch(client: _Fetcher, url: str) -> tuple[str, str]:
+    document = client.fetch_document(url)
     if not document.allowed_by_robots:
         raise YahooMarketError(document.source or "robots_blocked")
     if document.status_code is not None and document.status_code >= 400:
@@ -403,34 +333,23 @@ def _fetch_text(fetcher: _Fetcher, url: str) -> tuple[str, str]:
     return document.html, document.source
 
 
-def _merge_missing(
-    existing: dict[str, object] | None, incoming: Mapping[str, object]
-) -> dict[str, object]:
-    merged = dict(existing or {})
-    source = str(merged.get("source_ref") or "")
+def _merge(current: dict[str, object] | None, incoming: Mapping[str, object]) -> dict[str, object]:
+    output = dict(current or {})
+    prior = str(output.get("source_ref") or "")
     for key, value in incoming.items():
-        if key not in merged or merged[key] in (None, ""):
-            merged[key] = value
-    incoming_source = str(incoming.get("source_ref") or "")
-    merged["source_ref"] = "+".join(item for item in (source, incoming_source) if item)
-    return merged
+        if key not in output or output[key] in (None, ""):
+            output[key] = value
+    source = str(incoming.get("source_ref") or "")
+    output["source_ref"] = "+".join(value for value in (prior, source) if value)
+    return output
 
 
-def _bar_summary(ticker: str, bars: Sequence[DailyBarFact]) -> dict[str, object]:
-    latest = max(bars, key=lambda bar: bar.date)
-    return {
-        "ticker": ticker,
-        "date": latest.date,
-        "open": latest.open,
-        "high": latest.high,
-        "low": latest.low,
-        "close": latest.close,
-        "adjusted_close": latest.adjusted_close,
-        "volume": latest.volume,
-        "bar_count": len(bars),
-        "provider_id": latest.provider_id,
-        "source_ref": latest.source_ref,
-    }
+def _summary(ticker: str, bars: Sequence[DailyBarFact]) -> dict[str, object]:
+    bar = max(bars, key=lambda item: item.date)
+    return {"ticker": ticker, "date": bar.date, "open": bar.open, "high": bar.high,
+            "low": bar.low, "close": bar.close, "adjusted_close": bar.adjusted_close,
+            "volume": bar.volume, "bar_count": len(bars), "provider_id": bar.provider_id,
+            "source_ref": bar.source_ref}
 
 
 def _latest_close(bars: Sequence[DailyBarFact]) -> float | None:
@@ -443,29 +362,24 @@ def _latest_close(bars: Sequence[DailyBarFact]) -> float | None:
 
 def _json_dict(text: str) -> dict[str, object]:
     try:
-        return _as_dict(json.loads(text))
+        return _dict(json.loads(text))
     except (TypeError, ValueError):
         return {}
 
 
-def _as_dict(value: object) -> dict[str, object]:
+def _dict(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
 
 
-def _dict_value(mapping: Mapping[str, object], key: str) -> dict[str, object]:
-    return _as_dict(mapping.get(key))
-
-
-def _list_value(mapping: Mapping[str, object], key: str) -> list[object]:
-    value = mapping.get(key)
+def _list(value: object) -> list[object]:
     return list(value) if isinstance(value, list) else []
 
 
 def _first_dict(values: Sequence[object]) -> dict[str, object]:
-    return _as_dict(values[0]) if values else {}
+    return _dict(values[0]) if values else {}
 
 
-def _indexed_number(value: object, index: int) -> float | None:
+def _at(value: object, index: int) -> float | None:
     return _number(value[index]) if isinstance(value, list) and index < len(value) else None
 
 
@@ -473,15 +387,15 @@ def _number(value: object) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
     try:
-        number = float(str(value).strip().replace(",", ""))
+        result = float(str(value).strip().replace(",", ""))
     except ValueError:
         return None
-    return number if math.isfinite(number) else None
+    return result if math.isfinite(result) else None
 
 
 def _clean_html(value: str) -> str:
-    no_comments = re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL)
-    return re.sub(r"\s+", "", unescape(re.sub(r"<[^>]+>", "", no_comments)))
+    value = re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL)
+    return re.sub(r"\s+", "", unescape(re.sub(r"<[^>]+>", "", value)))
 
 
 def _dl_value(block: str) -> str:
@@ -496,10 +410,9 @@ def _first_number(text: str) -> float | None:
 
 def _extract_price(text: str) -> float | None:
     for pattern in _PRICE_PATTERNS:
-        if match := re.search(pattern, text):
-            value = _number(match.group(1))
-            if value is not None and value > 0:
-                return value
+        match = re.search(pattern, text)
+        if match and (value := _number(match.group(1))) is not None and value > 0:
+            return value
     return None
 
 
@@ -513,7 +426,7 @@ def _scale_market_cap(value: float, text: str) -> float:
     return value
 
 
-def _csv_value(value: object) -> str:
+def _csv(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, float):
