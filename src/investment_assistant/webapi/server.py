@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from investment_assistant.observability import configure_logging, get_logger
-from investment_assistant.webapi.service import JsonDict, handle_api
+from investment_assistant.webapi import JsonDict, handle_api
 
 _logger = get_logger("webapi.server")
 
