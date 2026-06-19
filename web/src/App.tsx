@@ -1880,10 +1880,73 @@ function MarketResult({ data, mode }: { data: Json; mode: string }) {
   );
 }
 
+const PIE_COLORS = [
+  "#4f8cff", "#ff8a5b", "#2dd4bf", "#f6c453", "#a78bfa",
+  "#f472b6", "#34d399", "#fb7185", "#60a5fa", "#facc15",
+];
+
+function PieChart({ slices }: { slices: { label: string; value: number }[] }) {
+  const sorted = slices.filter((s) => s.value > 0).sort((a, b) => b.value - a.value);
+  const total = sorted.reduce((sum, s) => sum + s.value, 0);
+  if (total <= 0) return null;
+
+  // Keep the chart readable: top 8 slices, the rest grouped as "その他".
+  const top = sorted.slice(0, 8);
+  const restValue = sorted.slice(8).reduce((sum, s) => sum + s.value, 0);
+  const segments = restValue > 0 ? [...top, { label: "その他", value: restValue }] : top;
+
+  const cx = 80, cy = 80, r = 72;
+  let angle = -Math.PI / 2;
+  const arcs = segments.map((seg, index) => {
+    const frac = seg.value / total;
+    const a0 = angle;
+    const a1 = angle + frac * 2 * Math.PI;
+    angle = a1;
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    const large = frac > 0.5 ? 1 : 0;
+    const d = `M${cx},${cy} L${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} Z`;
+    return { d, color: PIE_COLORS[index % PIE_COLORS.length], label: seg.label, pct: frac * 100 };
+  });
+
+  return (
+    <div style={{ display: "flex", gap: "1.2rem", alignItems: "center", flexWrap: "wrap", margin: "0.6rem 0" }}>
+      <svg viewBox="0 0 160 160" width="170" height="170" role="img" aria-label="ポートフォリオ構成比">
+        {segments.length === 1 ? (
+          <circle cx={cx} cy={cy} r={r} fill={arcs[0].color} />
+        ) : (
+          arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} stroke="#0b1220" strokeWidth="0.6" />)
+        )}
+      </svg>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: "0.85rem", lineHeight: 1.7 }}>
+        {arcs.map((a, i) => (
+          <li key={i} style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <span style={{ width: 11, height: 11, borderRadius: 3, background: a.color, display: "inline-block", flexShrink: 0 }} />
+            <span>{a.label}</span>
+            <b style={{ marginLeft: "auto", paddingLeft: "0.8rem" }}>{a.pct.toFixed(1)}%</b>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function AnalysisResult({ data }: { data: Json }) {
   const rows = Array.isArray(data.holdings) ? data.holdings : [];
+  const slices = rows
+    .map((row) => ({
+      label: String(row.name || row.ticker_or_fund_code || "?"),
+      value: Number(row.market_value) || 0,
+    }))
+    .filter((s) => s.value > 0);
   return (
     <ResultBlock title="分析結果" meta={`評価額: ${yen(data.summary?.market_value)}`}>
+      {slices.length > 0 && (
+        <>
+          <h4>ポートフォリオ構成比（評価額）</h4>
+          <PieChart slices={slices} />
+        </>
+      )}
       <SimpleTable
         rows={rows}
         columns={[
