@@ -882,6 +882,118 @@ function InventoryPill({ label, value, tone }: { label: string; value: string; t
   );
 }
 
+type HoldingRow = {
+  code: string;
+  name: string;
+  qty: string;
+  avgCost: string;
+  account: "tokutei" | "nisa_growth" | "nisa_tsumitate";
+};
+
+const ACCOUNT_LABELS: Record<HoldingRow["account"], string> = {
+  tokutei: "特定/一般",
+  nisa_growth: "NISA成長投資枠",
+  nisa_tsumitate: "NISAつみたて枠",
+};
+
+function holdingRowsToCsv(rows: HoldingRow[]): string {
+  const header =
+    "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source";
+  const lines = rows
+    .filter((r) => r.code.trim())
+    .map((r) => {
+      const accountType = r.account === "tokutei" ? "tokutei" : "nisa";
+      const taxWrapper = r.account === "tokutei" ? "taxable" : r.account;
+      const name = (r.name.trim() || r.code.trim()).replace(/,/g, " ");
+      return [
+        "stock",
+        r.code.trim(),
+        name,
+        r.qty.trim() || "0",
+        r.avgCost.trim() || "0",
+        accountType,
+        taxWrapper,
+        "user_csv",
+      ].join(",");
+    });
+  return [header, ...lines].join("\n");
+}
+
+function HoldingsBuilder({ onApply }: { onApply: (csv: string) => void }) {
+  const [rows, setRows] = useState<HoldingRow[]>([]);
+  const [draft, setDraft] = useState<HoldingRow>({
+    code: "",
+    name: "",
+    qty: "100",
+    avgCost: "",
+    account: "tokutei",
+  });
+
+  const addRow = () => {
+    if (!draft.code.trim()) return;
+    setRows((prev) => [...prev, draft]);
+    setDraft({ code: "", name: "", qty: "100", avgCost: "", account: draft.account });
+  };
+  const removeRow = (index: number) => setRows((prev) => prev.filter((_, i) => i !== index));
+
+  return (
+    <div className="detail-section" aria-label="銘柄選択で保有を作成">
+      <h4>銘柄を選んで保有を作成</h4>
+      <p className="hint">コードと数量を追加していくと、下のCSVに反映できます（CSVを直接書く必要はありません）。</p>
+      <div className="form-grid tight">
+        <Field label="コード">
+          <input value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="7203" />
+        </Field>
+        <Field label="銘柄名（任意）">
+          <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="トヨタ" />
+        </Field>
+        <Field label="数量（株）">
+          <input value={draft.qty} inputMode="numeric" onChange={(e) => setDraft({ ...draft, qty: e.target.value })} />
+        </Field>
+        <Field label="平均取得単価">
+          <input value={draft.avgCost} inputMode="decimal" onChange={(e) => setDraft({ ...draft, avgCost: e.target.value })} placeholder="2000" />
+        </Field>
+        <Field label="口座区分">
+          <select value={draft.account} onChange={(e) => setDraft({ ...draft, account: e.target.value as HoldingRow["account"] })}>
+            <option value="tokutei">特定/一般</option>
+            <option value="nisa_growth">NISA成長投資枠</option>
+            <option value="nisa_tsumitate">NISAつみたて枠</option>
+          </select>
+        </Field>
+      </div>
+      <ActionRow>
+        <button onClick={addRow} disabled={!draft.code.trim()}>銘柄を追加</button>
+        <button
+          className="primary"
+          disabled={rows.length === 0}
+          onClick={() => onApply(holdingRowsToCsv(rows))}
+        >
+          選択した{rows.length}銘柄をCSVへ反映
+        </button>
+      </ActionRow>
+      {rows.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr><th>コード</th><th>銘柄</th><th>数量</th><th>取得単価</th><th>口座</th><th></th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={`${r.code}-${i}`}>
+                <td>{r.code}</td>
+                <td>{r.name || "-"}</td>
+                <td>{r.qty}</td>
+                <td>{r.avgCost || "-"}</td>
+                <td>{ACCOUNT_LABELS[r.account]}</td>
+                <td><button className="table-action" onClick={() => removeRow(i)}>削除</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function HoldingsPanel(props: {
   csvText: string;
   setCsvText: (value: string) => void;
@@ -909,7 +1021,8 @@ function HoldingsPanel(props: {
 
   return (
     <section className="screen">
-      <ScreenTitle title="保有分析" body="CSVを貼るだけで、評価額・損益・NISA区分・配当見込みを集計します。" />
+      <ScreenTitle title="保有分析" body="銘柄を選ぶ（またはCSVを貼る）と、評価額・損益・NISA区分・配当見込みを集計します。" />
+      <HoldingsBuilder onApply={props.setCsvText} />
       <textarea value={props.csvText} onChange={(e) => props.setCsvText(e.target.value)} spellCheck={false} />
       <ActionRow>
         <button onClick={() => void loadTemplate()}>テンプレート</button>
@@ -1767,10 +1880,73 @@ function MarketResult({ data, mode }: { data: Json; mode: string }) {
   );
 }
 
+const PIE_COLORS = [
+  "#4f8cff", "#ff8a5b", "#2dd4bf", "#f6c453", "#a78bfa",
+  "#f472b6", "#34d399", "#fb7185", "#60a5fa", "#facc15",
+];
+
+function PieChart({ slices }: { slices: { label: string; value: number }[] }) {
+  const sorted = slices.filter((s) => s.value > 0).sort((a, b) => b.value - a.value);
+  const total = sorted.reduce((sum, s) => sum + s.value, 0);
+  if (total <= 0) return null;
+
+  // Keep the chart readable: top 8 slices, the rest grouped as "その他".
+  const top = sorted.slice(0, 8);
+  const restValue = sorted.slice(8).reduce((sum, s) => sum + s.value, 0);
+  const segments = restValue > 0 ? [...top, { label: "その他", value: restValue }] : top;
+
+  const cx = 80, cy = 80, r = 72;
+  let angle = -Math.PI / 2;
+  const arcs = segments.map((seg, index) => {
+    const frac = seg.value / total;
+    const a0 = angle;
+    const a1 = angle + frac * 2 * Math.PI;
+    angle = a1;
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    const large = frac > 0.5 ? 1 : 0;
+    const d = `M${cx},${cy} L${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} Z`;
+    return { d, color: PIE_COLORS[index % PIE_COLORS.length], label: seg.label, pct: frac * 100 };
+  });
+
+  return (
+    <div style={{ display: "flex", gap: "1.2rem", alignItems: "center", flexWrap: "wrap", margin: "0.6rem 0" }}>
+      <svg viewBox="0 0 160 160" width="170" height="170" role="img" aria-label="ポートフォリオ構成比">
+        {segments.length === 1 ? (
+          <circle cx={cx} cy={cy} r={r} fill={arcs[0].color} />
+        ) : (
+          arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} stroke="#0b1220" strokeWidth="0.6" />)
+        )}
+      </svg>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: "0.85rem", lineHeight: 1.7 }}>
+        {arcs.map((a, i) => (
+          <li key={i} style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <span style={{ width: 11, height: 11, borderRadius: 3, background: a.color, display: "inline-block", flexShrink: 0 }} />
+            <span>{a.label}</span>
+            <b style={{ marginLeft: "auto", paddingLeft: "0.8rem" }}>{a.pct.toFixed(1)}%</b>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function AnalysisResult({ data }: { data: Json }) {
   const rows = Array.isArray(data.holdings) ? data.holdings : [];
+  const slices = rows
+    .map((row) => ({
+      label: String(row.name || row.ticker_or_fund_code || "?"),
+      value: Number(row.market_value) || 0,
+    }))
+    .filter((s) => s.value > 0);
   return (
     <ResultBlock title="分析結果" meta={`評価額: ${yen(data.summary?.market_value)}`}>
+      {slices.length > 0 && (
+        <>
+          <h4>ポートフォリオ構成比（評価額）</h4>
+          <PieChart slices={slices} />
+        </>
+      )}
       <SimpleTable
         rows={rows}
         columns={[
