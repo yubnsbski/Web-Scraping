@@ -57,6 +57,7 @@ def investment_monthly_report(body: JsonDict) -> JsonDict:
         candidates=candidates,
         target_result=target_result,
         financials_csv=financials_csv,
+        market_financials_csv=_market_financials_path(body),
         runtime_mode=str(body.get("runtime_mode") or "development"),
     )
     if _as_bool(body.get("save_history"), True):
@@ -66,6 +67,16 @@ def investment_monthly_report(body: JsonDict) -> JsonDict:
             max_entries=_as_int(body.get("history_limit"), 50),
         )
     return report
+
+
+def _market_financials_path(body: JsonDict) -> str | None:
+    """Yahoo financials CSV to enrich price/dividend; default if it exists."""
+
+    raw = body.get("market_financials_csv")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    default = "local_docs/market/yahoo_financials.csv"
+    return default if Path(default).is_file() else None
 
 
 def investment_report_history(body: JsonDict) -> JsonDict:

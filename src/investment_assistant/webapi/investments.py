@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
@@ -65,8 +66,19 @@ def portfolio_analyze(body: JsonDict) -> JsonDict:
     return analyze_portfolio(
         holdings_from_payload(body),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        market_financials_csv=_market_financials_path(body),
         runtime_mode=str(body.get("runtime_mode") or "development"),
     )
+
+
+def _market_financials_path(body: JsonDict) -> str | None:
+    """Yahoo financials CSV to enrich price/dividend; default if it exists."""
+
+    raw = body.get("market_financials_csv")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    default = "local_docs/market/yahoo_financials.csv"
+    return default if Path(default).is_file() else None
 
 
 def investment_detail(body: JsonDict) -> JsonDict:

@@ -22,9 +22,15 @@ def analyze_portfolio(
     holdings: Sequence[InvestmentHolding],
     *,
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    market_financials_csv: str | Path | None = None,
     runtime_mode: str = "development",
 ) -> dict[str, object]:
-    """Analyze user-provided holdings without LLMs or recommendations."""
+    """Analyze user-provided holdings without LLMs or recommendations.
+
+    ``market_financials_csv`` (a scraped Yahoo financials CSV) fills in current
+    price and dividend-per-share for holdings that don't carry their own, so the
+    analysis reflects live market data instead of only the acquisition cost.
+    """
 
     if not holdings:
         raise ValueError("At least one holding is required.")
@@ -32,6 +38,7 @@ def analyze_portfolio(
     generated_at_dt = datetime.now(UTC)
     generated_at = generated_at_dt.isoformat()
     companies = _company_index(financials_csv)
+    market_index = _market_financials_index(market_financials_csv)
     financials_metadata = _financials_metadata(financials_csv, generated_at_dt)
     rows: list[dict[str, object]] = []
     evidence: list[dict[str, object]] = []
@@ -49,11 +56,19 @@ def analyze_portfolio(
     income_alerts: list[dict[str, object]] = []
 
     for holding in holdings:
-        price = holding.current_price if holding.current_price is not None else holding.avg_cost
+        market_row = market_index.get(holding.ticker_or_fund_code)
+        market_price = market_row.get("price") if market_row is not None else None
+        market_dps = market_row.get("dps") if market_row is not None else None
+        if holding.current_price is not None:
+            price, price_source = holding.current_price, "current_price"
+        elif market_price is not None and market_price > 0:
+            price, price_source = market_price, "yahoo_price"
+        else:
+            price, price_source = holding.avg_cost, "avg_cost"
         market_value = holding.quantity * price
         cost_basis = holding.quantity * holding.avg_cost
         company = companies.get(holding.ticker_or_fund_code)
-        annual_income, income_source = _annual_income(holding, company)
+        annual_income, income_source = _annual_income(holding, company, market_dps)
         provider_id = _holding_provider_id(holding)
         policy = provider_policy(provider_id, runtime_mode=runtime_mode)
         pnl = market_value - cost_basis
@@ -62,7 +77,7 @@ def analyze_portfolio(
             "data_provider": provider_id,
             "provider_policy": policy.to_dict(),
             "price_used": round(price, 4),
-            "price_source": "current_price" if holding.current_price is not None else "avg_cost",
+            "price_source": price_source,
             "market_value": round(market_value, 2),
             "cost_basis": round(cost_basis, 2),
             "unrealized_pnl": round(pnl, 2),
@@ -241,7 +256,9 @@ def _company_index(financials_csv: str | Path) -> dict[str, dict[str, object]]:
 
 
 def _annual_income(
-    holding: InvestmentHolding, company: dict[str, object] | None
+    holding: InvestmentHolding,
+    company: dict[str, object] | None,
+    market_dps: float | None = None,
 ) -> tuple[float, str]:
     if holding.annual_income is not None:
         return max(holding.annual_income, 0.0), "user_annual_income"
@@ -251,7 +268,38 @@ def _annual_income(
         dps = _number(company.get("latest_dividend_per_share"))
         if dps is not None:
             return dps * holding.quantity, "edinet_latest_dividend_per_share"
+    if holding.asset_type == "stock" and market_dps is not None and market_dps > 0:
+        return market_dps * holding.quantity, "yahoo_dividend_per_share"
     return 0.0, "not_available"
+
+
+def _market_financials_index(
+    market_financials_csv: str | Path | None,
+) -> dict[str, dict[str, float | None]]:
+    """Map ticker -> {price, dps} from a scraped Yahoo financials CSV (or empty)."""
+
+    if market_financials_csv is None or not Path(market_financials_csv).is_file():
+        return {}
+    import csv
+    import io
+
+    raw = Path(market_financials_csv).read_bytes()
+    for encoding in ("utf-8-sig", "cp932", "utf-8"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    out: dict[str, dict[str, float | None]] = {}
+    reader = csv.DictReader(io.StringIO(text.strip().lstrip("﻿"), newline=""))
+    for row in reader:
+        ticker = str(row.get("ticker") or row.get("code") or "").strip()
+        if not ticker or ticker in out:
+            continue
+        out[ticker] = {"price": _number(row.get("price")), "dps": _number(row.get("dps"))}
+    return out
 
 
 def _holding_data_alerts(
