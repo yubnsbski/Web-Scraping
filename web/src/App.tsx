@@ -133,6 +133,10 @@ export function App() {
             setCsvText={setHoldingsCsv}
             financialsPath={financialsPath}
             onAnalysis={setAnalysis}
+            onUseForReport={(csv) => {
+              setHoldingsCsv(csv);
+              setTab("report");
+            }}
           />
         )}
         {tab === "screen" && (
@@ -152,6 +156,10 @@ export function App() {
                 version: Date.now(),
               }));
               setTab("rag");
+            }}
+            onUseForReport={(csv) => {
+              setHoldingsCsv(csv);
+              setTab("report");
             }}
           />
         )}
@@ -1026,6 +1034,7 @@ function HoldingsPanel(props: {
   setCsvText: (value: string) => void;
   financialsPath: string;
   onAnalysis: (value: Json) => void;
+  onUseForReport: (csv: string) => void;
 }) {
   const validation = useAsync<Json>();
   const analysis = useAsync<Json>();
@@ -1057,6 +1066,13 @@ function HoldingsPanel(props: {
         <button className="primary" onClick={() => void analyze()}>
           分析
         </button>
+        <button
+          disabled={!props.csvText.trim()}
+          title="この保有でレポート（配当見込みを含む）を作成します"
+          onClick={() => props.onUseForReport(props.csvText)}
+        >
+          このポートフォリオでレポート
+        </button>
       </ActionRow>
       <Status loading={template.loading || validation.loading || analysis.loading} error={template.error ?? validation.error ?? analysis.error} />
       {validation.data && <ValidationResult data={validation.data} />}
@@ -1072,6 +1088,7 @@ function ScreenPanel(props: {
   onCandidates: (value: Json) => void;
   onOpenDetail: (code: string, assetType: "stock" | "fund") => void;
   onOpenRag: (codes: string[]) => void;
+  onUseForReport: (csv: string) => void;
 }) {
   const [minEquity, setMinEquity] = useState("30");
   const [maxExpense, setMaxExpense] = useState("0.3");
@@ -1079,6 +1096,7 @@ function ScreenPanel(props: {
   const [excludeCut, setExcludeCut] = useState(true);
   const [budget, setBudget] = useState("1000000");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [simCsv, setSimCsv] = useState("");
   const state = useAsync<Json>();
   const sim = useAsync<Json>();
 
@@ -1112,6 +1130,7 @@ function ScreenPanel(props: {
   const simulate = () => {
     const perTicker = (Number(budget) || 0) / Math.max(selected.size, 1);
     const csv = candidatesToHoldingsCsv(candidateRows, selected, perTicker);
+    setSimCsv(csv);
     void sim.run(() => api<Json>("/api/portfolio/analyze", { csv_text: csv, financials_csv: props.financialsPath }));
   };
 
@@ -1159,7 +1178,21 @@ function ScreenPanel(props: {
           </div>
           <CandidateTable data={state.data} onOpenDetail={props.onOpenDetail} selected={selected} onToggle={toggle} />
           <Status loading={sim.loading} error={sim.error} />
-          {sim.data && <AnalysisResult data={sim.data} />}
+          {sim.data && (
+            <>
+              <AnalysisResult data={sim.data} />
+              <ActionRow>
+                <button
+                  className="primary"
+                  disabled={!simCsv}
+                  title="この試算ポートフォリオでレポート（配当見込みを含む）を作成します"
+                  onClick={() => props.onUseForReport(simCsv)}
+                >
+                  このポートフォリオでレポート作成
+                </button>
+              </ActionRow>
+            </>
+          )}
         </>
       )}
     </section>
@@ -1395,6 +1428,10 @@ function ReportPanel(props: {
       <section className="report-preflight" aria-label="生成前の確認">
         <div className="detail-section">
           <h4>使うデータ</h4>
+          <p className="hint">
+            配当見込みは下の「保有明細」（保有分析や候補抽出で試算したポートフォリオ）から自動計算されます。
+            別のポートフォリオにするには、保有分析・候補抽出で「このポートフォリオでレポート」を押してください。
+          </p>
           <div className="detail-metrics">
             <DetailFact label="保有明細" value={`${holdingRows}行`} />
             <DetailFact label="財務CSV" value={shortPath(props.financialsPath) || "-"} />
