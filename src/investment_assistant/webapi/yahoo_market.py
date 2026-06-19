@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -182,7 +183,11 @@ def _resolve_tickers(body: JsonDict, *, mode: str) -> tuple[list[str], JsonDict]
         limit=max_tickers,
     )
     raw_rows = universe.get("securities")
-    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    rows = (
+        [row for row in raw_rows if isinstance(row, dict)]
+        if isinstance(raw_rows, list)
+        else []
+    )
     tickers = normalize_tickers(
         row.get("ticker") or row.get("code") or "" for row in rows
     )
@@ -194,10 +199,10 @@ def _resolve_tickers(body: JsonDict, *, mode: str) -> tuple[list[str], JsonDict]
         "mode": "auto",
         "scope": scope,
         "selected_count": len(tickers),
-        "universe_total_count": int(universe.get("total_count") or len(tickers)),
-        "jpx_listed_count": int(universe.get("jpx_listed_count") or 0),
-        "nikkei225_count": int(universe.get("nikkei225_count") or 0),
-        "financials_count": int(universe.get("financials_count") or 0),
+        "universe_total_count": _as_int(universe.get("total_count"), len(tickers)),
+        "jpx_listed_count": _as_int(universe.get("jpx_listed_count"), 0),
+        "nikkei225_count": _as_int(universe.get("nikkei225_count"), 0),
+        "financials_count": _as_int(universe.get("financials_count"), 0),
         "tickers_sample": tickers[:20],
         "hint": str(universe.get("hint") or ""),
     }
@@ -205,7 +210,7 @@ def _resolve_tickers(body: JsonDict, *, mode: str) -> tuple[list[str], JsonDict]
 
 def _ticker_list(value: object) -> list[str]:
     if isinstance(value, str):
-        raw = re_split(value)
+        raw = [item for item in re.split(r"[\s,、，]+", value) if item]
     elif isinstance(value, list):
         raw = [str(item) for item in value]
     else:
@@ -213,18 +218,17 @@ def _ticker_list(value: object) -> list[str]:
     return normalize_tickers(raw)
 
 
-def re_split(value: str) -> list[str]:
-    import re
-
-    return [item for item in re.split(r"[\s,、，]+", value) if item]
+def _as_int(value: object, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _bounded_int(value: object, *, default: int, maximum: int) -> int:
-    try:
-        number = int(value) if value not in (None, "") else default
-    except (TypeError, ValueError):
-        number = default
-    return min(max(number, 1), maximum)
+    return min(max(_as_int(value, default), 1), maximum)
 
 
 def _as_bool(value: object, default: bool) -> bool:
