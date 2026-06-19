@@ -645,6 +645,7 @@ def test_missing_auto_refresh_without_edinet_key_uses_official_evidence(
     from investment_assistant.webapi import service
 
     monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    monkeypatch.setattr(service, "_ensure_env_from_dotenv", lambda _key: False)
     listed_path = tmp_path / "listed_issues.csv"
     write_jpx_listed_issues(
         [ListedIssue("9999", "Standard Sample", "Standard Market (Domestic Stock)", "Services")],
