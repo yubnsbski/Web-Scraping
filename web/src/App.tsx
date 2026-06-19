@@ -145,6 +145,14 @@ export function App() {
               setDetailRequest((prev) => ({ code, assetType, version: prev.version + 1 }));
               setTab("detail");
             }}
+            onOpenRag={(codes) => {
+              setRagDraft((prev) => ({
+                ...prev,
+                query: codes.length > 0 ? codes.join(" ") : prev.query,
+                version: Date.now(),
+              }));
+              setTab("rag");
+            }}
           />
         )}
         {tab === "detail" && (
@@ -919,6 +927,25 @@ function holdingRowsToCsv(rows: HoldingRow[]): string {
   return [header, ...lines].join("\n");
 }
 
+function candidatesToHoldingsCsv(rows: Json[], selected: Set<string>, perTicker: number): string {
+  const header =
+    "asset_type,ticker_or_fund_code,name,quantity,avg_cost,account_type,tax_wrapper,source,current_price";
+  const price = Math.max(Math.round(perTicker), 0);
+  const lines = rows
+    .filter((row) => {
+      const code = candidateCode(row);
+      return code && selected.has(code);
+    })
+    .map((row) => {
+      const code = candidateCode(row);
+      const assetType = detailAssetType(row.asset_type);
+      const name = String(row.name || code).replace(/,/g, " ");
+      // quantity=1 at a per-ticker price -> equal-weight by budget; avg=price -> no paper PnL.
+      return [assetType, code, name, "1", String(price), "tokutei", "taxable", "user_csv", String(price)].join(",");
+    });
+  return [header, ...lines].join("\n");
+}
+
 function HoldingsBuilder({ onApply }: { onApply: (csv: string) => void }) {
   const [rows, setRows] = useState<HoldingRow[]>([]);
   const [draft, setDraft] = useState<HoldingRow>({
@@ -1044,14 +1071,22 @@ function ScreenPanel(props: {
   financialsPath: string;
   onCandidates: (value: Json) => void;
   onOpenDetail: (code: string, assetType: "stock" | "fund") => void;
+  onOpenRag: (codes: string[]) => void;
 }) {
   const [minEquity, setMinEquity] = useState("30");
   const [maxExpense, setMaxExpense] = useState("0.3");
   const [nisaOnly, setNisaOnly] = useState(true);
   const [excludeCut, setExcludeCut] = useState(true);
+  const [budget, setBudget] = useState("1000000");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const state = useAsync<Json>();
+  const sim = useAsync<Json>();
+
+  const candidateRows: Json[] = Array.isArray(state.data?.results) ? (state.data!.results as Json[]) : [];
 
   const runScreen = async () => {
+    setSelected(new Set());
+    sim.reset();
     const result = await state.run(() =>
       api<Json>("/api/candidates/screen", {
         asset_types: ["stock", "fund"],
@@ -1066,9 +1101,23 @@ function ScreenPanel(props: {
     if (result) props.onCandidates(result);
   };
 
+  const toggle = (code: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+
+  const simulate = () => {
+    const perTicker = (Number(budget) || 0) / Math.max(selected.size, 1);
+    const csv = candidatesToHoldingsCsv(candidateRows, selected, perTicker);
+    void sim.run(() => api<Json>("/api/portfolio/analyze", { csv_text: csv, financials_csv: props.financialsPath }));
+  };
+
   return (
     <section className="screen">
-      <ScreenTitle title="候補抽出" body="条件に一致した比較対象だけを表示します。おすすめ・買い指示は出しません。" />
+      <ScreenTitle title="候補抽出" body="条件で抽出 → 銘柄を選んで「ポートフォリオ試算」。おすすめ・買い指示は出しません。" />
       <div className="form-grid">
         <Field label="自己資本比率下限">
           <input value={minEquity} onChange={(e) => setMinEquity(e.target.value)} inputMode="decimal" />
@@ -1086,7 +1135,33 @@ function ScreenPanel(props: {
         </button>
       </ActionRow>
       <Status loading={state.loading} error={state.error} />
-      {state.data && <CandidateTable data={state.data} onOpenDetail={props.onOpenDetail} />}
+      {state.data && (
+        <>
+          <div className="detail-section" aria-label="選択銘柄でポートフォリオ試算">
+            <h4>選択した銘柄でポートフォリオ試算</h4>
+            <p className="hint">表のチェックで銘柄を選び、予算を等分して評価額・配当・集中度を試算します（非助言）。</p>
+            <div className="form-grid tight">
+              <Field label="投資予算（円・等分）">
+                <input value={budget} inputMode="numeric" onChange={(e) => setBudget(e.target.value)} />
+              </Field>
+              <Field label="選択数">
+                <input value={`${selected.size} 銘柄`} readOnly />
+              </Field>
+            </div>
+            <ActionRow>
+              <button className="primary" disabled={selected.size === 0 || sim.loading} onClick={simulate}>
+                {sim.loading ? "試算中..." : "選択銘柄でポートフォリオ試算"}
+              </button>
+              <button disabled={selected.size === 0} onClick={() => props.onOpenRag([...selected])}>
+                選択銘柄をRAG検索
+              </button>
+            </ActionRow>
+          </div>
+          <CandidateTable data={state.data} onOpenDetail={props.onOpenDetail} selected={selected} onToggle={toggle} />
+          <Status loading={sim.loading} error={sim.error} />
+          {sim.data && <AnalysisResult data={sim.data} />}
+        </>
+      )}
     </section>
   );
 }
@@ -1414,6 +1489,13 @@ function RagSearchPanel(props: {
       Object.fromEntries(results.map((result, index) => [ragResultKey(result, index), true])),
     );
   }, [searchState.data]);
+
+  // When navigated here from another panel (e.g. candidate selection bumps the
+  // draft version), auto-run the search for the handed-off query.
+  useEffect(() => {
+    if (props.draft.version > 0 && query.trim()) void search();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.draft.version]);
 
   return (
     <section className="screen">
@@ -1974,9 +2056,13 @@ function ValidationResult({ data }: { data: Json }) {
 function CandidateTable({
   data,
   onOpenDetail,
+  selected,
+  onToggle,
 }: {
   data: Json;
   onOpenDetail: (code: string, assetType: "stock" | "fund") => void;
+  selected: Set<string>;
+  onToggle: (code: string) => void;
 }) {
   const rows = Array.isArray(data.results) ? data.results : [];
   return (
@@ -1986,6 +2072,7 @@ function CandidateTable({
           <table>
             <thead>
               <tr>
+                <th>選択</th>
                 <th>コード</th>
                 <th>名称</th>
                 <th>種別</th>
@@ -2000,6 +2087,15 @@ function CandidateTable({
                 const assetType = detailAssetType(row.asset_type);
                 return (
                   <tr key={`${code || String(row.name ?? "candidate")}-${index}`}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        disabled={!code}
+                        checked={Boolean(code) && selected.has(code)}
+                        onChange={() => code && onToggle(code)}
+                        aria-label={`${code} を選択`}
+                      />
+                    </td>
                     <td>{code || "-"}</td>
                     <td>{formatCell(row.name)}</td>
                     <td>{assetTypeLabel(assetType)}</td>
@@ -2734,7 +2830,12 @@ function useAsync<T>() {
       setLoading(false);
     }
   }
-  return { loading, error, data, run };
+  function reset() {
+    setData(null);
+    setError(null);
+    setLoading(false);
+  }
+  return { loading, error, data, run, reset };
 }
 
 function buildWorkState(input: {
