@@ -19,13 +19,13 @@ from investment_assistant.investment.universe import (
     DEFAULT_JPX_LISTED_ISSUES_PATH,
     load_jpx_listed_issues,
 )
-from investment_assistant.portfolio.price_store import (
-    DEFAULT_CURRENT_PRICES_CSV,
-    load_current_prices,
-)
 from investment_assistant.portfolio.bar_store import (
     DEFAULT_DAILY_BARS_CSV,
     load_daily_bars,
+)
+from investment_assistant.portfolio.price_store import (
+    DEFAULT_CURRENT_PRICES_CSV,
+    load_current_prices,
 )
 
 JsonDict = dict[str, Any]
