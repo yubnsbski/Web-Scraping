@@ -265,6 +265,7 @@ def market_heatmap(body: JsonDict) -> JsonDict:
         daily_bars_csv,
         tickers=tickers,
         names=names,
+        current_prices=_market_financials_prices(body),
         sort_by=str(body.get("sort_by") or "change"),
         limit=_as_int(body.get("limit"), 0),
     )
@@ -324,6 +325,73 @@ def _market_financials_names(body: JsonDict) -> dict[str, str]:
         if ticker and name:
             names.setdefault(ticker, name)
     return names
+
+
+def _market_financials_prices(body: JsonDict) -> dict[str, float]:
+    """Map ticker -> current price from the scraped Yahoo financials CSV (or empty)."""
+
+    import csv
+    import io
+
+    path = Path(str(body.get("market_financials_csv") or _DEFAULT_YAHOO_FINANCIALS_PATH))
+    if not path.is_file():
+        return {}
+    raw = path.read_bytes()
+    for encoding in ("utf-8-sig", "cp932", "utf-8"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    prices: dict[str, float] = {}
+    reader = csv.DictReader(io.StringIO(text.strip().lstrip("﻿"), newline=""))
+    for row in reader:
+        ticker = str(row.get("ticker") or row.get("code") or "").strip().upper()
+        ticker = ticker[:-2] if ticker.endswith(".T") else ticker
+        raw_price = str(row.get("price") or "").strip().replace(",", "")
+        if not ticker or not raw_price:
+            continue
+        try:
+            value = float(raw_price)
+        except ValueError:
+            continue
+        if value > 0:
+            prices.setdefault(ticker, value)
+    return prices
+
+
+def market_refresh(body: JsonDict) -> JsonDict:
+    """Re-fetch the latest prices for the requested watch list (intraday + bars).
+
+    Fetches Yahoo market fundamentals (current price) and OHLCV for every
+    requested ticker and merges both into their CSVs, so the heat map can show
+    up-to-date prices on demand.
+    """
+
+    from investment_assistant import cli
+
+    runtime_mode = _runtime_mode(body)
+    _ensure_market_provider("yfinance", runtime_mode)
+    watch = _ticker_list(body)
+    if not watch:
+        raise ApiError("tickers are required")
+    financials_csv = str(body.get("market_financials_csv") or _DEFAULT_YAHOO_FINANCIALS_PATH)
+    daily_bars_csv = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH)
+    price_result = cli.run_market_financials(
+        tickers=watch, save=True, output_path=financials_csv
+    )
+    bars_result = cli.run_market_bars_backfill(
+        tickers=watch, range_=str(body.get("range") or "1mo"), daily_bars_path=daily_bars_csv
+    )
+    return {
+        "tickers_count": len(watch),
+        "price_refresh": price_result,
+        "bars_refresh": bars_result,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _index_financials_into_rag(financials_csv: str, body: JsonDict) -> JsonDict:

@@ -1290,6 +1290,7 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
   const heatmap = useAsync<Json>();
   const gaps = useAsync<Json>();
   const backfill = useAsync<Json>();
+  const refresh = useAsync<Json>();
   const cells: Json[] = Array.isArray(heatmap.data?.cells) ? (heatmap.data!.cells as Json[]) : [];
   const missing: string[] = Array.isArray(gaps.data?.missing_any)
     ? (gaps.data!.missing_any as string[])
@@ -1313,6 +1314,13 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
   const loadGaps = () => gaps.run(() => api<Json>("/api/market/gaps", { tickers }));
   const runBackfill = async () => {
     const result = await backfill.run(() => api<Json>("/api/market/backfill", { tickers }));
+    if (result) {
+      void load();
+      void loadGaps();
+    }
+  };
+  const runRefresh = async () => {
+    const result = await refresh.run(() => api<Json>("/api/market/refresh", { tickers }));
     if (result) {
       void load();
       void loadGaps();
@@ -1352,8 +1360,11 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
         </Field>
       </div>
       <ActionRow>
-        <button className="primary" disabled={heatmap.loading} onClick={() => void load()}>
-          {heatmap.loading ? "更新中..." : "更新"}
+        <button className="primary" disabled={refresh.loading} onClick={() => void runRefresh()}>
+          {refresh.loading ? "価格取得中..." : "価格を更新（最新取得）"}
+        </button>
+        <button className="ghost" disabled={heatmap.loading} onClick={() => void load()}>
+          {heatmap.loading ? "再描画中..." : "再描画"}
         </button>
         {missing.length > 0 && (
           <button className="ghost" disabled={backfill.loading} onClick={() => void runBackfill()}>
@@ -1371,12 +1382,18 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
               )} 銘柄。「不足を補完」で該当銘柄だけ取得します。`}
         </p>
       )}
-      <Status loading={heatmap.loading || backfill.loading} error={heatmap.error || backfill.error} />
+      <Status
+        loading={heatmap.loading || backfill.loading || refresh.loading}
+        error={heatmap.error || backfill.error || refresh.error}
+      />
       {heatmap.data && (
         <>
           <p className="hint">
-            {String(heatmap.data.count ?? cells.length)} 銘柄 / 基準日 {String(heatmap.data.as_of ?? "-")}
-            （前日終値比・非助言）
+            {String(heatmap.data.count ?? cells.length)} 銘柄
+            {cells.some((cell) => cell.price_source === "intraday")
+              ? "（現在値・当日比）"
+              : `（前日終値比 / 基準日 ${String(heatmap.data.as_of ?? "-")}）`}
+            ・非助言。「価格を更新」で最新を取得します。
           </p>
           <div className="heatmap-grid">
             {cells.map((cell) => {

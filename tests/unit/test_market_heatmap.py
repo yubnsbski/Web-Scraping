@@ -65,6 +65,29 @@ def test_heatmap_uses_builtin_name_when_csv_has_none(tmp_path: Path) -> None:
     assert result3["cells"][0]["name"] == "ソニーグループ"
 
 
+def test_heatmap_uses_current_price_for_today_move(tmp_path: Path) -> None:
+    # With an intraday current price, the cell shows it and the change is
+    # measured against the latest daily close (today's move), not the prior day.
+    result = build_market_heatmap(
+        _write(tmp_path),
+        tickers=["7203"],
+        current_prices={"7203": 2850.0},
+    )
+    cell = result["cells"][0]
+    assert cell["price_source"] == "intraday"
+    assert cell["last_close"] == 2850.0
+    assert cell["prev_close"] == 2776.5  # latest daily close is the reference
+    assert cell["change_pct"] == 2.65  # (2850-2776.5)/2776.5*100
+
+
+def test_heatmap_falls_back_to_daily_close_without_current_price(tmp_path: Path) -> None:
+    result = build_market_heatmap(_write(tmp_path), tickers=["7203"])
+    cell = result["cells"][0]
+    assert cell["price_source"] == "daily_close"
+    assert cell["last_close"] == 2776.5
+    assert cell["change_pct"] == 2.83
+
+
 def test_heatmap_sort_change_puts_largest_move_first(tmp_path: Path) -> None:
     result = build_market_heatmap(_write(tmp_path), sort_by="change")
     # 7203 (+2.83%) has a larger absolute move than 8306 (-1.0%); 9999 (None) last.

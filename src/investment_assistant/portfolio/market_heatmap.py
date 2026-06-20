@@ -26,15 +26,18 @@ def build_market_heatmap(
     *,
     tickers: list[str] | None = None,
     names: dict[str, str] | None = None,
+    current_prices: dict[str, float] | None = None,
     sort_by: str = "change",
     limit: int = 0,
 ) -> JsonDict:
-    """Compute per-ticker latest close and day-over-day % change.
+    """Compute per-ticker display price and percentage change.
 
-    ``tickers`` filters to a watch list (bare Tokyo codes); ``names`` maps a
-    code to a display name. ``sort_by`` is ``"change"`` (descending absolute
-    move first), ``"gain"``, ``"loss"``, or ``"ticker"``. ``limit`` caps the
-    number of cells (``0`` = all).
+    When ``current_prices`` has a fresh intraday price for a code, it is shown
+    as the price and the change is measured against the latest daily close
+    (i.e. today's move). Otherwise the latest daily close is shown and the
+    change is the prior day-over-day move. ``tickers`` filters to a watch list
+    (bare Tokyo codes); ``names`` maps a code to a display name. ``sort_by`` is
+    ``"change"`` / ``"gain"`` / ``"loss"`` / ``"ticker"``; ``limit`` caps cells.
     """
 
     wanted = {_normalize(t) for t in tickers} if tickers else None
@@ -52,20 +55,31 @@ def build_market_heatmap(
     cells: list[JsonDict] = []
     for code, points in series.items():
         points.sort(key=lambda item: item[0])
-        last_date, last_close = points[-1]
-        prev_close = points[-2][1] if len(points) >= 2 else None
+        last_date, last_daily_close = points[-1]
+        prev_daily_close = points[-2][1] if len(points) >= 2 else None
+        current = (current_prices or {}).get(code)
+        price: float
+        reference: float | None
+        if current is not None and current > 0:
+            # Intraday price available: today's move vs the latest daily close.
+            price = current
+            reference = last_daily_close
+            price_source = "intraday"
+        else:
+            price = last_daily_close
+            reference = prev_daily_close
+            price_source = "daily_close"
         change_pct = (
-            round((last_close - prev_close) / prev_close * 100.0, 2)
-            if prev_close
-            else None
+            round((price - reference) / reference * 100.0, 2) if reference else None
         )
         cells.append(
             {
                 "ticker": code,
                 "name": _display_name(code, names),
-                "last_close": round(last_close, 2),
-                "prev_close": round(prev_close, 2) if prev_close is not None else None,
+                "last_close": round(price, 2),
+                "prev_close": round(reference, 2) if reference is not None else None,
                 "change_pct": change_pct,
+                "price_source": price_source,
                 "as_of": last_date,
             }
         )
