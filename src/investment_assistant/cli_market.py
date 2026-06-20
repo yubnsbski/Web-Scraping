@@ -334,9 +334,13 @@ def _merge_daily_bars_csv(ohlcv: object, path: str | Path) -> int:
 
     out = reject_path_traversal(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Only tickers that actually returned rows replace their history; a ticker
+    # that fetched nothing keeps its existing rows (so a transient failure in a
+    # daily refresh never wipes yesterday's data — it is retried next run).
     new_tickers = {
         _normalize_bar_ticker(str(ticker))
-        for ticker in (ohlcv.keys() if isinstance(ohlcv, dict) else [])
+        for ticker, rows in (ohlcv.items() if isinstance(ohlcv, dict) else [])
+        if isinstance(rows, list) and rows
     }
     kept: list[dict[str, str]] = []
     if out.is_file():
@@ -408,7 +412,10 @@ def run_market_daily_refresh(
     ohlcv_result = run_market_ohlcv(
         tickers=resolved, range_=range_, fetch=fetch, rate_limit_policy=rate_limit_policy
     )
-    daily_bars_count = _write_daily_bars_csv(ohlcv_result.get("ohlcv"), daily_bars_path)
+    # Merge (not overwrite) so a ticker that fails to fetch today keeps its
+    # existing bars and is simply retried tomorrow — the daily refresh
+    # self-heals transient gaps instead of dropping data on a bad fetch.
+    daily_bars_count = _merge_daily_bars_csv(ohlcv_result.get("ohlcv"), daily_bars_path)
 
     fin_result = run_market_financials(
         tickers=resolved,
@@ -416,6 +423,14 @@ def run_market_daily_refresh(
         output_path=financials_path,
         fetch=fetch,
         rate_limit_policy=rate_limit_policy,
+    )
+
+    # Report what's still missing after this run so the morning log shows the
+    # remaining gaps (they are recovered automatically on the next refresh).
+    from investment_assistant.portfolio.market_gaps import find_market_gaps
+
+    gaps = find_market_gaps(
+        resolved, daily_bars_csv=daily_bars_path, financials_csv=financials_path
     )
 
     rag_summary: dict[str, object] | None = None
@@ -441,6 +456,8 @@ def run_market_daily_refresh(
         "daily_bars_count": daily_bars_count,
         "financials_path": str(financials_path),
         "financials_matched": fin_result.get("matched_tickers"),
+        "gaps": gaps["counts"],
+        "missing_any": gaps["missing_any"],
         "rag": rag_summary,
         "auto_trading": False,
         "call_real_api": False,
