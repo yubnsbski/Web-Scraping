@@ -1269,10 +1269,16 @@ function DetailPanel(props: {
 }
 
 function heatColor(pct: number | null): string {
-  if (pct == null) return "rgba(120,128,144,0.25)";
-  const clamped = Math.max(-5, Math.min(5, pct)) / 5; // -1..1 over ±5%
-  const alpha = (0.18 + Math.abs(clamped) * 0.6).toFixed(2);
-  return clamped >= 0 ? `rgba(34,197,94,${alpha})` : `rgba(239,68,68,${alpha})`;
+  if (pct == null) return "#2b303b"; // deep slate; no washed-out transparency
+  const t = Math.min(Math.abs(pct) / 2.5, 1); // ramp to full saturation by ±2.5%
+  if (pct >= 0) {
+    // deep, rich green -> vivid green (white text stays readable)
+    const g = Math.round(120 + t * 75); // 120..195
+    return `rgb(${Math.round(6 + t * 8)},${g},${Math.round(40 + t * 25)})`;
+  }
+  // deep, rich red -> vivid red
+  const r = Math.round(170 + t * 70); // 170..240
+  return `rgb(${r},${Math.round(26 + t * 22)},${Math.round(26 + t * 22)})`;
 }
 
 function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
