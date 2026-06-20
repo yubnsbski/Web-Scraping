@@ -7,7 +7,7 @@ type DetailRequest = { code: string; assetType: "stock" | "fund"; version: numbe
 type RagSearchDraft = { query: string; dbPath: string; limit: string; version: number };
 type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[]; searchQuery?: string };
 
-const FINANCIALS_PATH = "examples/financials_sample.csv";
+const FINANCIALS_PATH = "local_docs/edinet/financials.csv";
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const DEFAULT_CHAT_QUERY = "KDDIの配当利回りと根拠を、投資助言にならない形で確認して";
 const DEFAULT_CHAT_LIMIT = 5;

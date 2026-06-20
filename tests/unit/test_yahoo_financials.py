@@ -237,3 +237,44 @@ def test_run_market_financials_saves_csv_with_registry_expansion(tmp_path: Path)
     csv_text = out.read_text(encoding="utf-8-sig")
     assert csv_text.splitlines()[0].startswith("ticker,name,price")
     assert "8306,Company 8306.T,1000.0,12.3" in csv_text
+
+
+def test_run_market_financials_merges_and_never_wipes_prior_rows(tmp_path: Path) -> None:
+    out = tmp_path / "yahoo_financials.csv"
+    no_sleep = DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None)
+
+    first = cli.run_market_financials(
+        tickers=["7203"],
+        save=True,
+        output_path=out,
+        fetch=lambda _url: _quote_payload("7203.T"),
+        rate_limit_policy=no_sleep,
+    )
+    assert first["saved_tickers"] == 1
+
+    # A later fetch that finds nothing must preserve the earlier 7203 row.
+    empty = cli.run_market_financials(
+        tickers=["6273"],
+        save=True,
+        output_path=out,
+        fetch=lambda url: '{"quoteResponse":{"result":[]}}'
+        if "v7" in url
+        else "<html><title>x</title></html>",
+        rate_limit_policy=no_sleep,
+    )
+    assert empty["new_or_updated_tickers"] == 0
+    assert empty["saved_tickers"] == 1
+    assert "7203" in out.read_text(encoding="utf-8-sig")
+
+    # A fetch of a new ticker adds to (does not replace) the file.
+    added = cli.run_market_financials(
+        tickers=["8306"],
+        save=True,
+        output_path=out,
+        fetch=lambda _url: _quote_payload("8306.T"),
+        rate_limit_policy=no_sleep,
+    )
+    assert added["saved_tickers"] == 2
+    csv_text = out.read_text(encoding="utf-8-sig")
+    assert "7203" in csv_text
+    assert "8306" in csv_text

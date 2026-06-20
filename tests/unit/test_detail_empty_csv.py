@@ -7,8 +7,11 @@ here, so an empty CSV should yield empty context instead of a hard error.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from investment_assistant.investment.detail import build_investment_detail
 from investment_assistant.webapi.investments import candidates_screen, investment_detail
 
 HOLDINGS_HEADER = (
@@ -51,3 +54,25 @@ def test_detail_still_rejects_malformed_csv() -> None:
         investment_detail(
             {"code": "8306", "asset_type": "stock", "csv_text": "bad,columns\n1,2\n"}
         )
+
+
+def test_detail_surfaces_yahoo_market_financials(tmp_path: Path) -> None:
+    market_csv = tmp_path / "yahoo_financials.csv"
+    market_csv.write_text(
+        "ticker,name,price,per,pbr,dps,dividend_yield,dividend_yield_percent,eps,market_cap\n"
+        "8306,三菱UFJ,2100,12.5,0.9,60,0.0285,2.85,168,2.6e13\n",
+        encoding="utf-8",
+    )
+    result = build_investment_detail(
+        code="8306",
+        asset_type="stock",
+        market_financials_csv=market_csv,
+    )
+    assert result["available"] is True
+    assert result["name"] == "三菱UFJ"
+    market = result["market_financials"]
+    assert isinstance(market, dict)
+    assert market["price"] == "2100"
+    metric_keys = {str(m["metric_key"]) for m in result["metrics"]}  # type: ignore[index]
+    assert "market.price" in metric_keys
+    assert "market.dps" in metric_keys
