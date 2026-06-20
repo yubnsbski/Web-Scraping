@@ -1489,3 +1489,40 @@ td {
     padding: 6px;
   }
 }
+
+/* Watch heatmap: at-a-glance price grid (green=up, red=down). */
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.heatmap-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  cursor: pointer;
+  color: #f5f7fa;
+  text-align: left;
+  min-height: 92px;
+  transition: transform 0.08s ease, border-color 0.08s ease;
+}
+.heatmap-cell:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.heatmap-code { font-weight: 800; font-size: 15px; }
+.heatmap-name {
+  font-size: 12px;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.heatmap-price { font-size: 14px; font-weight: 700; margin-top: auto; }
+.heatmap-change { font-size: 17px; font-weight: 800; }
