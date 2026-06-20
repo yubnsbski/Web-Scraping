@@ -167,7 +167,7 @@ export function App() {
             onMove={setTab}
           />
         )}
-        {tab === "watch" && <WatchPanel onOpenDetail={(code) => {
+        {tab === "watch" && <WatchPanel financialsPath={financialsPath} onOpenDetail={(code) => {
           setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
           setTab("detail");
         }} />}
@@ -1281,7 +1281,7 @@ function heatColor(pct: number | null): string {
   return `rgb(${r},${Math.round(20 + t * 18)},${Math.round(20 + t * 18)})`;
 }
 
-function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
+function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string) => void }) {
   const [watchlist, setWatchlist] = useState(
     () => localStorage.getItem("ia.watchlist") || "7203 8306 9433 9432 6758 6861 8058 9984",
   );
@@ -1302,7 +1302,14 @@ function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
   );
 
   const load = () =>
-    heatmap.run(() => api<Json>("/api/market/heatmap", { tickers, sort_by: sortBy, limit: 0 }));
+    heatmap.run(() =>
+      api<Json>("/api/market/heatmap", {
+        tickers,
+        sort_by: sortBy,
+        limit: 0,
+        financials_csv: props.financialsPath,
+      }),
+    );
   const loadGaps = () => gaps.run(() => api<Json>("/api/market/gaps", { tickers }));
   const runBackfill = async () => {
     const result = await backfill.run(() => api<Json>("/api/market/backfill", { tickers }));

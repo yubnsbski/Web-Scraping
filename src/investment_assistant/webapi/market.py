@@ -255,13 +255,46 @@ def market_heatmap(body: JsonDict) -> JsonDict:
         if isinstance(raw_tickers, list)
         else None
     )
+    # Names: EDINET financials CSV (covers ~all listed names) as the base, then
+    # the scraped Yahoo financials fills any gaps. Either alone leaves many
+    # watch-list codes without a company name.
+    names = _financials_names(body.get("financials_csv"))
+    for code, name in _market_financials_names(body).items():
+        names.setdefault(code, name)
     return build_market_heatmap(
         daily_bars_csv,
         tickers=tickers,
-        names=_market_financials_names(body),
+        names=names,
         sort_by=str(body.get("sort_by") or "change"),
         limit=_as_int(body.get("limit"), 0),
     )
+
+
+def _financials_names(financials_csv: object) -> dict[str, str]:
+    """Map ticker -> company name from an EDINET-style financials CSV (or empty)."""
+
+    if not isinstance(financials_csv, str) or not financials_csv.strip():
+        return {}
+    if not Path(financials_csv).is_file():
+        return {}
+    from investment_assistant.financials.evidence import load_comparison
+
+    try:
+        comparison = load_comparison(financials_csv)
+    except (OSError, ValueError, KeyError):
+        return {}
+    companies = comparison.get("companies") if isinstance(comparison, dict) else None
+    out: dict[str, str] = {}
+    if isinstance(companies, list):
+        for company in companies:
+            if not isinstance(company, dict):
+                continue
+            ticker = str(company.get("ticker") or "").strip().upper()
+            ticker = ticker[:-2] if ticker.endswith(".T") else ticker
+            name = str(company.get("name") or "").strip()
+            if ticker and name:
+                out[ticker] = name
+    return out
 
 
 def _market_financials_names(body: JsonDict) -> dict[str, str]:
