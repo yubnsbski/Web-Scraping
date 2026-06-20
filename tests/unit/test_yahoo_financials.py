@@ -153,6 +153,30 @@ def test_fetch_yahoo_financials_fills_missing_price_from_chart() -> None:
     assert result["sources"]["1419"].endswith("+chart_close")
 
 
+def test_fetch_yahoo_financials_recovers_price_from_chart_when_not_found() -> None:
+    # v7 quote empty + Yahoo Japan HTML empty -> still recover a price-only row
+    # from the reliable v8 chart endpoint instead of giving up as not_found.
+    def fake_fetch(url: str) -> str:
+        if "/v7/finance/quote" in url:
+            return json.dumps({"quoteResponse": {"result": []}})
+        if "finance.yahoo.co.jp/quote" in url:
+            return "<html><title>x</title></html>"  # no price, no metrics
+        if "/v8/finance/chart" in url:
+            return _chart_payload(3278.0)
+        return ""
+
+    result = fetch_yahoo_financials(
+        ["8306"],
+        fetch=fake_fetch,
+        rate_limit=DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None),
+    )
+
+    assert result["matched_tickers"] == 1
+    assert result["financials"]["8306"] == {"price": 3278.0}  # type: ignore[index]
+    assert result["sources"]["8306"] == "chart_close"  # type: ignore[index]
+    assert "8306" not in result["notes"]  # type: ignore[operator]
+
+
 def test_fetch_yahoo_financials_skips_chart_when_price_present() -> None:
     # A healthy v7 quote already has a price -> no chart request should be made.
     seen: list[str] = []

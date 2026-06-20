@@ -180,15 +180,26 @@ def fetch_yahoo_financials(
                 if metrics:
                     financials[ticker] = metrics
                     sources[ticker] = "yahoo_japan_html"
-                else:
-                    notes[ticker] = "not_found"
 
+            # Reliable chart-close fallback (same v8 endpoint as OHLCV). Fill a
+            # missing price, or recover a price-only row when both the v7 quote
+            # and the HTML page returned nothing. Yahoo's v7 quote is flaky
+            # under repeated access, so this keeps at least the price per ticker.
             entry = financials.get(ticker)
-            if entry is not None and "price" not in entry:
+            if entry is not None:
+                if "price" not in entry:
+                    close = _last_close_price(ticker, runner)
+                    if close is not None:
+                        entry["price"] = close
+                        sources[ticker] = f"{sources.get(ticker, '')}+chart_close"
+            else:
                 close = _last_close_price(ticker, runner)
                 if close is not None:
-                    entry["price"] = close
-                    sources[ticker] = f"{sources.get(ticker, '')}+chart_close"
+                    financials[ticker] = {"price": close}
+                    sources[ticker] = "chart_close"
+                    notes.pop(ticker, None)
+                else:
+                    notes.setdefault(ticker, "not_found")
 
     result: dict[str, object] = {
         "provider_id": "yfinance",
