@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -88,14 +89,36 @@ def investment_detail(body: JsonDict) -> JsonDict:
         holdings_from_payload,
     )
 
-    holdings = holdings_from_payload(body) if _has_any(body, "holdings", "csv_text", "path") else []
+    holdings = (
+        _ignore_empty_rows(lambda: holdings_from_payload(body))
+        if _has_any(body, "holdings", "csv_text", "path")
+        else []
+    )
     return build_investment_detail(
         code=str(body.get("code") or body.get("ticker_or_fund_code") or ""),
         asset_type=str(body.get("asset_type") or ""),
         holdings=holdings,
-        funds=fund_profiles_from_payload(body),
+        funds=_ignore_empty_rows(lambda: fund_profiles_from_payload(body)),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
     )
+
+
+def _ignore_empty_rows(load: Callable[[], list[Any]]) -> list[Any]:
+    """Treat a header-only (rows-less) holdings/funds CSV as "no rows".
+
+    The dashboard ships header-only sample CSVs, so the detail and candidate
+    screens send a CSV with columns but no data rows. Holdings and fund
+    profiles are optional context for those screens, so an empty CSV should
+    yield an empty list instead of a hard error. Genuine malformed-data errors
+    (missing columns, bad values) still propagate.
+    """
+
+    try:
+        return load()
+    except ValueError as exc:
+        if "must contain at least one row" in str(exc):
+            return []
+        raise
 
 
 def candidates_screen(body: JsonDict) -> JsonDict:
@@ -121,7 +144,7 @@ def candidates_screen(body: JsonDict) -> JsonDict:
     )
     return screen_candidates(
         screen=screen,
-        funds=fund_profiles_from_payload(body),
+        funds=_ignore_empty_rows(lambda: fund_profiles_from_payload(body)),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
         runtime_mode=str(body.get("runtime_mode") or "development"),
     )
