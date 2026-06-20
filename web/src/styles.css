@@ -1509,7 +1509,7 @@ td {
   color: #ffffff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
   text-align: left;
-  min-height: 92px;
+  min-height: 110px;
   transition: transform 0.08s ease, border-color 0.08s ease;
 }
 .heatmap-cell:hover {
@@ -1518,11 +1518,16 @@ td {
 }
 .heatmap-code { font-weight: 800; font-size: 17px; }
 .heatmap-name {
-  font-size: 13px;
-  opacity: 0.95;
-  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 1;
+  line-height: 1.25;
+  /* Show the full company name on up to two lines instead of truncating it. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  word-break: break-word;
   max-width: 100%;
 }
 .heatmap-price { font-size: 15px; font-weight: 800; margin-top: auto; }
