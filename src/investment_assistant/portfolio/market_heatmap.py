@@ -62,7 +62,7 @@ def build_market_heatmap(
         cells.append(
             {
                 "ticker": code,
-                "name": (names or {}).get(code) or builtin_company_name(code) or code,
+                "name": _display_name(code, names),
                 "last_close": round(last_close, 2),
                 "prev_close": round(prev_close, 2) if prev_close is not None else None,
                 "change_pct": change_pct,
@@ -82,6 +82,20 @@ def build_market_heatmap(
         "auto_trading": False,
         "call_real_api": False,
     }
+
+
+def _display_name(code: str, names: dict[str, str] | None) -> str:
+    """Best display name for a code: a real CSV name, else the built-in, else code.
+
+    A CSV "name" that is just the ticker code (some scraped rows store the code
+    when the real name was unavailable) is treated as missing so the built-in
+    dictionary can supply the company name instead.
+    """
+
+    provided = (names or {}).get(code)
+    if provided and provided.strip() and provided.strip() != code:
+        return provided
+    return builtin_company_name(code) or code
 
 
 def _sort_key(sort_by: str) -> Any:
