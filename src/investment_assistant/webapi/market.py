@@ -175,6 +175,72 @@ def market_forecast_screen(body: JsonDict) -> JsonDict:
     }
 
 
+def market_gaps(body: JsonDict) -> JsonDict:
+    """Report which requested tickers lack a price and/or enough daily bars."""
+
+    from investment_assistant.portfolio.market_gaps import find_market_gaps
+
+    return find_market_gaps(
+        _ticker_list(body),
+        daily_bars_csv=str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH),
+        financials_csv=str(body.get("market_financials_csv") or _DEFAULT_YAHOO_FINANCIALS_PATH),
+    )
+
+
+def market_backfill(body: JsonDict) -> JsonDict:
+    """Fetch only the missing data for the requested tickers (price + daily bars).
+
+    Computes the gaps for the requested watch list, then fetches market
+    fundamentals for the price-less codes and OHLCV for the bar-less codes,
+    merging both into their CSVs without disturbing other tickers.
+    """
+
+    from investment_assistant import cli
+    from investment_assistant.portfolio.market_gaps import find_market_gaps
+
+    runtime_mode = _runtime_mode(body)
+    _ensure_market_provider("yfinance", runtime_mode)
+    daily_bars_csv = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH)
+    financials_csv = str(body.get("market_financials_csv") or _DEFAULT_YAHOO_FINANCIALS_PATH)
+    gaps = find_market_gaps(
+        _ticker_list(body), daily_bars_csv=daily_bars_csv, financials_csv=financials_csv
+    )
+
+    price_result = None
+    if gaps["missing_price"]:
+        price_result = cli.run_market_financials(
+            tickers=list(gaps["missing_price"]),
+            save=True,
+            output_path=financials_csv,
+        )
+    bars_result = None
+    if gaps["missing_bars"]:
+        bars_result = cli.run_market_bars_backfill(
+            tickers=list(gaps["missing_bars"]),
+            range_=str(body.get("range") or "6mo"),
+            daily_bars_path=daily_bars_csv,
+        )
+    return {
+        "gaps_before": gaps,
+        "price_backfill": price_result,
+        "bars_backfill": bars_result,
+        "gaps_after": find_market_gaps(
+            _ticker_list(body), daily_bars_csv=daily_bars_csv, financials_csv=financials_csv
+        ),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _ticker_list(body: JsonDict) -> list[str]:
+    raw = body.get("tickers")
+    if isinstance(raw, list):
+        return [str(item) for item in raw if str(item).strip()]
+    if isinstance(raw, str):
+        return [part for part in raw.replace(",", " ").split() if part]
+    return []
+
+
 def market_heatmap(body: JsonDict) -> JsonDict:
     """At-a-glance watch grid: latest close + day-over-day % change per ticker."""
 
