@@ -175,6 +175,58 @@ def market_forecast_screen(body: JsonDict) -> JsonDict:
     }
 
 
+def market_heatmap(body: JsonDict) -> JsonDict:
+    """At-a-glance watch grid: latest close + day-over-day % change per ticker."""
+
+    from investment_assistant.portfolio.market_heatmap import build_market_heatmap
+
+    daily_bars_csv = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_PATH)
+    if not Path(daily_bars_csv).is_file():
+        raise ApiError(f"daily bars CSV not found: {daily_bars_csv}")
+    raw_tickers = body.get("tickers")
+    tickers = (
+        [str(item) for item in raw_tickers if str(item).strip()]
+        if isinstance(raw_tickers, list)
+        else None
+    )
+    return build_market_heatmap(
+        daily_bars_csv,
+        tickers=tickers,
+        names=_market_financials_names(body),
+        sort_by=str(body.get("sort_by") or "change"),
+        limit=_as_int(body.get("limit"), 0),
+    )
+
+
+def _market_financials_names(body: JsonDict) -> dict[str, str]:
+    """Map ticker -> display name from the scraped Yahoo financials CSV (or empty)."""
+
+    import csv
+    import io
+
+    path = Path(str(body.get("market_financials_csv") or _DEFAULT_YAHOO_FINANCIALS_PATH))
+    if not path.is_file():
+        return {}
+    raw = path.read_bytes()
+    for encoding in ("utf-8-sig", "cp932", "utf-8"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    names: dict[str, str] = {}
+    reader = csv.DictReader(io.StringIO(text.strip().lstrip("﻿"), newline=""))
+    for row in reader:
+        ticker = str(row.get("ticker") or row.get("code") or "").strip().upper()
+        ticker = ticker[:-2] if ticker.endswith(".T") else ticker
+        name = str(row.get("name") or "").strip()
+        if ticker and name:
+            names.setdefault(ticker, name)
+    return names
+
+
 def _index_financials_into_rag(financials_csv: str, body: JsonDict) -> JsonDict:
     """Build per-ticker RAG evidence from the just-saved financials CSV and index it.
 

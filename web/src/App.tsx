@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
 
 type Json = Record<string, any>;
-type TabId = "dashboard" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat";
+type TabId = "dashboard" | "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 type RagSearchDraft = { query: string; dbPath: string; limit: string; version: number };
 type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[]; searchQuery?: string };
@@ -22,6 +22,7 @@ const SAMPLE_FUNDS_CSV =
 
 const TABS: Array<{ id: TabId; label: string; short: string }> = [
   { id: "dashboard", label: "全体", short: "全体" },
+  { id: "watch", label: "ウォッチ", short: "監視" },
   { id: "data", label: "データ更新", short: "更新" },
   { id: "holdings", label: "保有分析", short: "保有" },
   { id: "screen", label: "候補抽出", short: "候補" },
@@ -166,6 +167,10 @@ export function App() {
             onMove={setTab}
           />
         )}
+        {tab === "watch" && <WatchPanel onOpenDetail={(code) => {
+          setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
+          setTab("detail");
+        }} />}
         {tab === "forecast" && <ForecastScreenPanel onOpenDetail={(code) => {
           setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
           setTab("detail");
@@ -1259,6 +1264,106 @@ function DetailPanel(props: {
       {state.data && <DetailResult data={state.data} onMove={props.onMove} />}
       <Status loading={forecast.loading} error={forecast.error} />
       {forecast.data && <ForecastResult data={forecast.data} />}
+    </section>
+  );
+}
+
+function heatColor(pct: number | null): string {
+  if (pct == null) return "rgba(120,128,144,0.25)";
+  const clamped = Math.max(-5, Math.min(5, pct)) / 5; // -1..1 over ±5%
+  const alpha = (0.18 + Math.abs(clamped) * 0.6).toFixed(2);
+  return clamped >= 0 ? `rgba(34,197,94,${alpha})` : `rgba(239,68,68,${alpha})`;
+}
+
+function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
+  const [watchlist, setWatchlist] = useState(
+    () => localStorage.getItem("ia.watchlist") || "7203 8306 9433 9432 6758 6861 8058 9984",
+  );
+  const [sortBy, setSortBy] = useState("change");
+  const [auto, setAuto] = useState(true);
+  const heatmap = useAsync<Json>();
+  const cells: Json[] = Array.isArray(heatmap.data?.cells) ? (heatmap.data!.cells as Json[]) : [];
+
+  const tickers = useMemo(
+    () => watchlist.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean),
+    [watchlist],
+  );
+
+  const load = () =>
+    heatmap.run(() => api<Json>("/api/market/heatmap", { tickers, sort_by: sortBy, limit: 0 }));
+
+  useEffect(() => {
+    localStorage.setItem("ia.watchlist", watchlist);
+  }, [watchlist]);
+
+  useEffect(() => {
+    void load();
+    if (!auto) return;
+    const id = setInterval(() => void load(), 60000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto, sortBy, watchlist]);
+
+  return (
+    <section className="screen">
+      <ScreenTitle
+        title="ウォッチ（ヒートマップ）"
+        body="登録銘柄の前日終値比を色で一目確認します（緑=上昇 / 赤=下落）。価格系列の機械集計であり、売買推奨ではありません。"
+      />
+      <div className="form-grid tight">
+        <Field label="ウォッチ銘柄（コードを空白/カンマ区切り）">
+          <input value={watchlist} onChange={(e) => setWatchlist(e.target.value)} />
+        </Field>
+        <Field label="並び順">
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            <option value="change">変動が大きい順</option>
+            <option value="gain">上昇順</option>
+            <option value="loss">下落順</option>
+            <option value="ticker">コード順</option>
+          </select>
+        </Field>
+      </div>
+      <ActionRow>
+        <button className="primary" disabled={heatmap.loading} onClick={() => void load()}>
+          {heatmap.loading ? "更新中..." : "更新"}
+        </button>
+        <Check label="自動更新（60秒）" checked={auto} onChange={setAuto} />
+      </ActionRow>
+      <Status loading={heatmap.loading} error={heatmap.error} />
+      {heatmap.data && (
+        <>
+          <p className="hint">
+            {String(heatmap.data.count ?? cells.length)} 銘柄 / 基準日 {String(heatmap.data.as_of ?? "-")}
+            （前日終値比・非助言）
+          </p>
+          <div className="heatmap-grid">
+            {cells.map((cell) => {
+              const pct = cell.change_pct == null ? null : Number(cell.change_pct);
+              return (
+                <button
+                  key={String(cell.ticker)}
+                  className="heatmap-cell"
+                  style={{ background: heatColor(pct) }}
+                  title={`${String(cell.name)} (${String(cell.ticker)})`}
+                  onClick={() => props.onOpenDetail(String(cell.ticker))}
+                >
+                  <span className="heatmap-code">{String(cell.ticker)}</span>
+                  <span className="heatmap-name">{String(cell.name)}</span>
+                  <span className="heatmap-price">{Number(cell.last_close).toLocaleString()}</span>
+                  <span className="heatmap-change">
+                    {pct == null ? "—" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {cells.length === 0 && (
+            <p className="muted">
+              該当データがありません。「データ更新」で日足（daily_bars）を取得してください。
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }
