@@ -107,6 +107,34 @@ def test_daily_refresh_can_skip_rag(tmp_path: Path) -> None:
     assert result["daily_bars_count"] == 15
 
 
+def test_daily_refresh_merges_and_keeps_a_ticker_that_fails_to_fetch(tmp_path: Path) -> None:
+    bars = tmp_path / "daily_bars.csv"
+    common = {
+        "daily_bars_path": bars,
+        "financials_path": tmp_path / "yahoo_financials.csv",
+        "build_rag": False,
+        "range_": "1mo",
+        "rate_limit_policy": DEFAULT_YAHOO_RATE_LIMIT_POLICY.with_sleeper(lambda _: None),
+    }
+    # Run 1: both tickers fetch fine.
+    run_market_daily_refresh(tickers=["7203", "8306"], fetch=_fake_fetch, **common)
+    assert "8306," in bars.read_text(encoding="utf-8-sig")
+
+    # Run 2: 8306's OHLCV fetch returns nothing; its bars must be preserved.
+    def fetch_8306_bars_fail(url: str) -> str:
+        if "/v8/finance/chart/8306" in url:
+            return ""
+        return _fake_fetch(url)
+
+    result = run_market_daily_refresh(
+        tickers=["7203", "8306"], fetch=fetch_8306_bars_fail, **common
+    )
+    text = bars.read_text(encoding="utf-8-sig")
+    assert "7203," in text  # refreshed
+    assert "8306," in text  # preserved from run 1 (self-heal, not wiped)
+    assert "gaps" in result and "missing_any" in result
+
+
 def test_preflight_ready_when_tickers_and_paths_ok(tmp_path: Path) -> None:
     from investment_assistant.cli_market import check_daily_refresh_readiness
 
