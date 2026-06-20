@@ -8,6 +8,7 @@ public ``investment_assistant.cli.run_*`` API is unchanged.
 from __future__ import annotations
 
 import csv
+import io
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -168,18 +169,53 @@ def run_market_financials(
         path = reject_path_traversal(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         financials = result.get("financials")
-        if isinstance(financials, dict):
-            path.write_text(
-                yahoo_financials_csv_text(
-                    cast("dict[str, dict[str, object]]", financials)
-                ),
-                encoding="utf-8-sig",
-            )
-        else:
-            path.write_text(yahoo_financials_csv_text({}), encoding="utf-8-sig")
+        new_rows = (
+            cast("dict[str, dict[str, object]]", financials)
+            if isinstance(financials, dict)
+            else {}
+        )
+        # Merge into any previously saved rows so fetching one ticker (or a
+        # fetch that returns nothing) never discards tickers scraped earlier.
+        merged = {**_read_existing_market_financials(path), **new_rows}
+        path.write_text(yahoo_financials_csv_text(merged), encoding="utf-8-sig")
         result["saved"] = True
         result["output_path"] = str(path)
+        result["saved_tickers"] = len(merged)
+        result["new_or_updated_tickers"] = len(new_rows)
     return result
+
+
+def _read_existing_market_financials(path: Path) -> dict[str, dict[str, object]]:
+    """Load a previously saved Yahoo financials CSV as ``{ticker: metrics}``.
+
+    Lets a fetch merge into (rather than overwrite) the accumulated file, so
+    fetching a single ticker — or a fetch that returns nothing — never discards
+    rows scraped on earlier runs.
+    """
+
+    if not path.is_file():
+        return {}
+    raw = path.read_bytes()
+    for encoding in ("utf-8-sig", "cp932", "utf-8"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    out: dict[str, dict[str, object]] = {}
+    reader = csv.DictReader(io.StringIO(text.strip().lstrip("﻿"), newline=""))
+    for row in reader:
+        ticker = str(row.get("ticker") or "").strip()
+        if not ticker:
+            continue
+        out[ticker] = {
+            key: value
+            for key, value in row.items()
+            if key and key != "ticker" and value not in (None, "")
+        }
+    return out
 
 
 def run_yahoo_intraday(

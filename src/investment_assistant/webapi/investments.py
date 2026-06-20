@@ -100,6 +100,7 @@ def investment_detail(body: JsonDict) -> JsonDict:
         holdings=holdings,
         funds=_ignore_empty_rows(lambda: fund_profiles_from_payload(body)),
         financials_csv=str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+        market_financials_csv=_market_financials_path(body),
     )
 
 

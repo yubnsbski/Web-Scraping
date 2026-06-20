@@ -22,6 +22,7 @@ def build_investment_detail(
     holdings: Sequence[InvestmentHolding] = (),
     funds: Sequence[FundProfile] = (),
     financials_csv: str | Path = DEFAULT_FINANCIALS_CSV,
+    market_financials_csv: str | Path | None = None,
 ) -> dict[str, object]:
     """Build a non-advisory detail view for a single code."""
 
@@ -34,6 +35,7 @@ def build_investment_detail(
     comparison = load_comparison(financials_csv)
     company = _find_company(comparison, normalized_code)
     fund = _find_fund(funds, normalized_code)
+    market_row = _market_financials_row(market_financials_csv, normalized_code)
     matching_holdings = [
         holding
         for holding in holdings
@@ -41,6 +43,8 @@ def build_investment_detail(
         and (requested_type is None or holding.asset_type == requested_type)
     ]
     inferred_type = _infer_asset_type(requested_type, matching_holdings, company, fund)
+    if inferred_type == "unknown" and market_row is not None:
+        inferred_type = "stock"
     evidence: list[dict[str, object]] = []
     metrics: list[dict[str, object]] = []
 
@@ -120,16 +124,34 @@ def build_investment_detail(
         )
         metrics.extend(_fund_metrics(fund, claim_key, generated_at))
 
-    available = bool(matching_holdings or company is not None or fund is not None)
+    if market_row is not None:
+        claim_key = f"market.{normalized_code}.yahoo"
+        evidence.append(
+            {
+                "claim_key": claim_key,
+                "source_type": "yahoo_market_financials",
+                "source_ref": str(market_financials_csv),
+                "metric_key": "market_quote",
+                "formula": "latest scraped Yahoo quote row (price, dividend, yield, PER, PBR)",
+                "last_updated": generated_at,
+                "note": "Yahoo由来の市場データを機械集計した比較材料です。投資助言ではありません。",
+            }
+        )
+        metrics.extend(_market_metrics(market_row, claim_key, generated_at))
+
+    available = bool(
+        matching_holdings or company is not None or fund is not None or market_row is not None
+    )
     return {
         "available": available,
         "generated_at": generated_at,
         "asset_type": inferred_type,
         "code": normalized_code,
-        "name": _display_name(normalized_code, matching_holdings, company, fund),
+        "name": _display_name(normalized_code, matching_holdings, company, fund, market_row),
         "holding_summary": holding_summary,
         "holdings": holding_rows,
         "financials": company,
+        "market_financials": market_row,
         "fund_profile": fund.to_dict() if fund is not None else None,
         "metrics": _dedupe_metrics(metrics),
         "sections": _sections(
@@ -138,6 +160,7 @@ def build_investment_detail(
             holding_summary=holding_summary,
             company=company,
             fund=fund,
+            market_row=market_row,
         ),
         "evidence": evidence,
         "non_advisory_boundary": (
@@ -201,6 +224,7 @@ def _display_name(
     holdings: Sequence[InvestmentHolding],
     company: dict[str, object] | None,
     fund: FundProfile | None,
+    market_row: dict[str, object] | None = None,
 ) -> str:
     if holdings:
         return holdings[0].name
@@ -208,7 +232,68 @@ def _display_name(
         return fund.name
     if company is not None:
         return str(company.get("name") or code)
+    if market_row is not None:
+        name = str(market_row.get("name") or "").strip()
+        if name:
+            return name
     return code
+
+
+def _market_financials_row(
+    path: str | Path | None, code: str
+) -> dict[str, object] | None:
+    """Return the scraped Yahoo quote row for ``code`` (or ``None``)."""
+
+    if path is None or not Path(path).is_file():
+        return None
+    import csv
+    import io
+
+    raw = Path(path).read_bytes()
+    for encoding in ("utf-8-sig", "cp932", "utf-8"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    wanted = _bare_code(code)
+    reader = csv.DictReader(io.StringIO(text.strip().lstrip("﻿"), newline=""))
+    for row in reader:
+        ticker = str(row.get("ticker") or row.get("code") or "")
+        if _bare_code(ticker) == wanted:
+            return {str(key): value for key, value in row.items()}
+    return None
+
+
+def _bare_code(value: str) -> str:
+    text = value.strip().upper()
+    return text[:-2] if text.endswith(".T") else text
+
+
+def _market_metrics(
+    row: dict[str, object], claim_key: str, generated_at: str
+) -> list[dict[str, object]]:
+    specs = (
+        ("market.price", "株価（Yahoo）", "price", "Yahooの現在株価"),
+        ("market.dps", "1株配当（Yahoo）", "dps", "Yahooの1株配当（年額）"),
+        (
+            "market.dividend_yield_percent",
+            "配当利回り%（Yahoo）",
+            "dividend_yield_percent",
+            "Yahooの配当利回り（％）",
+        ),
+        ("market.per", "PER（Yahoo）", "per", "Yahooのトレーリング PER"),
+        ("market.pbr", "PBR（Yahoo）", "pbr", "Yahooの PBR"),
+    )
+    metrics: list[dict[str, object]] = []
+    for key, label, field, formula in specs:
+        value = _number(row.get(field))
+        if value is None:
+            continue
+        metrics.append(_metric(key, label, value, formula, [claim_key], generated_at))
+    return metrics
 
 
 def _holding_summary(rows: Sequence[dict[str, object]]) -> dict[str, object] | None:
@@ -371,6 +456,7 @@ def _sections(
     holding_summary: dict[str, object] | None,
     company: dict[str, object] | None,
     fund: FundProfile | None,
+    market_row: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     sections: list[dict[str, object]] = [
         {
@@ -414,6 +500,20 @@ def _sections(
                 "body": (
                     f"資産クラス {fund.asset_class}、信託報酬 {fund.expense_ratio}%、"
                     f"NISA対象 {fund.nisa_eligible}。"
+                ),
+            }
+        )
+    if market_row is not None:
+        price = _number(market_row.get("price"))
+        dps = _number(market_row.get("dps"))
+        yield_pct = _number(market_row.get("dividend_yield_percent"))
+        sections.append(
+            {
+                "key": "market",
+                "title": "市場データ（Yahoo）",
+                "body": (
+                    f"株価 {price} 円、1株配当 {dps} 円、"
+                    f"配当利回り {yield_pct}%。取得済みYahooデータの機械集計です。"
                 ),
             }
         )
