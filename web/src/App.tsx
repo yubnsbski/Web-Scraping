@@ -167,7 +167,7 @@ export function App() {
             onMove={setTab}
           />
         )}
-        {tab === "watch" && <WatchPanel onOpenDetail={(code) => {
+        {tab === "watch" && <WatchPanel financialsPath={financialsPath} onOpenDetail={(code) => {
           setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
           setTab("detail");
         }} />}
@@ -1269,19 +1269,19 @@ function DetailPanel(props: {
 }
 
 function heatColor(pct: number | null): string {
-  if (pct == null) return "#2b303b"; // deep slate; no washed-out transparency
+  if (pct == null) return "#242932"; // deep slate; no washed-out transparency
   const t = Math.min(Math.abs(pct) / 2.5, 1); // ramp to full saturation by ±2.5%
   if (pct >= 0) {
-    // deep, rich green -> vivid green (white text stays readable)
-    const g = Math.round(120 + t * 75); // 120..195
-    return `rgb(${Math.round(6 + t * 8)},${g},${Math.round(40 + t * 25)})`;
+    // deep green -> rich green; darker overall so white text reads clearly
+    const g = Math.round(95 + t * 70); // 95..165
+    return `rgb(${Math.round(5 + t * 6)},${g},${Math.round(32 + t * 22)})`;
   }
-  // deep, rich red -> vivid red
-  const r = Math.round(170 + t * 70); // 170..240
-  return `rgb(${r},${Math.round(26 + t * 22)},${Math.round(26 + t * 22)})`;
+  // deep red -> rich red
+  const r = Math.round(140 + t * 70); // 140..210
+  return `rgb(${r},${Math.round(20 + t * 18)},${Math.round(20 + t * 18)})`;
 }
 
-function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
+function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string) => void }) {
   const [watchlist, setWatchlist] = useState(
     () => localStorage.getItem("ia.watchlist") || "7203 8306 9433 9432 6758 6861 8058 9984",
   );
@@ -1302,7 +1302,14 @@ function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
   );
 
   const load = () =>
-    heatmap.run(() => api<Json>("/api/market/heatmap", { tickers, sort_by: sortBy, limit: 0 }));
+    heatmap.run(() =>
+      api<Json>("/api/market/heatmap", {
+        tickers,
+        sort_by: sortBy,
+        limit: 0,
+        financials_csv: props.financialsPath,
+      }),
+    );
   const loadGaps = () => gaps.run(() => api<Json>("/api/market/gaps", { tickers }));
   const runBackfill = async () => {
     const result = await backfill.run(() => api<Json>("/api/market/backfill", { tickers }));
