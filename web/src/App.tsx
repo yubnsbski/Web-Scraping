@@ -1268,9 +1268,11 @@ function DetailPanel(props: {
   );
 }
 
-function heatColor(pct: number | null): string {
+function heatColor(pct: number | null, fullAt = 2.5): string {
   if (pct == null) return "#242932"; // deep slate; no washed-out transparency
-  const t = Math.min(Math.abs(pct) / 2.5, 1); // ramp to full saturation by ±2.5%
+  // `fullAt` = the % move at which colour reaches full strength (smaller =
+  // stronger/darker for small moves). Driven by the "色の濃さ" slider.
+  const t = Math.min(Math.abs(pct) / Math.max(fullAt, 0.1), 1);
   if (pct >= 0) {
     // deep green -> rich green; darker overall so white text reads clearly
     const g = Math.round(95 + t * 70); // 95..165
@@ -1287,6 +1289,12 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
   );
   const [sortBy, setSortBy] = useState("change");
   const [auto, setAuto] = useState(true);
+  const [strength, setStrength] = useState(
+    () => Number(localStorage.getItem("ia.heatmapStrength")) || 8,
+  );
+  useEffect(() => {
+    localStorage.setItem("ia.heatmapStrength", String(strength));
+  }, [strength]);
   const heatmap = useAsync<Json>();
   const gaps = useAsync<Json>();
   const backfill = useAsync<Json>();
@@ -1358,6 +1366,16 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
             <option value="ticker">コード順</option>
           </select>
         </Field>
+        <Field label={`色の濃さ（薄い ◀ ▶ 濃い）: ${strength}`}>
+          <input
+            type="range"
+            min={1}
+            max={10}
+            step={1}
+            value={strength}
+            onChange={(e) => setStrength(Number(e.target.value))}
+          />
+        </Field>
       </div>
       <ActionRow>
         <button className="primary" disabled={refresh.loading} onClick={() => void runRefresh()}>
@@ -1402,7 +1420,7 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
                 <button
                   key={String(cell.ticker)}
                   className="heatmap-cell"
-                  style={{ background: heatColor(pct) }}
+                  style={{ background: heatColor(pct, 11 - strength) }}
                   title={`${String(cell.name)} (${String(cell.ticker)})`}
                   onClick={() => props.onOpenDetail(String(cell.ticker))}
                 >
