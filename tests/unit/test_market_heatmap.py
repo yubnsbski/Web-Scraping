@@ -88,6 +88,19 @@ def test_heatmap_falls_back_to_daily_close_without_current_price(tmp_path: Path)
     assert cell["change_pct"] == 2.83
 
 
+def test_heatmap_current_price_equal_to_close_uses_daily_move(tmp_path: Path) -> None:
+    # When the "current" price equals the latest close (market closed / price
+    # derived from the close), show the last completed day's move, not a flat 0%.
+    result = build_market_heatmap(
+        _write(tmp_path),
+        tickers=["7203"],
+        current_prices={"7203": 2776.5},  # == latest daily close
+    )
+    cell = result["cells"][0]
+    assert cell["price_source"] == "daily_close"
+    assert cell["change_pct"] == 2.83  # 7203's prior-day move, not 0.0
+
+
 def test_heatmap_sort_change_puts_largest_move_first(tmp_path: Path) -> None:
     result = build_market_heatmap(_write(tmp_path), sort_by="change")
     # 7203 (+2.83%) has a larger absolute move than 8306 (-1.0%); 9999 (None) last.

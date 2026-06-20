@@ -60,12 +60,20 @@ def build_market_heatmap(
         current = (current_prices or {}).get(code)
         price: float
         reference: float | None
-        if current is not None and current > 0:
-            # Intraday price available: today's move vs the latest daily close.
+        if (
+            current is not None
+            and current > 0
+            and abs(current - last_daily_close) > 1e-6
+        ):
+            # A genuine intraday price (different from the latest close): show it
+            # and measure today's move vs the latest daily close.
             price = current
             reference = last_daily_close
             price_source = "intraday"
         else:
+            # No live price, or it equals the last close (market closed / the
+            # quote was derived from the close): show the latest close and the
+            # most recent completed day's move so the cell is never a flat 0%.
             price = last_daily_close
             reference = prev_daily_close
             price_source = "daily_close"
