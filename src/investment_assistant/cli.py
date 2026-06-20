@@ -19,6 +19,9 @@ from investment_assistant.cli_market import (
     check_daily_refresh_readiness as check_daily_refresh_readiness,
 )
 from investment_assistant.cli_market import (
+    run_market_bars_backfill as run_market_bars_backfill,
+)
+from investment_assistant.cli_market import (
     run_market_daily_refresh as run_market_daily_refresh,
 )
 from investment_assistant.cli_market import (

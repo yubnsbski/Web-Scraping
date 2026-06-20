@@ -27,6 +27,7 @@ DEFAULT_MARKET_RAG_DIR = "local_docs/market/rag"
 __all__ = [
     "DEFAULT_YAHOO_FINANCIALS_PATH",
     "check_daily_refresh_readiness",
+    "run_market_bars_backfill",
     "run_market_daily_refresh",
     "run_market_financials",
     "run_market_inbox",
@@ -282,6 +283,103 @@ def _write_daily_bars_csv(ohlcv: object, path: str | Path) -> int:
                     )
                     count += 1
     return count
+
+
+_BAR_FIELDS = ("ticker", "date", "open", "high", "low", "close", "volume")
+
+
+def _normalize_bar_ticker(value: str) -> str:
+    text = value.strip().upper()
+    return text[:-2] if text.endswith(".T") else text
+
+
+def run_market_bars_backfill(
+    *,
+    tickers: list[str],
+    range_: str = "6mo",
+    daily_bars_path: str | Path = DEFAULT_DAILY_BARS_PATH,
+    fetch: Callable[[str], str] | None = None,
+    rate_limit_policy: MarketFetchPolicy | None = DEFAULT_YAHOO_RATE_LIMIT_POLICY,
+) -> dict[str, object]:
+    """Fetch OHLCV for ``tickers`` and **merge** them into the daily-bars CSV.
+
+    Unlike the full daily refresh (which rewrites the file), this keeps every
+    other ticker already in ``daily_bars.csv`` and only replaces rows for the
+    requested codes, so "backfill the missing watch-list names" never wipes the
+    accumulated history.
+    """
+
+    resolved = [str(t).strip() for t in tickers if str(t).strip()]
+    if not resolved:
+        return {"tickers_count": 0, "rows_written": 0, "daily_bars_path": str(daily_bars_path)}
+    ohlcv_result = run_market_ohlcv(
+        tickers=resolved, range_=range_, fetch=fetch, rate_limit_policy=rate_limit_policy
+    )
+    rows_written = _merge_daily_bars_csv(ohlcv_result.get("ohlcv"), daily_bars_path)
+    return {
+        "tickers_count": len(resolved),
+        "rows_written": rows_written,
+        "daily_bars_path": str(daily_bars_path),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _merge_daily_bars_csv(ohlcv: object, path: str | Path) -> int:
+    """Merge an OHLCV map into the daily-bars CSV; return new rows written.
+
+    Existing rows for the fetched tickers are dropped and replaced; rows for all
+    other tickers are preserved.
+    """
+
+    out = reject_path_traversal(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    new_tickers = {
+        _normalize_bar_ticker(str(ticker))
+        for ticker in (ohlcv.keys() if isinstance(ohlcv, dict) else [])
+    }
+    kept: list[dict[str, str]] = []
+    if out.is_file():
+        raw = out.read_bytes()
+        for encoding in ("utf-8-sig", "cp932", "utf-8"):
+            try:
+                text = raw.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            text = raw.decode("utf-8", errors="replace")
+        reader = csv.DictReader(io.StringIO(text.strip().lstrip("﻿"), newline=""))
+        for row in reader:
+            if _normalize_bar_ticker(str(row.get("ticker") or "")) not in new_tickers:
+                kept.append({field: str(row.get(field) or "") for field in _BAR_FIELDS})
+
+    new_rows = 0
+    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(_BAR_FIELDS))
+        writer.writeheader()
+        for row in kept:
+            writer.writerow(row)
+        if isinstance(ohlcv, dict):
+            for ticker, rows in ohlcv.items():
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    writer.writerow(
+                        {
+                            "ticker": str(ticker),
+                            "date": row.get("date"),
+                            "open": row.get("open"),
+                            "high": row.get("high"),
+                            "low": row.get("low"),
+                            "close": row.get("close"),
+                            "volume": row.get("volume"),
+                        }
+                    )
+                    new_rows += 1
+    return new_rows
 
 
 def run_market_daily_refresh(

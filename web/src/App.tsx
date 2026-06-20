@@ -1282,7 +1282,13 @@ function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
   const [sortBy, setSortBy] = useState("change");
   const [auto, setAuto] = useState(true);
   const heatmap = useAsync<Json>();
+  const gaps = useAsync<Json>();
+  const backfill = useAsync<Json>();
   const cells: Json[] = Array.isArray(heatmap.data?.cells) ? (heatmap.data!.cells as Json[]) : [];
+  const missing: string[] = Array.isArray(gaps.data?.missing_any)
+    ? (gaps.data!.missing_any as string[])
+    : [];
+  const gapCounts: Json = (gaps.data?.counts as Json) ?? {};
 
   const tickers = useMemo(
     () => watchlist.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean),
@@ -1291,6 +1297,14 @@ function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
 
   const load = () =>
     heatmap.run(() => api<Json>("/api/market/heatmap", { tickers, sort_by: sortBy, limit: 0 }));
+  const loadGaps = () => gaps.run(() => api<Json>("/api/market/gaps", { tickers }));
+  const runBackfill = async () => {
+    const result = await backfill.run(() => api<Json>("/api/market/backfill", { tickers }));
+    if (result) {
+      void load();
+      void loadGaps();
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem("ia.watchlist", watchlist);
@@ -1298,6 +1312,7 @@ function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
 
   useEffect(() => {
     void load();
+    void loadGaps();
     if (!auto) return;
     const id = setInterval(() => void load(), 60000);
     return () => clearInterval(id);
@@ -1327,9 +1342,23 @@ function WatchPanel(props: { onOpenDetail: (code: string) => void }) {
         <button className="primary" disabled={heatmap.loading} onClick={() => void load()}>
           {heatmap.loading ? "更新中..." : "更新"}
         </button>
+        {missing.length > 0 && (
+          <button className="ghost" disabled={backfill.loading} onClick={() => void runBackfill()}>
+            {backfill.loading ? "補完中..." : `不足を補完（${missing.length}銘柄）`}
+          </button>
+        )}
         <Check label="自動更新（60秒）" checked={auto} onChange={setAuto} />
       </ActionRow>
-      <Status loading={heatmap.loading} error={heatmap.error} />
+      {gaps.data && (
+        <p className="hint">
+          {missing.length === 0
+            ? "データはすべて揃っています。"
+            : `不足: 株価 ${String(gapCounts.missing_price ?? 0)} 銘柄 / 日足 ${String(
+                gapCounts.missing_bars ?? 0,
+              )} 銘柄。「不足を補完」で該当銘柄だけ取得します。`}
+        </p>
+      )}
+      <Status loading={heatmap.loading || backfill.loading} error={heatmap.error || backfill.error} />
       {heatmap.data && (
         <>
           <p className="hint">
