@@ -14,6 +14,8 @@ import io
 from pathlib import Path
 from typing import Any
 
+from investment_assistant.portfolio.jp_company_names import builtin_company_name
+
 JsonDict = dict[str, Any]
 
 _TICKER_KEYS = ("ticker", "code")
@@ -60,7 +62,7 @@ def build_market_heatmap(
         cells.append(
             {
                 "ticker": code,
-                "name": (names or {}).get(code) or code,
+                "name": (names or {}).get(code) or builtin_company_name(code) or code,
                 "last_close": round(last_close, 2),
                 "prev_close": round(prev_close, 2) if prev_close is not None else None,
                 "change_pct": change_pct,

@@ -46,6 +46,21 @@ def test_heatmap_filters_to_watchlist_and_names(tmp_path: Path) -> None:
     assert cell["name"] == "三菱UFJ"
 
 
+def test_heatmap_uses_builtin_name_when_csv_has_none(tmp_path: Path) -> None:
+    bars = tmp_path / "daily_bars.csv"
+    bars.write_text(
+        "ticker,date,close\n6758,2026-03-26,3200\n6758,2026-03-27,3140\n",
+        encoding="utf-8",
+    )
+    # No names provided from CSVs -> falls back to the built-in dictionary.
+    result = build_market_heatmap(bars, tickers=["6758"])
+    assert result["cells"][0]["name"] == "ソニーグループ"
+
+    # An explicit CSV name still wins over the built-in fallback.
+    result2 = build_market_heatmap(bars, tickers=["6758"], names={"6758": "SONY (CSV)"})
+    assert result2["cells"][0]["name"] == "SONY (CSV)"
+
+
 def test_heatmap_sort_change_puts_largest_move_first(tmp_path: Path) -> None:
     result = build_market_heatmap(_write(tmp_path), sort_by="change")
     # 7203 (+2.83%) has a larger absolute move than 8306 (-1.0%); 9999 (None) last.
