@@ -60,6 +60,10 @@ def test_heatmap_uses_builtin_name_when_csv_has_none(tmp_path: Path) -> None:
     result2 = build_market_heatmap(bars, tickers=["6758"], names={"6758": "SONY (CSV)"})
     assert result2["cells"][0]["name"] == "SONY (CSV)"
 
+    # A CSV "name" equal to the bare code is ignored -> built-in name wins.
+    result3 = build_market_heatmap(bars, tickers=["6758"], names={"6758": "6758"})
+    assert result3["cells"][0]["name"] == "ソニーグループ"
+
 
 def test_heatmap_sort_change_puts_largest_move_first(tmp_path: Path) -> None:
     result = build_market_heatmap(_write(tmp_path), sort_by="change")
