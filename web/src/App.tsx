@@ -1410,10 +1410,41 @@ function WatchPanel(props: {
     : [];
   const gapCounts: Json = (gaps.data?.counts as Json) ?? {};
 
-  const tickers = useMemo(
-    () => watchlist.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean),
-    [watchlist],
-  );
+  const tickers = useMemo(() => parseTickers(watchlist), [watchlist]);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    void api<Json>("/api/market/names", { financials_csv: props.financialsPath })
+      .then((data) => {
+        const map: Record<string, string> = {};
+        const list = Array.isArray(data.names) ? (data.names as Json[]) : [];
+        for (const item of list) map[String(item.ticker)] = String(item.name);
+        setNames(map);
+      })
+      .catch(() => {});
+  }, [props.financialsPath]);
+
+  const addTicker = (code: string) => {
+    const normalized = code.trim().toUpperCase().replace(/\.T$/, "");
+    if (!normalized || tickers.includes(normalized)) return;
+    setWatchlist([...tickers, normalized].join(" "));
+  };
+  const removeTicker = (code: string) =>
+    setWatchlist(tickers.filter((item) => item !== code).join(" "));
+  const addFromQuery = () => {
+    const q = query.trim();
+    if (!q) return;
+    if (/^\d{4,5}[A-Za-z]?$/.test(q)) {
+      addTicker(q);
+    } else {
+      const hit = Object.entries(names).find(([, name]) =>
+        name.toLowerCase().includes(q.toLowerCase()),
+      );
+      if (hit) addTicker(hit[0]);
+    }
+    setQuery("");
+  };
 
   const load = () =>
     heatmap.run(() =>
@@ -1455,10 +1486,45 @@ function WatchPanel(props: {
         title="ウォッチ（ヒートマップ）"
         body="登録銘柄の前日終値比を色で一目確認します（緑=上昇 / 赤=下落）。価格系列の機械集計であり、売買推奨ではありません。"
       />
+      <Field label="ウォッチリストに追加（コード or 会社名で検索）">
+        <div className="watch-add">
+          <input
+            list="watch-name-options"
+            value={query}
+            placeholder="例: 7203 / トヨタ / ソニー"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addFromQuery();
+              }
+            }}
+          />
+          <button className="primary" onClick={addFromQuery}>＋追加</button>
+          <datalist id="watch-name-options">
+            {Object.entries(names).map(([code, name]) => (
+              <option key={code} value={code}>{`${code} ${name}`}</option>
+            ))}
+          </datalist>
+        </div>
+      </Field>
+      <div className="watch-chips" aria-label="ウォッチ銘柄">
+        {tickers.length === 0 && <span className="muted">銘柄がありません。上で追加してください。</span>}
+        {tickers.map((code) => (
+          <span key={code} className="watch-chip">
+            <button
+              className="chip-label"
+              title="詳細を見る"
+              onClick={() => props.onOpenDetail(code)}
+            >
+              <b>{code}</b>
+              <small>{names[code] || ""}</small>
+            </button>
+            <button className="chip-remove" title="削除" onClick={() => removeTicker(code)}>×</button>
+          </span>
+        ))}
+      </div>
       <div className="form-grid tight">
-        <Field label="ウォッチ銘柄（コードを空白/カンマ区切り）">
-          <input value={watchlist} onChange={(e) => setWatchlist(e.target.value)} />
-        </Field>
         <Field label="並び順">
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
             <option value="change">変動が大きい順</option>

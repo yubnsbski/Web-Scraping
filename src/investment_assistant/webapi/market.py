@@ -175,6 +175,25 @@ def market_forecast_screen(body: JsonDict) -> JsonDict:
     }
 
 
+def market_names(body: JsonDict) -> JsonDict:
+    """Return ``[{ticker, name}]`` for the watch-list picker (built-in + EDINET)."""
+
+    from investment_assistant.portfolio.jp_company_names import COMPANY_NAMES
+
+    names = _financials_names(body.get("financials_csv"))
+    names.update(COMPANY_NAMES)  # curated built-in names win for the codes it covers
+    items = sorted(
+        ({"ticker": ticker, "name": name} for ticker, name in names.items()),
+        key=lambda item: item["ticker"],
+    )
+    return {
+        "names": items,
+        "count": len(items),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
 def market_gaps(body: JsonDict) -> JsonDict:
     """Report which requested tickers lack a price and/or enough daily bars."""
 
