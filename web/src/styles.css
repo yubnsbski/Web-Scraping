@@ -1646,3 +1646,22 @@ td {
 .heatmap-spark-empty { height: 26px; }
 
 .watch-holdings-add { justify-self: start; padding: 8px 16px; }
+
+/* Ticker tape speed control overlay. */
+.ticker-tape { position: relative; }
+.ticker-speed {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(8, 12, 18, 0.82);
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 800;
+}
+.ticker-speed input[type="range"] { width: 92px; min-height: 0; padding: 0; }
