@@ -1375,6 +1375,25 @@ function TickerTape(props: {
   );
 }
 
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return <span className="heatmap-spark-empty" />;
+  const width = 120;
+  const height = 28;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const step = width / (values.length - 1);
+  const points = values
+    .map((value, index) => `${(index * step).toFixed(1)},${(height - ((value - min) / span) * height).toFixed(1)}`)
+    .join(" ");
+  const rising = values[values.length - 1] >= values[0];
+  return (
+    <svg className="heatmap-spark" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={points} fill="none" stroke={rising ? "#bbf7d0" : "#fecaca"} strokeWidth={2} />
+    </svg>
+  );
+}
+
 function heatColor(pct: number | null, fullAt = 2.5): string {
   if (pct == null) return "#242932"; // deep slate; no washed-out transparency
   // `fullAt` = the % move at which colour reaches full strength (smaller =
@@ -1605,6 +1624,7 @@ function WatchPanel(props: {
                 >
                   <span className="heatmap-code">{String(cell.ticker)}</span>
                   <span className="heatmap-name">{String(cell.name)}</span>
+                  <Sparkline values={Array.isArray(cell.spark) ? (cell.spark as number[]) : []} />
                   <span className="heatmap-price">{Number(cell.last_close).toLocaleString()}</span>
                   <span className="heatmap-change">
                     {pct == null ? "—" : `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`}

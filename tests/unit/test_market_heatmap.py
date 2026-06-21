@@ -86,6 +86,15 @@ def test_heatmap_falls_back_to_daily_close_without_current_price(tmp_path: Path)
     assert cell["price_source"] == "daily_close"
     assert cell["last_close"] == 2776.5
     assert cell["change_pct"] == 2.83
+    # sparkline = recent closes (chronological)
+    assert cell["spark"] == [2700.0, 2776.5]
+
+
+def test_heatmap_spark_appends_intraday_price(tmp_path: Path) -> None:
+    cell = build_market_heatmap(
+        _write(tmp_path), tickers=["7203"], current_prices={"7203": 2850.0}
+    )["cells"][0]
+    assert cell["spark"] == [2700.0, 2776.5, 2850.0]  # current appended
 
 
 def test_heatmap_current_price_equal_to_close_uses_daily_move(tmp_path: Path) -> None:

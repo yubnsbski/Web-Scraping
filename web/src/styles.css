@@ -1635,3 +1635,12 @@ td {
   font-weight: 800;
 }
 .watch-chip .chip-remove:hover { background: #fef2f2; color: var(--error); }
+
+/* Heatmap cell sparkline (recent close trend). */
+.heatmap-spark {
+  width: 100%;
+  height: 26px;
+  margin: 2px 0;
+  opacity: 0.92;
+}
+.heatmap-spark-empty { height: 26px; }
