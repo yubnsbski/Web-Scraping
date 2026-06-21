@@ -40,7 +40,13 @@ const TABS: Array<{ id: TabId; label: string; short: string }> = [
 ];
 
 export function App() {
-  const [tab, setTab] = useState<TabId>("dashboard");
+  const [tab, setTab] = useState<TabId>(() => {
+    const saved = localStorage.getItem("ia.tab");
+    return TABS.some((item) => item.id === saved) ? (saved as TabId) : "dashboard";
+  });
+  useEffect(() => {
+    localStorage.setItem("ia.tab", tab);
+  }, [tab]);
   const [holdingsCsv, setHoldingsCsv] = useState(SAMPLE_HOLDINGS_CSV);
   const [fundsCsv, setFundsCsv] = useState(SAMPLE_FUNDS_CSV);
   const [financialsPath, setFinancialsPath] = useState(FINANCIALS_PATH);
@@ -1392,14 +1398,20 @@ function WatchPanel(props: {
 }) {
   const watchlist = props.watchlist;
   const setWatchlist = props.setWatchlist;
-  const [sortBy, setSortBy] = useState("change");
-  const [auto, setAuto] = useState(true);
+  const [sortBy, setSortBy] = useState(() => localStorage.getItem("ia.watchSort") || "change");
+  const [auto, setAuto] = useState(() => localStorage.getItem("ia.watchAuto") !== "0");
   const [strength, setStrength] = useState(
     () => Number(localStorage.getItem("ia.heatmapStrength")) || 8,
   );
   useEffect(() => {
     localStorage.setItem("ia.heatmapStrength", String(strength));
   }, [strength]);
+  useEffect(() => {
+    localStorage.setItem("ia.watchSort", sortBy);
+  }, [sortBy]);
+  useEffect(() => {
+    localStorage.setItem("ia.watchAuto", auto ? "1" : "0");
+  }, [auto]);
   const heatmap = useAsync<Json>();
   const gaps = useAsync<Json>();
   const backfill = useAsync<Json>();
