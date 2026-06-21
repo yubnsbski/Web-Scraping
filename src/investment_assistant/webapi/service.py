@@ -919,6 +919,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/forecast"): market_api.market_forecast,
     ("POST", "/api/market/forecast/screen"): market_api.market_forecast_screen,
     ("POST", "/api/market/heatmap"): market_api.market_heatmap,
+    ("POST", "/api/market/names"): market_api.market_names,
     ("POST", "/api/market/gaps"): market_api.market_gaps,
     ("POST", "/api/market/backfill"): market_api.market_backfill,
     ("POST", "/api/market/refresh"): market_api.market_refresh,

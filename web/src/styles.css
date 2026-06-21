@@ -1581,3 +1581,57 @@ td {
 .ticker-item.up .ti-change { color: #22c55e; }
 .ticker-item.down .ti-change { color: #f05252; }
 .ticker-item.flat .ti-change { color: #93a1b5; }
+
+/* Watch-list favourites: chips + quick add (intuitive add/remove). */
+.watch-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: center;
+}
+.watch-add .primary { padding: 0 16px; white-space: nowrap; }
+.watch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.watch-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-soft);
+}
+.watch-chip .chip-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 36px;
+  padding: 4px 6px 4px 14px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.watch-chip .chip-label b { font-size: 14px; }
+.watch-chip .chip-label small {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.watch-chip .chip-remove {
+  min-height: 36px;
+  padding: 0 12px;
+  border: none;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 800;
+}
+.watch-chip .chip-remove:hover { background: #fef2f2; color: var(--error); }
