@@ -1644,3 +1644,5 @@ td {
   opacity: 0.92;
 }
 .heatmap-spark-empty { height: 26px; }
+
+.watch-holdings-add { justify-self: start; padding: 8px 16px; }

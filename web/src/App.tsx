@@ -202,6 +202,7 @@ export function App() {
           financialsPath={financialsPath}
           watchlist={watchlist}
           setWatchlist={setWatchlist}
+          holdingsCsv={holdingsCsv}
           onOpenDetail={(code) => {
             openStockDetail(code);
             setTab("detail");
@@ -1409,10 +1410,28 @@ function heatColor(pct: number | null, fullAt = 2.5): string {
   return `rgb(${r},${Math.round(20 + t * 18)},${Math.round(20 + t * 18)})`;
 }
 
+function holdingStockTickers(csv: string): string[] {
+  const lines = csv.split(/\r?\n/).filter((line) => line.trim());
+  if (lines.length < 2) return [];
+  const header = lines[0].split(",").map((cell) => cell.trim());
+  const codeIdx = header.indexOf("ticker_or_fund_code");
+  const typeIdx = header.indexOf("asset_type");
+  if (codeIdx < 0) return [];
+  const out: string[] = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const cols = lines[i].split(",");
+    const code = (cols[codeIdx] || "").trim().toUpperCase().replace(/\.T$/, "");
+    const type = typeIdx >= 0 ? (cols[typeIdx] || "").trim().toLowerCase() : "stock";
+    if (code && type === "stock") out.push(code);
+  }
+  return out;
+}
+
 function WatchPanel(props: {
   financialsPath: string;
   watchlist: string;
   setWatchlist: (value: string) => void;
+  holdingsCsv: string;
   onOpenDetail: (code: string) => void;
 }) {
   const watchlist = props.watchlist;
@@ -1456,10 +1475,24 @@ function WatchPanel(props: {
       .catch(() => {});
   }, [props.financialsPath]);
 
+  const holdingCodes = useMemo(
+    () => holdingStockTickers(props.holdingsCsv),
+    [props.holdingsCsv],
+  );
+  const newHoldingCodes = holdingCodes.filter((code) => !tickers.includes(code));
+
   const addTicker = (code: string) => {
     const normalized = code.trim().toUpperCase().replace(/\.T$/, "");
     if (!normalized || tickers.includes(normalized)) return;
     setWatchlist([...tickers, normalized].join(" "));
+  };
+  const addTickers = (codes: string[]) => {
+    const merged = [...tickers];
+    for (const code of codes) {
+      const normalized = code.trim().toUpperCase().replace(/\.T$/, "");
+      if (normalized && !merged.includes(normalized)) merged.push(normalized);
+    }
+    setWatchlist(merged.join(" "));
   };
   const removeTicker = (code: string) =>
     setWatchlist(tickers.filter((item) => item !== code).join(" "));
@@ -1539,6 +1572,11 @@ function WatchPanel(props: {
           </datalist>
         </div>
       </Field>
+      {newHoldingCodes.length > 0 && (
+        <button className="ghost watch-holdings-add" onClick={() => addTickers(newHoldingCodes)}>
+          保有銘柄をウォッチに追加（{newHoldingCodes.length}）
+        </button>
+      )}
       <div className="watch-chips" aria-label="ウォッチ銘柄">
         {tickers.length === 0 && <span className="muted">銘柄がありません。上で追加してください。</span>}
         {tickers.map((code) => (
