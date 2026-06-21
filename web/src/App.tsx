@@ -11,6 +11,12 @@ const FINANCIALS_PATH = "local_docs/edinet/financials.csv";
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const DEFAULT_CHAT_QUERY = "KDDIの配当利回りと根拠を、投資助言にならない形で確認して";
 const DEFAULT_CHAT_LIMIT = 5;
+const WATCHLIST_STORAGE_KEY = "ia.watchlist";
+const DEFAULT_WATCHLIST = "7203 8306 9433 9432 6758 6861 8058 9984";
+
+function parseTickers(text: string): string[] {
+  return text.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean);
+}
 
 // Header-only defaults: no pre-loaded sample holdings/funds. Build your own
 // via the 銘柄選択 builder / 候補抽出, or use the "テンプレート" button for examples.
@@ -58,6 +64,15 @@ export function App() {
     assetType: "stock",
     version: 0,
   });
+  const [watchlist, setWatchlist] = useState(
+    () => localStorage.getItem(WATCHLIST_STORAGE_KEY) || DEFAULT_WATCHLIST,
+  );
+  useEffect(() => {
+    localStorage.setItem(WATCHLIST_STORAGE_KEY, watchlist);
+  }, [watchlist]);
+  const watchTickers = useMemo(() => parseTickers(watchlist), [watchlist]);
+  const openStockDetail = (code: string) =>
+    setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
 
   const workState = useMemo(
     () => buildWorkState({ marketSnapshot, analysis, candidates, report }),
@@ -101,6 +116,16 @@ export function App() {
             ))}
           </div>
         </header>
+
+        <TickerTape
+          tickers={watchTickers}
+          financialsPath={financialsPath}
+          onOpenDetail={(code) => {
+            openStockDetail(code);
+            setTab("detail");
+          }}
+          onOpenWatch={() => setTab("watch")}
+        />
 
         {tab === "dashboard" && (
           <Dashboard
@@ -167,10 +192,15 @@ export function App() {
             onMove={setTab}
           />
         )}
-        {tab === "watch" && <WatchPanel financialsPath={financialsPath} onOpenDetail={(code) => {
-          setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
-          setTab("detail");
-        }} />}
+        {tab === "watch" && <WatchPanel
+          financialsPath={financialsPath}
+          watchlist={watchlist}
+          setWatchlist={setWatchlist}
+          onOpenDetail={(code) => {
+            openStockDetail(code);
+            setTab("detail");
+          }}
+        />}
         {tab === "forecast" && <ForecastScreenPanel onOpenDetail={(code) => {
           setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
           setTab("detail");
@@ -1268,6 +1298,77 @@ function DetailPanel(props: {
   );
 }
 
+function TickerTape(props: {
+  tickers: string[];
+  financialsPath: string;
+  onOpenDetail: (code: string) => void;
+  onOpenWatch: () => void;
+}) {
+  const [cells, setCells] = useState<Json[]>([]);
+  const key = props.tickers.join(",");
+
+  useEffect(() => {
+    if (props.tickers.length === 0) {
+      setCells([]);
+      return;
+    }
+    let active = true;
+    const fetchTape = async () => {
+      try {
+        const data = await api<Json>("/api/market/heatmap", {
+          tickers: props.tickers,
+          sort_by: "ticker",
+          limit: 0,
+          financials_csv: props.financialsPath,
+        });
+        if (active && Array.isArray(data.cells)) setCells(data.cells as Json[]);
+      } catch {
+        /* keep the last good tape on a transient error */
+      }
+    };
+    void fetchTape();
+    const id = window.setInterval(() => void fetchTape(), 30000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, props.financialsPath]);
+
+  if (cells.length === 0) return null;
+  const items = [...cells, ...cells]; // duplicated for a seamless loop
+  return (
+    <div className="ticker-tape" aria-label="株価ティッカー" title="クリックでウォッチへ" onClick={props.onOpenWatch}>
+      <div
+        className="ticker-track"
+        style={{ animationDuration: `${Math.max(cells.length * 4, 20)}s` }}
+      >
+        {items.map((cell, index) => {
+          const pct = cell.change_pct == null ? null : Number(cell.change_pct);
+          const tone = pct == null ? "flat" : pct > 0 ? "up" : pct < 0 ? "down" : "flat";
+          return (
+            <button
+              key={`${String(cell.ticker)}-${index}`}
+              className={`ticker-item ${tone}`}
+              title={`${String(cell.name)} (${String(cell.ticker)})`}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onOpenDetail(String(cell.ticker));
+              }}
+            >
+              <span className="ti-name">{String(cell.name)}</span>
+              <span className="ti-price">{Number(cell.last_close).toLocaleString()}</span>
+              <span className="ti-change">
+                {pct == null ? "—" : `${pct > 0 ? "▲" : pct < 0 ? "▼" : ""}${Math.abs(pct).toFixed(2)}%`}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function heatColor(pct: number | null, fullAt = 2.5): string {
   if (pct == null) return "#242932"; // deep slate; no washed-out transparency
   // `fullAt` = the % move at which colour reaches full strength (smaller =
@@ -1283,10 +1384,14 @@ function heatColor(pct: number | null, fullAt = 2.5): string {
   return `rgb(${r},${Math.round(20 + t * 18)},${Math.round(20 + t * 18)})`;
 }
 
-function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string) => void }) {
-  const [watchlist, setWatchlist] = useState(
-    () => localStorage.getItem("ia.watchlist") || "7203 8306 9433 9432 6758 6861 8058 9984",
-  );
+function WatchPanel(props: {
+  financialsPath: string;
+  watchlist: string;
+  setWatchlist: (value: string) => void;
+  onOpenDetail: (code: string) => void;
+}) {
+  const watchlist = props.watchlist;
+  const setWatchlist = props.setWatchlist;
   const [sortBy, setSortBy] = useState("change");
   const [auto, setAuto] = useState(true);
   const [strength, setStrength] = useState(
@@ -1334,10 +1439,6 @@ function WatchPanel(props: { financialsPath: string; onOpenDetail: (code: string
       void loadGaps();
     }
   };
-
-  useEffect(() => {
-    localStorage.setItem("ia.watchlist", watchlist);
-  }, [watchlist]);
 
   useEffect(() => {
     void load();
