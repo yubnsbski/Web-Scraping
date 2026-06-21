@@ -29,6 +29,7 @@ def build_market_heatmap(
     current_prices: dict[str, float] | None = None,
     sort_by: str = "change",
     limit: int = 0,
+    spark_points: int = 24,
 ) -> JsonDict:
     """Compute per-ticker display price and percentage change.
 
@@ -80,6 +81,9 @@ def build_market_heatmap(
         change_pct = (
             round((price - reference) / reference * 100.0, 2) if reference else None
         )
+        spark = [round(value, 2) for _, value in points[-spark_points:]]
+        if price_source == "intraday":
+            spark = [*spark, round(price, 2)]
         cells.append(
             {
                 "ticker": code,
@@ -88,6 +92,7 @@ def build_market_heatmap(
                 "prev_close": round(reference, 2) if reference is not None else None,
                 "change_pct": change_pct,
                 "price_source": price_source,
+                "spark": spark,
                 "as_of": last_date,
             }
         )
