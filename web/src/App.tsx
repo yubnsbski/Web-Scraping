@@ -1312,10 +1312,6 @@ function TickerTape(props: {
   onOpenWatch: () => void;
 }) {
   const [cells, setCells] = useState<Json[]>([]);
-  const [speed, setSpeed] = useState(() => Number(localStorage.getItem("ia.tapeSpeed")) || 5);
-  useEffect(() => {
-    localStorage.setItem("ia.tapeSpeed", String(speed));
-  }, [speed]);
   const key = props.tickers.join(",");
 
   useEffect(() => {
@@ -1352,7 +1348,7 @@ function TickerTape(props: {
     <div className="ticker-tape" aria-label="株価ティッカー" title="クリックでウォッチへ" onClick={props.onOpenWatch}>
       <div
         className="ticker-track"
-        style={{ animationDuration: `${(Math.max(cells.length * 4, 20) * 6) / (speed + 1)}s` }}
+        style={{ animationDuration: `${Math.max(cells.length * 4, 20)}s` }}
       >
         {items.map((cell, index) => {
           const pct = cell.change_pct == null ? null : Number(cell.change_pct);
@@ -1375,23 +1371,6 @@ function TickerTape(props: {
             </button>
           );
         })}
-      </div>
-      <div
-        className="ticker-speed"
-        title="テロップ速度"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <span>遅</span>
-        <input
-          type="range"
-          min={1}
-          max={10}
-          step={1}
-          value={speed}
-          aria-label="テロップ速度"
-          onChange={(event) => setSpeed(Number(event.target.value))}
-        />
-        <span>速</span>
       </div>
     </div>
   );
