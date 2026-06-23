@@ -24,9 +24,10 @@ New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 # stdout/stderr をまとめてログへ書く（PowerShell に stderr を渡さない）。これで
 # NativeCommandError は発生しない。本当の成否は終了コードで判定する。
 #
-# まずは控えめ(--range 6mo --max 100)で確実に完走させ、安定したら増やす:
-#   全件は --max 0、精度重視は --range 1y（重いので早朝起動推奨）。
-$py = "python -m investment_assistant.cli market-daily-refresh --range 6mo --max 100"
+# 全件取得（--max 0）。全上場銘柄を毎朝更新する。レート制限を避けるためバッチ間に
+# 待機が入るので完了まで時間がかかる（早朝起動なので許容）。軽く済ませたいときは
+# --max 100 などに戻す。精度重視は --range 1y（さらに重い）。
+$py = "python -m investment_assistant.cli market-daily-refresh --range 6mo --max 0"
 cmd /c "$py 1> ""$log"" 2>&1"
 $code = $LASTEXITCODE
 
