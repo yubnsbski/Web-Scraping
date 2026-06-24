@@ -2399,6 +2399,17 @@ function ChatPanel(props: {
         call_real_api: false,
       }),
     );
+  const askWith = (q: string) => {
+    updateQuery(q);
+    return state.run(() =>
+      api<Json>("/api/rag/answer", {
+        query: q,
+        db_path: dbPath,
+        limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+        call_real_api: false,
+      }),
+    );
+  };
   return (
     <section className="screen">
       <ScreenTitle title="AI確認" body="RAGの根拠を確認するための補助チャットです。数値判断は決定論エンジンを優先します。" />
@@ -2411,6 +2422,17 @@ function ChatPanel(props: {
         </Field>
       </div>
       <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
+      <div className="quick-queries" aria-label="よく使う質問">
+        {["配当 方針 根拠", "減配 リスク", "自己資本比率", "株主還元 自社株買い", "NISA 枠", "集中リスク"].map((item) => (
+          <button
+            key={item}
+            className="table-action"
+            onClick={() => void askWith(item)}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
       <RagEvidenceQuality
         title="AI確認に渡す根拠量"
         results={handoffEvidence}
