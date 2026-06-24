@@ -2031,6 +2031,27 @@ function ReportPanel(props: {
       void refreshHistory();
     }
   };
+  const createFromCandidates = async () => {
+    const rows = Array.isArray(props.candidates?.results) ? (props.candidates!.results as Json[]) : [];
+    const codes = rows.map(candidateCode).filter(Boolean).slice(0, 10);
+    if (codes.length === 0) return;
+    const perTicker = Math.round(1_000_000 / codes.length);
+    const csv = candidatesToHoldingsCsv(rows, new Set(codes), perTicker);
+    const result = await state.run(() =>
+      api<Json>("/api/reports/investment-monthly", {
+        csv_text: csv,
+        financials_csv: props.financialsPath,
+        candidates: rows,
+        target_annual_dividend: Number(targetDividend) || 0,
+        optimization: "balanced",
+      }),
+    );
+    if (result) {
+      setDisplayReport(result);
+      props.onReport(result);
+      void refreshHistory();
+    }
+  };
   const loadReport = async (reportId: string) => {
     const result = await loadState.run(() =>
       api<Json>("/api/reports/investment-monthly/history/load", {
@@ -2061,6 +2082,17 @@ function ReportPanel(props: {
             <DetailFact label="保存" value="履歴に保存" tone="safe" />
           </div>
         </div>
+        {holdingRows === 0 && candidateCount > 0 && (
+          <div className="report-shortcut">
+            <p className="hint">
+              保有が空でも、<b>条件一致の候補 上位10件</b>を等金額（計100万円）で試算してレポートを作れます。
+              これは比較材料の機械試算であり、売買推奨ではありません（非助言）。
+            </p>
+            <button className="primary" disabled={state.loading} onClick={() => void createFromCandidates()}>
+              候補上位10件で試算してレポート
+            </button>
+          </div>
+        )}
         {preflight.length > 0 && (
           <div className="report-checks">
             {preflight.map((item) => (
