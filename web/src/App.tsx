@@ -2144,15 +2144,16 @@ function RagSearchPanel(props: {
     props.onDraftChange({ ...draft, ...patch });
   };
 
-  const search = () =>
+  const searchWith = (q: string) =>
     searchState.run(() =>
       api<Json>("/api/rag/search", {
-        query,
+        query: q,
         db_path: dbPath,
         limit: requestedLimit,
         hybrid,
       }),
     );
+  const search = () => searchWith(query);
 
   const sendToChat = () => {
     props.onAskDraft({
@@ -2207,8 +2208,15 @@ function RagSearchPanel(props: {
         <Check label="ハイブリッド検索" checked={hybrid} onChange={setHybrid} />
       </div>
       <div className="quick-queries" aria-label="検索例">
-        {["配当 利回り 根拠", "market_value", "NISA 枠", "集中リスク", "integrity_status ok"].map((item) => (
-          <button key={item} className="table-action" onClick={() => updateDraft({ query: item })}>
+        {["配当 方針 根拠", "減配 リスク", "自己資本比率", "株主還元 自社株買い", "NISA 枠", "集中リスク"].map((item) => (
+          <button
+            key={item}
+            className="table-action"
+            onClick={() => {
+              updateDraft({ query: item });
+              void searchWith(item);
+            }}
+          >
             {item}
           </button>
         ))}
