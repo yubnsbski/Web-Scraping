@@ -1002,8 +1002,15 @@ function candidatesToHoldingsCsv(rows: Json[], selected: Set<string>, perTicker:
   return [header, ...lines].join("\n");
 }
 
-function HoldingsBuilder({ onApply }: { onApply: (csv: string) => void }) {
+function HoldingsBuilder({
+  onApply,
+  financialsPath,
+}: {
+  onApply: (csv: string) => void;
+  financialsPath: string;
+}) {
   const [rows, setRows] = useState<HoldingRow[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<HoldingRow>({
     code: "",
     name: "",
@@ -1012,9 +1019,41 @@ function HoldingsBuilder({ onApply }: { onApply: (csv: string) => void }) {
     account: "tokutei",
   });
 
+  useEffect(() => {
+    void api<Json>("/api/market/names", { financials_csv: financialsPath })
+      .then((data) => {
+        const map: Record<string, string> = {};
+        const list = Array.isArray(data.names) ? (data.names as Json[]) : [];
+        for (const item of list) map[String(item.ticker)] = String(item.name);
+        setNames(map);
+      })
+      .catch(() => {});
+  }, [financialsPath]);
+
+  // Resolve a typed code or company name to {code, name}; tap a datalist option
+  // (value = code) or type a name and it is matched against the picker list.
+  const resolve = (input: string): { code: string; name: string } => {
+    const raw = input.trim();
+    const code = raw.toUpperCase().replace(/\.T$/, "");
+    if (/^\d{4,5}[A-Za-z]?$/.test(code)) return { code, name: names[code] || "" };
+    const hit = Object.entries(names).find(([, name]) =>
+      name.toLowerCase().includes(raw.toLowerCase()),
+    );
+    return hit ? { code: hit[0], name: hit[1] } : { code: raw, name: "" };
+  };
+
+  const onCodeInput = (value: string) => {
+    const known = names[value.trim().toUpperCase().replace(/\.T$/, "")];
+    setDraft((prev) => ({ ...prev, code: value, name: known || prev.name }));
+  };
+
   const addRow = () => {
     if (!draft.code.trim()) return;
-    setRows((prev) => [...prev, draft]);
+    const resolved = resolve(draft.code);
+    setRows((prev) => [
+      ...prev,
+      { ...draft, code: resolved.code, name: draft.name.trim() || resolved.name },
+    ]);
     setDraft({ code: "", name: "", qty: "100", avgCost: "", account: draft.account });
   };
   const removeRow = (index: number) => setRows((prev) => prev.filter((_, i) => i !== index));
@@ -1024,10 +1063,26 @@ function HoldingsBuilder({ onApply }: { onApply: (csv: string) => void }) {
       <h4>銘柄を選んで保有を作成</h4>
       <p className="hint">コードと数量を追加していくと、下のCSVに反映できます（CSVを直接書く必要はありません）。</p>
       <div className="form-grid tight">
-        <Field label="コード">
-          <input value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="7203" />
+        <Field label="銘柄を検索して選択（コード or 会社名）">
+          <input
+            list="holdings-code-options"
+            value={draft.code}
+            onChange={(e) => onCodeInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addRow();
+              }
+            }}
+            placeholder="例: 7203 / トヨタ / ソニー"
+          />
+          <datalist id="holdings-code-options">
+            {Object.entries(names).map(([code, name]) => (
+              <option key={code} value={code}>{`${code} ${name}`}</option>
+            ))}
+          </datalist>
         </Field>
-        <Field label="銘柄名（任意）">
+        <Field label="銘柄名（自動・任意）">
           <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="トヨタ" />
         </Field>
         <Field label="数量（株）">
@@ -1106,7 +1161,7 @@ function HoldingsPanel(props: {
   return (
     <section className="screen">
       <ScreenTitle title="保有分析" body="銘柄を選ぶ（またはCSVを貼る）と、評価額・損益・NISA区分・配当見込みを集計します。" />
-      <HoldingsBuilder onApply={props.setCsvText} />
+      <HoldingsBuilder onApply={props.setCsvText} financialsPath={props.financialsPath} />
       <textarea value={props.csvText} onChange={(e) => props.setCsvText(e.target.value)} spellCheck={false} />
       <ActionRow>
         <button onClick={() => void loadTemplate()}>テンプレート</button>
