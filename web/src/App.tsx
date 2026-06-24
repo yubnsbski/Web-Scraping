@@ -134,13 +134,25 @@ export function App() {
         />
 
         {tab === "dashboard" && (
-          <Dashboard
-            marketSnapshot={marketSnapshot}
-            analysis={analysis}
-            candidates={candidates}
-            report={report}
-            onMove={setTab}
-          />
+          <>
+            <OneClickPanel
+              holdingsCsv={holdingsCsv}
+              financialsPath={financialsPath}
+              watchTickers={watchTickers}
+              onMarket={setMarketSnapshot}
+              onAnalysis={setAnalysis}
+              onCandidates={setCandidates}
+              onReport={setReport}
+              onMove={setTab}
+            />
+            <Dashboard
+              marketSnapshot={marketSnapshot}
+              analysis={analysis}
+              candidates={candidates}
+              report={report}
+              onMove={setTab}
+            />
+          </>
         )}
         {tab === "data" && (
           <DataUpdatePanel
@@ -1301,6 +1313,129 @@ function DetailPanel(props: {
       {state.data && <DetailResult data={state.data} onMove={props.onMove} />}
       <Status loading={forecast.loading} error={forecast.error} />
       {forecast.data && <ForecastResult data={forecast.data} />}
+    </section>
+  );
+}
+
+type StepState = "pending" | "running" | "done" | "error";
+
+function OneClickPanel(props: {
+  holdingsCsv: string;
+  financialsPath: string;
+  watchTickers: string[];
+  onMarket: (value: Json) => void;
+  onAnalysis: (value: Json) => void;
+  onCandidates: (value: Json) => void;
+  onReport: (value: Json) => void;
+  onMove: (tab: TabId) => void;
+}) {
+  const labels = ["市場データ更新", "保有分析", "候補抽出", "レポート生成"];
+  const [status, setStatus] = useState<StepState[]>(["pending", "pending", "pending", "pending"]);
+  const [running, setRunning] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const holdingTickers = useMemo(
+    () => holdingStockTickers(props.holdingsCsv),
+    [props.holdingsCsv],
+  );
+  const hasHoldings = holdingTickers.length > 0;
+
+  const run = async () => {
+    setRunning(true);
+    setNote(null);
+    setStatus(["pending", "pending", "pending", "pending"]);
+    const setStep = (index: number, value: StepState) =>
+      setStatus((prev) => prev.map((current, idx) => (idx === index ? value : current)));
+    const errors: string[] = [];
+    const step = async (index: number, fn: () => Promise<void>, skip = false) => {
+      if (skip) {
+        setStep(index, "done");
+        return;
+      }
+      setStep(index, "running");
+      try {
+        await fn();
+        setStep(index, "done");
+      } catch (caught) {
+        setStep(index, "error");
+        errors.push(`${labels[index]}: ${caught instanceof Error ? caught.message : String(caught)}`);
+      }
+    };
+
+    // 1. refresh market data for the holdings (fall back to the watch list).
+    const refreshTickers = hasHoldings ? holdingTickers : props.watchTickers;
+    await step(0, async () => {
+      const result = await api<Json>("/api/market/refresh", { tickers: refreshTickers });
+      props.onMarket(result);
+    }, refreshTickers.length === 0);
+
+    // 2. portfolio analysis (needs holdings).
+    await step(1, async () => {
+      const result = await api<Json>("/api/portfolio/analyze", {
+        csv_text: props.holdingsCsv,
+        financials_csv: props.financialsPath,
+      });
+      props.onAnalysis(result);
+    }, !hasHoldings);
+
+    // 3. candidate screening.
+    let candidateRows: Json[] = [];
+    await step(2, async () => {
+      const result = await api<Json>("/api/candidates/screen", {
+        asset_types: ["stock", "fund"],
+        financials_csv: props.financialsPath,
+      });
+      props.onCandidates(result);
+      candidateRows = Array.isArray(result.results) ? (result.results as Json[]) : [];
+    });
+
+    // 4. monthly report (needs holdings).
+    await step(3, async () => {
+      const result = await api<Json>("/api/reports/investment-monthly", {
+        csv_text: props.holdingsCsv,
+        financials_csv: props.financialsPath,
+        candidates: candidateRows,
+        save_history: true,
+      });
+      props.onReport(result);
+    }, !hasHoldings);
+
+    setRunning(false);
+    if (errors.length) {
+      setNote(`一部スキップ/失敗: ${errors.join(" / ")}`);
+    } else if (!hasHoldings) {
+      setNote("保有銘柄が未入力のため、候補抽出のみ実行しました。保有分析タブで保有を入力すると全工程が動きます。");
+    } else {
+      setNote("完了：データ更新・保有分析・候補抽出・レポートを実行しました。");
+    }
+  };
+
+  const icon = (state: StepState) =>
+    state === "done" ? "✓" : state === "running" ? "…" : state === "error" ? "×" : "・";
+
+  return (
+    <section className="oneclick">
+      <div className="oneclick-head">
+        <div>
+          <h3>ワンクリック実行</h3>
+          <p className="muted">データ更新 → 保有分析 → 候補抽出 → レポートを順に自動実行します（非助言）。</p>
+        </div>
+        <button className="primary" disabled={running} onClick={() => void run()}>
+          {running ? "実行中..." : "▶ 全工程を実行"}
+        </button>
+      </div>
+      <ol className="oneclick-steps">
+        {labels.map((label, index) => (
+          <li key={label} className={`oneclick-step ${status[index]}`}>
+            <span className="oc-icon">{icon(status[index])}</span>
+            <span className="oc-label">{`${index + 1}. ${label}`}</span>
+          </li>
+        ))}
+      </ol>
+      {note && <p className="hint">{note}</p>}
+      {status[3] === "done" && (
+        <button className="ghost" onClick={() => props.onMove("report")}>レポートを開く →</button>
+      )}
     </section>
   );
 }
