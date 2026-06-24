@@ -1646,3 +1646,60 @@ td {
 .heatmap-spark-empty { height: 26px; }
 
 .watch-holdings-add { justify-self: start; padding: 8px 16px; }
+
+/* One-click pipeline runner (data update -> analysis -> candidates -> report). */
+.oneclick {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid rgba(15, 118, 110, 0.30);
+  border-radius: 10px;
+  background: #f0fdfa;
+  box-shadow: var(--shadow);
+}
+.oneclick-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+.oneclick-head h3 { margin: 0 0 2px; }
+.oneclick-head .primary { padding: 0 20px; min-height: 48px; font-size: 16px; white-space: nowrap; }
+.oneclick-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.oneclick-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  font-weight: 700;
+  font-size: 14px;
+}
+.oneclick-step .oc-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-weight: 800;
+}
+.oneclick-step.running { border-color: rgba(15, 118, 110, 0.45); }
+.oneclick-step.running .oc-icon { background: var(--accent-weak); color: var(--accent); }
+.oneclick-step.done { border-color: rgba(15, 118, 110, 0.45); background: var(--accent-weak); }
+.oneclick-step.done .oc-icon { background: var(--accent); color: white; }
+.oneclick-step.error { border-color: rgba(185, 28, 28, 0.40); background: #fef2f2; }
+.oneclick-step.error .oc-icon { background: var(--error); color: white; }
+@media (max-width: 720px) {
+  .oneclick-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
