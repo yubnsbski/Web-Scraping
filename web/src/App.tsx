@@ -1329,8 +1329,14 @@ function OneClickPanel(props: {
   onReport: (value: Json) => void;
   onMove: (tab: TabId) => void;
 }) {
-  const labels = ["市場データ更新", "保有分析", "候補抽出", "レポート生成"];
-  const [status, setStatus] = useState<StepState[]>(["pending", "pending", "pending", "pending"]);
+  const labels = ["市場データ更新", "保有分析", "候補抽出", "レポート生成", "RAGに保存・索引"];
+  const [status, setStatus] = useState<StepState[]>([
+    "pending",
+    "pending",
+    "pending",
+    "pending",
+    "pending",
+  ]);
   const [running, setRunning] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -1343,7 +1349,7 @@ function OneClickPanel(props: {
   const run = async () => {
     setRunning(true);
     setNote(null);
-    setStatus(["pending", "pending", "pending", "pending"]);
+    setStatus(["pending", "pending", "pending", "pending", "pending"]);
     const setStep = (index: number, value: StepState) =>
       setStatus((prev) => prev.map((current, idx) => (idx === index ? value : current)));
     const errors: string[] = [];
@@ -1390,6 +1396,7 @@ function OneClickPanel(props: {
     });
 
     // 4. monthly report (needs holdings).
+    let reportObj: Json | null = null;
     await step(3, async () => {
       const result = await api<Json>("/api/reports/investment-monthly", {
         csv_text: props.holdingsCsv,
@@ -1398,15 +1405,26 @@ function OneClickPanel(props: {
         save_history: true,
       });
       props.onReport(result);
+      reportObj = result;
     }, !hasHoldings);
+
+    // 5. save the report as markdown and index it into the RAG store, so the
+    //    AI / RAG search can cite this run's analysis. Strengthens RAG search.
+    await step(4, async () => {
+      if (!reportObj) throw new Error("レポートが無いため索引できません");
+      await api<Json>("/api/reports/investment-monthly/markdown/save", {
+        report: reportObj,
+        index_after_save: true,
+      });
+    }, !hasHoldings || !reportObj);
 
     setRunning(false);
     if (errors.length) {
       setNote(`一部スキップ/失敗: ${errors.join(" / ")}`);
     } else if (!hasHoldings) {
-      setNote("保有銘柄が未入力のため、候補抽出のみ実行しました。保有分析タブで保有を入力すると全工程が動きます。");
+      setNote("保有銘柄が未入力のため、候補抽出のみ実行しました。保有分析タブで保有を入力すると全工程（レポート→RAG索引）が動きます。");
     } else {
-      setNote("完了：データ更新・保有分析・候補抽出・レポートを実行しました。");
+      setNote("完了：データ更新→保有分析→候補抽出→レポート→RAG索引まで実行しました。AI確認/RAG検索で今回の分析を根拠に使えます。");
     }
   };
 
