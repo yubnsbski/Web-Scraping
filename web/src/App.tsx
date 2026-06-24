@@ -270,6 +270,7 @@ function Dashboard(props: {
   const summary = props.analysis?.summary ?? {};
   const kpis = [
     { label: "評価額", value: yen(summary.market_value), active: props.analysis !== null },
+    { label: "配当見込み", value: yen(summary.annual_income_estimate), active: props.analysis !== null },
     { label: "候補", value: String(props.candidates?.count ?? "-"), active: props.candidates !== null },
     { label: "市場データ", value: marketCount(props.marketSnapshot), active: props.marketSnapshot !== null },
     { label: "レポート", value: props.report ? "作成済み" : "-", active: props.report !== null },
