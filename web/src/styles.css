@@ -1667,7 +1667,7 @@ td {
 .oneclick-head .primary { padding: 0 20px; min-height: 48px; font-size: 16px; white-space: nowrap; }
 .oneclick-steps {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
   padding: 0;
