@@ -1179,6 +1179,17 @@ td {
   border-top: 1px solid var(--line);
 }
 
+.answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.answer-head h3 {
+  margin: 0;
+}
+
 .answer-text {
   margin: 0;
   color: var(--ink);
