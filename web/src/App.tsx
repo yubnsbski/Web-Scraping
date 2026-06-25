@@ -2838,6 +2838,9 @@ function PieChart({ slices }: { slices: { label: string; value: number }[] }) {
 
 function AnalysisResult({ data }: { data: Json }) {
   const rows = Array.isArray(data.holdings) ? data.holdings : [];
+  const summary = asJson(data.summary) ?? {};
+  const largest = asJson(summary.largest_position);
+  const pnlPositive = (Number(summary.unrealized_pnl) || 0) >= 0;
   const slices = rows
     .map((row) => ({
       label: String(row.name || row.ticker_or_fund_code || "?"),
@@ -2846,6 +2849,29 @@ function AnalysisResult({ data }: { data: Json }) {
     .filter((s) => s.value > 0);
   return (
     <ResultBlock title="分析結果" meta={`評価額: ${yen(data.summary?.market_value)}`}>
+      {Object.keys(summary).length > 0 && (
+        <section className="detail-section">
+          <h4>サマリー</h4>
+          <div className="detail-metrics">
+            <DetailFact label="評価額" value={yen(summary.market_value)} />
+            <DetailFact label="取得額" value={yen(summary.cost_basis)} />
+            <DetailFact
+              label="評価損益"
+              value={yen(summary.unrealized_pnl)}
+              tone={pnlPositive ? "safe" : undefined}
+            />
+            <DetailFact label="損益率" value={percent(summary.unrealized_pnl_pct)} />
+            <DetailFact label="年間配当見込み" value={yen(summary.annual_income_estimate)} />
+            <DetailFact label="収入利回り" value={percent(summary.income_yield_pct)} />
+            {largest && (
+              <DetailFact
+                label="最大保有"
+                value={`${String(largest.name ?? largest.code ?? "-")}（${percent(largest.share_pct)}）`}
+              />
+            )}
+          </div>
+        </section>
+      )}
       {slices.length > 0 && (
         <>
           <h4>ポートフォリオ構成比（評価額）</h4>
