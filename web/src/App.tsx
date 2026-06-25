@@ -2356,6 +2356,15 @@ function ChatPanel(props: {
   const handoffEvidence = Array.isArray(props.draft.evidence) ? props.draft.evidence : [];
   const answerText = String(state.data?.answer ?? state.data?.text ?? "回答がありません。");
   const requestedLimit = Number(limit) || DEFAULT_CHAT_LIMIT;
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const copyAnswer = async () => {
+    try {
+      await copyTextToClipboard(buildAnswerCopyText(query, answerText, ragResults));
+      setCopyNotice("回答と根拠をコピーしました。");
+    } catch (caught) {
+      setCopyNotice(`コピーに失敗しました: ${caught instanceof Error ? caught.message : String(caught)}`);
+    }
+  };
   useEffect(() => {
     setQuery(props.draft.query);
     setDbPath(props.draft.dbPath);
@@ -2462,7 +2471,13 @@ function ChatPanel(props: {
       <Status loading={state.loading} error={state.error} />
       {state.data && (
         <div className="answer">
-          <h3>回答</h3>
+          <div className="answer-head">
+            <h3>回答</h3>
+            <button className="table-action" onClick={() => void copyAnswer()}>
+              回答をコピー
+            </button>
+          </div>
+          {copyNotice && <p className="notice safe">{copyNotice}</p>}
           <ForecastHighlights highlights={Array.isArray(state.data.highlights) ? (state.data.highlights as Json[]) : []} />
           <RagEvidenceQuality
             title="回答時の根拠量"
@@ -3696,6 +3711,21 @@ function buildRagChatPrompt(query: string, results: Json[]): string {
   const citationBlock =
     citations.length > 0 ? `\n\n確認済み根拠候補:\n${citations.join("\n")}` : "";
   return `「${trimmedQuery}」について、RAGの根拠を引用しながら、投資助言にならない形で要点・不確実性・追加確認事項を簡潔に説明して。${citationBlock}`;
+}
+
+function buildAnswerCopyText(query: string, answerText: string, results: Json[]): string {
+  const lines = [`Q: ${query.trim() || "(質問なし)"}`, "", answerText.trim()];
+  if (results.length > 0) {
+    lines.push("", "根拠:");
+    results.forEach((result, index) => {
+      const citation = asJson(result.citation) ?? {};
+      const source = shortPath(String(result.source ?? ""));
+      const label = String(citation.label ?? source ?? `根拠${index + 1}`);
+      lines.push(`[${index + 1}] ${label}${source && label !== source ? ` / ${source}` : ""}`);
+    });
+  }
+  lines.push("", "※本ツールは投資助言・売買推奨を行いません（根拠確認の補助）。");
+  return lines.join("\n");
 }
 
 function suggestedRagQueryFromChat(query: string): string {
