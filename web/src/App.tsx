@@ -1628,6 +1628,27 @@ function heatColor(pct: number | null, fullAt = 2.5): string {
   return `rgb(${r},${Math.round(20 + t * 18)},${Math.round(20 + t * 18)})`;
 }
 
+function watchBreadth(cells: Json[]): { up: number; down: number; flat: number; avg: number } {
+  let up = 0;
+  let down = 0;
+  let flat = 0;
+  let sum = 0;
+  let counted = 0;
+  for (const cell of cells) {
+    const pct = cell.change_pct == null ? null : Number(cell.change_pct);
+    if (pct == null || !Number.isFinite(pct)) {
+      flat += 1;
+      continue;
+    }
+    sum += pct;
+    counted += 1;
+    if (pct > 0) up += 1;
+    else if (pct < 0) down += 1;
+    else flat += 1;
+  }
+  return { up, down, flat, avg: counted > 0 ? sum / counted : 0 };
+}
+
 function holdingStockTickers(csv: string): string[] {
   const lines = csv.split(/\r?\n/).filter((line) => line.trim());
   if (lines.length < 2) return [];
@@ -1673,6 +1694,7 @@ function WatchPanel(props: {
   const backfill = useAsync<Json>();
   const refresh = useAsync<Json>();
   const cells: Json[] = Array.isArray(heatmap.data?.cells) ? (heatmap.data!.cells as Json[]) : [];
+  const breadth = watchBreadth(cells);
   const missing: string[] = Array.isArray(gaps.data?.missing_any)
     ? (gaps.data!.missing_any as string[])
     : [];
@@ -1867,6 +1889,17 @@ function WatchPanel(props: {
               : `（前日終値比 / 基準日 ${String(heatmap.data.as_of ?? "-")}）`}
             ・非助言。「価格を更新」で最新を取得します。
           </p>
+          {cells.length > 0 && (
+            <div className="watch-breadth" aria-label="ウォッチ全体の騰落">
+              <span className="breadth-pill up">▲ 上昇 {breadth.up}</span>
+              <span className="breadth-pill down">▼ 下落 {breadth.down}</span>
+              <span className="breadth-pill flat">— 変わらず {breadth.flat}</span>
+              <span className={`breadth-avg ${breadth.avg >= 0 ? "up" : "down"}`}>
+                平均 {breadth.avg >= 0 ? "+" : ""}
+                {breadth.avg.toFixed(2)}%
+              </span>
+            </div>
+          )}
           <div className="heatmap-grid">
             {cells.map((cell) => {
               const pct = cell.change_pct == null ? null : Number(cell.change_pct);

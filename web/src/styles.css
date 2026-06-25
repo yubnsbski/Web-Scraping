@@ -1514,6 +1514,39 @@ td {
   }
 }
 
+/* Watch breadth: quick up/down tally across the watchlist. */
+.watch-breadth {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.breadth-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid var(--line);
+}
+
+.breadth-pill.up { color: #16a34a; }
+.breadth-pill.down { color: #dc2626; }
+.breadth-pill.flat { color: var(--muted); }
+
+.breadth-avg {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.breadth-avg.up { color: #16a34a; }
+.breadth-avg.down { color: #dc2626; }
+
 /* Watch heatmap: at-a-glance price grid (green=up, red=down). */
 .heatmap-grid {
   display: grid;
