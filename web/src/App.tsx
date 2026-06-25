@@ -13,6 +13,15 @@ const DEFAULT_CHAT_QUERY = "KDDIの配当利回りと根拠を、投資助言に
 const DEFAULT_CHAT_LIMIT = 5;
 const WATCHLIST_STORAGE_KEY = "ia.watchlist";
 const DEFAULT_WATCHLIST = "7203 8306 9433 9432 6758 6861 8058 9984";
+// Shared one-tap presets for RAG search and AI chat, so both stay in sync.
+const QUICK_QUERY_PRESETS = [
+  "配当 方針 根拠",
+  "減配 リスク",
+  "自己資本比率",
+  "株主還元 自社株買い",
+  "NISA 枠",
+  "集中リスク",
+];
 
 function parseTickers(text: string): string[] {
   return text.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean);
@@ -2208,7 +2217,7 @@ function RagSearchPanel(props: {
         <Check label="ハイブリッド検索" checked={hybrid} onChange={setHybrid} />
       </div>
       <div className="quick-queries" aria-label="検索例">
-        {["配当 方針 根拠", "減配 リスク", "自己資本比率", "株主還元 自社株買い", "NISA 枠", "集中リスク"].map((item) => (
+        {QUICK_QUERY_PRESETS.map((item) => (
           <button
             key={item}
             className="table-action"
@@ -2423,7 +2432,7 @@ function ChatPanel(props: {
       </div>
       <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
       <div className="quick-queries" aria-label="よく使う質問">
-        {["配当 方針 根拠", "減配 リスク", "自己資本比率", "株主還元 自社株買い", "NISA 枠", "集中リスク"].map((item) => (
+        {QUICK_QUERY_PRESETS.map((item) => (
           <button
             key={item}
             className="table-action"
