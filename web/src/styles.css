@@ -1190,6 +1190,19 @@ td {
   margin: 0;
 }
 
+.evidence-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.evidence-toolbar span {
+  font-size: 13px;
+  color: var(--muted);
+  margin-right: auto;
+}
+
 .answer-text {
   margin: 0;
   color: var(--ink);

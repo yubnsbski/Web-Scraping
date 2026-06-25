@@ -2174,6 +2174,12 @@ function RagSearchPanel(props: {
     });
   };
 
+  const setAllEvidence = (value: boolean) =>
+    setSelectedEvidence(
+      Object.fromEntries(results.map((result, index) => [ragResultKey(result, index), value])),
+    );
+  const allSelected = results.length > 0 && selectedResults.length === results.length;
+
   const refreshStats = () =>
     statsState.run(() =>
       api<Json>("/api/rag/stats", {
@@ -2254,6 +2260,25 @@ function RagSearchPanel(props: {
             actionLabel="データ更新へ"
             onAction={props.onOpenData}
           />
+          {results.length > 1 && (
+            <div className="evidence-toolbar" aria-label="根拠の一括選択">
+              <span>{selectedResults.length}/{results.length} 件をAI確認に使用</span>
+              <button
+                className="table-action"
+                disabled={allSelected}
+                onClick={() => setAllEvidence(true)}
+              >
+                すべて選択
+              </button>
+              <button
+                className="table-action"
+                disabled={selectedResults.length === 0}
+                onClick={() => setAllEvidence(false)}
+              >
+                すべて解除
+              </button>
+            </div>
+          )}
           <RagSearchResults
             results={results}
             selectedEvidence={selectedEvidence}
