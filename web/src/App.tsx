@@ -2212,7 +2212,17 @@ function RagSearchPanel(props: {
       />
       <div className="form-grid">
         <Field label="検索語">
-          <input value={query} onChange={(event) => updateDraft({ query: event.target.value })} />
+          <input
+            value={query}
+            onChange={(event) => updateDraft({ query: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void search();
+              }
+            }}
+            placeholder="Enterで検索"
+          />
         </Field>
         <Field label="RAG DB">
           <input value={dbPath} onChange={(event) => updateDraft({ dbPath: event.target.value })} />
@@ -2464,7 +2474,17 @@ function ChatPanel(props: {
           <input value={limit} onChange={(event) => updateLimit(event.target.value)} inputMode="numeric" />
         </Field>
       </div>
-      <textarea value={query} onChange={(e) => updateQuery(e.target.value)} />
+      <textarea
+        value={query}
+        onChange={(e) => updateQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            void ask();
+          }
+        }}
+        placeholder="質問を入力（Ctrl/⌘+Enterで確認）"
+      />
       <div className="quick-queries" aria-label="よく使う質問">
         {QUICK_QUERY_PRESETS.map((item) => (
           <button
