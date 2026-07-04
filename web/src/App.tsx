@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
 
 type Json = Record<string, any>;
-type TabId = "dashboard" | "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat";
+type TabId = "dashboard" | "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat" | "plans" | "aistock";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 type RagSearchDraft = { query: string; dbPath: string; limit: string; version: number };
 type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[]; searchQuery?: string };
@@ -35,18 +35,28 @@ const SAMPLE_HOLDINGS_CSV =
 const SAMPLE_FUNDS_CSV =
   "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score";
 
-const TABS: Array<{ id: TabId; label: string; short: string }> = [
-  { id: "dashboard", label: "全体", short: "全体" },
-  { id: "watch", label: "ウォッチ", short: "監視" },
-  { id: "data", label: "データ更新", short: "更新" },
-  { id: "holdings", label: "保有分析", short: "保有" },
-  { id: "screen", label: "候補抽出", short: "候補" },
-  { id: "detail", label: "詳細", short: "詳細" },
-  { id: "forecast", label: "予測スクリーニング", short: "予測" },
-  { id: "report", label: "レポート", short: "報告" },
-  { id: "rag", label: "RAG検索", short: "RAG" },
-  { id: "chat", label: "AI確認", short: "AI" },
+const TABS: Array<{
+  id: TabId;
+  label: string;
+  short: string;
+  group: "main" | "more";
+}> = [
+  { id: "dashboard", label: "全体", short: "全体", group: "main" },
+  { id: "data", label: "データ更新", short: "更新", group: "main" },
+  { id: "holdings", label: "保有分析", short: "保有", group: "main" },
+  { id: "screen", label: "候補抽出", short: "候補", group: "main" },
+  { id: "report", label: "レポート", short: "報告", group: "main" },
+  { id: "watch", label: "ウォッチ", short: "監視", group: "more" },
+  { id: "detail", label: "詳細", short: "詳細", group: "more" },
+  { id: "forecast", label: "予測スクリーニング", short: "予測", group: "more" },
+  { id: "rag", label: "RAG検索", short: "RAG", group: "more" },
+  { id: "chat", label: "AI確認", short: "AI", group: "more" },
+  { id: "plans", label: "プラン設計", short: "設計", group: "more" },
+  { id: "aistock", label: "AI銘柄分析", short: "AI分析", group: "more" },
 ];
+
+const MAIN_TABS = TABS.filter((item) => item.group === "main");
+const MORE_TABS = TABS.filter((item) => item.group === "more");
 
 export function App() {
   const [tab, setTab] = useState<TabId>(() => {
@@ -102,7 +112,7 @@ export function App() {
           <b>Evidence Desk</b>
         </div>
         <nav className="nav" aria-label="主要画面">
-          {TABS.map((item) => (
+          {MAIN_TABS.map((item) => (
             <button
               key={item.id}
               className={tab === item.id ? "nav-item active" : "nav-item"}
@@ -113,6 +123,22 @@ export function App() {
               <b>{item.label}</b>
             </button>
           ))}
+          <details className="nav-more">
+            <summary>その他</summary>
+            <div className="nav-more-list">
+              {MORE_TABS.map((item) => (
+                <button
+                  key={item.id}
+                  className={tab === item.id ? "nav-item active" : "nav-item"}
+                  onClick={() => setTab(item.id)}
+                  title={item.label}
+                >
+                  <span>{item.short}</span>
+                  <b>{item.label}</b>
+                </button>
+              ))}
+            </div>
+          </details>
         </nav>
         <p className="side-note">売買推奨・自動売買は行いません。判断材料と根拠を整理します。</p>
       </aside>
@@ -172,6 +198,7 @@ export function App() {
               setDetailRequest((prev) => ({ code, assetType: "stock", version: prev.version + 1 }));
               setTab("detail");
             }}
+            onMove={setTab}
           />
         )}
         {tab === "holdings" && (
@@ -257,6 +284,7 @@ export function App() {
           <ChatPanel
             draft={chatDraft}
             onDraftChange={setChatDraft}
+            holdingsCsv={holdingsCsv}
             onSearchAgain={(draft) => {
               setRagDraft(draft);
               setTab("rag");
@@ -264,6 +292,8 @@ export function App() {
             onOpenData={() => setTab("data")}
           />
         )}
+        {tab === "plans" && <PlanBuilderPanel />}
+        {tab === "aistock" && <StockAiPanel />}
       </main>
     </div>
   );
@@ -315,15 +345,20 @@ function DataUpdatePanel(props: {
   setFinancialsPath: (value: string) => void;
   onMarket: (value: Json) => void;
   onOpenDetail: (code: string) => void;
+  onMove: (tab: TabId) => void;
 }) {
   const [mode, setMode] = useState<"financials" | "ohlcv" | "intraday" | "inbox">("financials");
-  const [scope, setScope] = useState<"tickers" | "nikkei225" | "financials_csv" | "domestic">("tickers");
+  const [scope, setScope] = useState<"tickers" | "nikkei225" | "financials_csv" | "domestic">("domestic");
   const [tickers, setTickers] = useState("8306,9433,7203");
   const [range, setRange] = useState("1mo");
   const [maxCount, setMaxCount] = useState("20");
   const [indexRag, setIndexRag] = useState(true);
+  const [batchSteps, setBatchSteps] = useState<Json[]>([]);
+  const [batchSummary, setBatchSummary] = useState<Json | null>(null);
+  const [safePresetNotice, setSafePresetNotice] = useState("");
   const { loading, error, data, run } = useAsync<Json>();
   const inventory = useAsync<Json>();
+  const diagnostics = useAsync<Json>();
   const financialsPreview = useAsync<Json>();
   const ragBuild = useAsync<Json>();
   const tickerList = splitTickers(tickers);
@@ -346,7 +381,10 @@ function DataUpdatePanel(props: {
       }),
     );
 
+  const refreshDiagnostics = () => diagnostics.run(() => api<Json>("/api/system/diagnostics"));
+
   const refreshDataView = () => {
+    void refreshDiagnostics();
     void refreshInventory();
     void refreshFinancialsPreview();
   };
@@ -358,6 +396,7 @@ function DataUpdatePanel(props: {
   const executeUpdate = async (
     selectedMode: "financials" | "ohlcv" | "intraday" | "inbox" = mode,
     selectedScope: "tickers" | "nikkei225" | "financials_csv" | "domestic" = scope,
+    options: { maxCount?: string | number; range?: string } = {},
   ) => {
     if (selectedMode === "inbox") {
       const result = await run(() => api<Json>("/api/market/inbox", {}));
@@ -375,10 +414,10 @@ function DataUpdatePanel(props: {
           : "/api/market/intraday";
     const selectedNeedsTickers = selectedMode === "intraday" || selectedScope === "tickers";
     const body: Json = {
-      max_count: Number(maxCount) || 0,
+      max_count: Number(options.maxCount ?? maxCount) || 0,
       save_csv: selectedMode !== "intraday",
     };
-    if (selectedMode === "ohlcv") body.range = range;
+    if (selectedMode === "ohlcv") body.range = options.range ?? range;
     if (selectedMode === "financials") body.index_rag = indexRag;
     if (selectedNeedsTickers) body.tickers = tickerList;
     else body.universe = selectedScope;
@@ -392,23 +431,139 @@ function DataUpdatePanel(props: {
 
   const update = () => executeUpdate();
 
+  const useSafeYahooPreset = () => {
+    setMode("financials");
+    setScope("domestic");
+    setMaxCount("20");
+    setRange("1mo");
+    setIndexRag(true);
+    setSafePresetNotice("安全設定に戻しました。全国内株式から20件、1か月分を取得します。");
+  };
+
+  const runYahooBatchUpdate = async () => {
+    const selectedScope = canUseUniverse ? scope : "tickers";
+    const selectedNeedsTickers = selectedScope === "tickers";
+    if (selectedNeedsTickers && tickerList.length === 0) return;
+    setBatchSummary(null);
+    setSafePresetNotice("");
+    let financialRows = 0;
+    let financialsPath = "-";
+    let dailyBarsRows = 0;
+    let dailyBarsPath = "-";
+    let ragDocuments = indexRag ? "-" : "skip";
+    const baseBody: Json = {
+      max_count: Number(maxCount) || 0,
+      save_csv: true,
+    };
+    if (selectedNeedsTickers) baseBody.tickers = tickerList;
+    else baseBody.universe = selectedScope;
+    if (selectedScope === "financials_csv") baseBody.financials_csv = props.financialsPath;
+
+    const steps: Json[] = [
+      { key: "financials", label: "市場財務指標", status: "running" },
+      { key: "ohlcv", label: "株価四本値・出来高", status: "pending" },
+      { key: "rag", label: "RAG登録", status: indexRag ? "pending" : "skip", message: indexRag ? undefined : "任意" },
+    ];
+    setBatchSteps(steps);
+    const mark = (key: string, patch: Json) => {
+      setBatchSteps((current) => current.map((step) => (step.key === key ? { ...step, ...patch } : step)));
+    };
+
+    const financials = await run(() =>
+      api<Json>("/api/market/financials", {
+        ...baseBody,
+        index_rag: indexRag,
+      }),
+    );
+    if (!financials) {
+      mark("financials", { status: "error", message: "取得できませんでした" });
+      setBatchSummary({ status: "error", finished_at: new Date().toISOString(), message: "市場財務指標の取得で停止しました。", financial_rows: financialRows, financials_path: financialsPath, daily_bars_rows: dailyBarsRows, daily_bars_path: dailyBarsPath, rag_documents: ragDocuments });
+      return;
+    }
+    financialRows = Object.keys((financials.financials ?? {}) as Json).length;
+    financialsPath = String(financials.output_path ?? "-");
+    mark("financials", {
+      status: "done",
+      message: `${Object.keys((financials.financials ?? {}) as Json).length}件 / ${String(financials.output_path ?? "-")}`,
+    });
+    props.onMarket(financials);
+
+    mark("ohlcv", { status: "running" });
+    const bars = await run(() =>
+      api<Json>("/api/market/bars/universe", {
+        ...baseBody,
+        range,
+      }),
+    );
+    if (!bars) {
+      mark("ohlcv", { status: "error", message: "取得できませんでした" });
+      setBatchSummary({ status: "partial", finished_at: new Date().toISOString(), message: "市場財務指標は取得済みですが、株価四本値・出来高で停止しました。", financial_rows: financialRows, financials_path: financialsPath, daily_bars_rows: dailyBarsRows, daily_bars_path: dailyBarsPath, rag_documents: ragDocuments });
+      refreshDataView();
+      return;
+    }
+    dailyBarsRows = Number(bars.daily_bars_count ?? 0);
+    dailyBarsPath = String(bars.daily_bars_path ?? "-");
+    mark("ohlcv", {
+      status: "done",
+      message: `${String(bars.daily_bars_count ?? 0)}行 / ${String(bars.daily_bars_path ?? "-")}`,
+    });
+    props.onMarket(bars);
+    setMode("ohlcv");
+    if (!indexRag) {
+      setBatchSummary({ status: "done", finished_at: new Date().toISOString(), message: "市場財務指標と株価四本値・出来高を更新しました。", financial_rows: financialRows, financials_path: financialsPath, daily_bars_rows: dailyBarsRows, daily_bars_path: dailyBarsPath, rag_documents: ragDocuments });
+      refreshDataView();
+      return;
+    }
+
+    mark("rag", { status: "running" });
+    const rag = await ragBuild.run(() => api<Json>("/api/market/rag/build", {}));
+    if (rag) {
+      ragDocuments = String(rag.documents_written ?? 0);
+      mark("rag", { status: "done", message: `${String(rag.documents_written ?? 0)}件` });
+    } else {
+      ragDocuments = "error";
+      mark("rag", { status: "error", message: "登録できませんでした" });
+    }
+    setBatchSummary({ status: ragDocuments === "error" ? "partial" : "done", finished_at: new Date().toISOString(), message: ragDocuments === "error" ? "市場データは更新済みですが、RAG登録で確認が必要です。" : "市場データとRAG材料を更新しました。", financial_rows: financialRows, financials_path: financialsPath, daily_bars_rows: dailyBarsRows, daily_bars_path: dailyBarsPath, rag_documents: ragDocuments });
+    refreshDataView();
+  };
   const runInventoryAction = async (action: Json) => {
     const type = String(action.action_type ?? "");
+    const actionScope = normalizeUpdateScope(action.recommended_scope) ?? scope;
+    const actionMaxCount = action.recommended_max_count ?? maxCount;
+    const actionRange = String(action.recommended_range ?? range);
     if (type === "market_financials") {
       setMode("financials");
-      await executeUpdate("financials", scope);
+      setScope(actionScope);
+      setMaxCount(String(actionMaxCount));
+      await executeUpdate("financials", actionScope, { maxCount: actionMaxCount });
     } else if (type === "daily_bars") {
       setMode("ohlcv");
-      await executeUpdate("ohlcv", scope);
+      setScope(actionScope);
+      setMaxCount(String(actionMaxCount));
+      setRange(actionRange);
+      await executeUpdate("ohlcv", actionScope, { maxCount: actionMaxCount, range: actionRange });
     } else if (type === "price_inbox") {
       setMode("inbox");
       await executeUpdate("inbox", scope);
     }
   };
 
+  const batchDisabledReason =
+    needsTickers && tickerList.length === 0
+      ? "銘柄コードを入力してください。"
+      : loading || ragBuild.loading
+        ? "処理中です。完了後に再実行できます。"
+        : "";
   return (
     <section className="screen">
       <ScreenTitle title="データ更新" body="取得対象とデータ種別を選び、1つのボタンでCSVへ反映します。" />
+      <SystemDiagnosticsPanel
+        data={diagnostics.data}
+        loading={diagnostics.loading}
+        error={diagnostics.error}
+        onRefresh={() => void refreshDiagnostics()}
+      />
       <DataInventory
         data={inventory.data}
         loading={inventory.loading}
@@ -427,6 +582,23 @@ function DataUpdatePanel(props: {
       <EdinetAcquisitionPanel
         onFinished={refreshDataView}
         onFinancialsCsv={props.setFinancialsPath}
+      />
+      <YahooBatchUpdatePanel
+        steps={batchSteps}
+        summary={batchSummary}
+        loading={loading || ragBuild.loading}
+        disabled={(needsTickers && tickerList.length === 0) || loading || ragBuild.loading}
+        scope={canUseUniverse ? scope : "tickers"}
+        maxCount={maxCount}
+        range={range}
+        indexRag={indexRag}
+        tickerCount={tickerList.length}
+        financialsPath={props.financialsPath}
+        disabledReason={batchDisabledReason}
+        safePresetNotice={safePresetNotice}
+        onMove={props.onMove}
+        onUseSafePreset={useSafeYahooPreset}
+        onRun={() => void runYahooBatchUpdate()}
       />
       <div className="form-grid">
         <Field label="データ種別">
@@ -505,6 +677,102 @@ function DataUpdatePanel(props: {
   );
 }
 
+function YahooBatchUpdatePanel(props: {
+  steps: Json[];
+  summary: Json | null;
+  loading: boolean;
+  disabled: boolean;
+  scope: string;
+  maxCount: string;
+  range: string;
+  indexRag: boolean;
+  tickerCount: number;
+  financialsPath: string;
+  disabledReason: string;
+  safePresetNotice: string;
+  onMove: (tab: TabId) => void;
+  onUseSafePreset: () => void;
+  onRun: () => void;
+}) {
+  const scopeLabel: Record<string, string> = {
+    tickers: "入力銘柄",
+    nikkei225: "日経225",
+    financials_csv: "財務CSV",
+    domestic: "全国内株式",
+  };
+  const steps = props.steps.length > 0
+    ? props.steps
+    : [
+        { key: "financials", label: "市場財務指標", status: "pending" },
+        { key: "ohlcv", label: "株価四本値・出来高", status: "pending" },
+        { key: "rag", label: "RAG登録", status: props.indexRag ? "pending" : "skip", message: "任意" },
+      ];
+  return (
+    <section className="inventory yahoo-batch-panel">
+      <header className="inventory-head">
+        <div>
+          <h3>Yahoo!一括更新</h3>
+          <p>市場財務指標と株価四本値・出来高を続けて取得します。初期設定は全国内株式から少数取得です。</p>
+        </div>
+        <div className="batch-head-actions">
+          <button className="ghost" disabled={props.loading} onClick={props.onUseSafePreset}>
+            安全設定に戻す
+          </button>
+          <button className="primary" disabled={props.disabled} onClick={props.onRun}>
+            {props.loading ? "一括更新中..." : "Yahoo!を一括更新"}
+          </button>
+        </div>
+      </header>
+      <div className="inventory-summary">
+        <InventoryPill label={"対象"} value={scopeLabel[props.scope] ?? props.scope} tone="muted" />
+        <InventoryPill label={"上限"} value={props.maxCount === "0" ? "全件" : `${props.maxCount}件`} tone="muted" />
+        <InventoryPill label={"期間"} value={props.range} tone="muted" />
+        <InventoryPill label={"入力"} value={props.scope === "tickers" ? `${props.tickerCount}件` : "自動展開"} tone={props.disabledReason ? "warn" : "ready"} />
+      </div>
+      {props.summary && (
+        <div className="batch-summary">
+          <b>{String(props.summary.message ?? "今回の更新結果")}</b>
+          <span>完了: {formatDateTime(props.summary.finished_at)}</span>
+          <span>市場財務: {String(props.summary.financial_rows ?? "-")}件</span>
+          <span>OHLCV: {String(props.summary.daily_bars_rows ?? "-")}行</span>
+          <span>RAG: {String(props.summary.rag_documents ?? "-")}</span>
+          <code>{String(props.summary.financials_path ?? "-")}</code>
+          <code>{String(props.summary.daily_bars_path ?? "-")}</code>
+        </div>
+      )}
+      <div className="batch-preflight">
+        <span>実行内容: 市場財務指標 → 株価四本値・出来高{props.indexRag ? " → RAG登録" : ""}</span>
+        <code>{props.financialsPath}</code>
+        {props.disabledReason ? <b>{props.disabledReason}</b> : <b>{props.scope === "domestic" && props.maxCount !== "0" ? "安全な少数取得" : "実行できます"}</b>}
+      </div>
+      {props.safePresetNotice && <p className="notice safe batch-preset-notice">{props.safePresetNotice}</p>}
+      <div className="batch-impact" aria-label="更新データの反映先">
+        <b>反映先</b>
+        <span>市場財務 → 候補抽出・詳細・レポート</span>
+        <span>OHLCV → 予測・価格確認</span>
+        <span>RAG → RAG検索・AI確認</span>
+      </div>
+      <div className="batch-step-list">
+        {steps.map((step) => (
+          <article className={`batch-step ${String(step.status ?? "pending")}`} key={String(step.key)}>
+            <b>{String(step.label ?? step.key)}</b>
+            <span>{batchStepLabel(String(step.status ?? "pending"))}</span>
+            {step.message && <code>{String(step.message)}</code>}
+          </article>
+        ))}
+      </div>
+      {steps.some((step) => step.status === "done") && (
+        <div className="batch-next-actions" aria-label="次に見る画面">
+          <span>次に見る</span>
+          <button className="table-action" onClick={() => props.onMove("forecast")}>予測へ</button>
+          <button className="table-action" onClick={() => props.onMove("rag")}>RAGへ</button>
+          <button className="table-action" onClick={() => props.onMove("screen")}>候補抽出へ</button>
+        </div>
+      )}
+      <p className="notice safe">売買推奨・自動売買は行いません。取得データを比較材料として整理します。</p>
+    </section>
+  );
+}
 function EdinetAcquisitionPanel(props: {
   onFinished: () => void;
   onFinancialsCsv: (value: string) => void;
@@ -748,6 +1016,52 @@ function EdinetAcquisitionPanel(props: {
   );
 }
 
+function SystemDiagnosticsPanel(props: {
+  data: Json | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  const status = String(props.data?.status ?? "unknown");
+  const criticalRoutes = (asJson(props.data?.critical_routes) ?? {}) as Json;
+  const frontend = asJson(props.data?.frontend) ?? {};
+  const routeEntries = Object.entries(criticalRoutes);
+  const missingRoutes = routeEntries.filter(([, ok]) => ok !== true);
+  const frontendAssets = Number(frontend.asset_count ?? 0);
+  const safeFlagsOk = props.data?.auto_trading === false && props.data?.call_real_api === false;
+  return (
+    <section className="inventory system-diagnostics">
+      <header className="inventory-head">
+        <div>
+          <h3>{"\u63a5\u7d9a\u8a3a\u65ad"}</h3>
+          <p>{"\u30d5\u30ed\u30f3\u30c8\u3068\u30d0\u30c3\u30af\u30a8\u30f3\u30c9\u306e\u63a5\u7d9a\u3001\u4e3b\u8981API\u3001\u753b\u9762\u8cc7\u7523\u306e\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002"}</p>
+        </div>
+        <button onClick={props.onRefresh} disabled={props.loading}>
+          {props.loading ? "\u78ba\u8a8d\u4e2d..." : "\u518d\u78ba\u8a8d"}
+        </button>
+      </header>
+      <Status loading={props.loading} error={props.error} />
+      <div className="inventory-summary">
+        <InventoryPill label="\u30b5\u30fc\u30d0" value={status === "ok" ? "\u6b63\u5e38" : "\u8981\u78ba\u8a8d"} tone={status === "ok" ? "ready" : "warn"} />
+        <InventoryPill label="API\u6570" value={String(props.data?.route_count ?? 0)} tone="muted" />
+        <InventoryPill label="\u4e3b\u8981API" value={missingRoutes.length === 0 ? "\u4e0d\u8db3\u306a\u3057" : `${missingRoutes.length}\u4ef6\u4e0d\u8db3`} tone={missingRoutes.length === 0 ? "ready" : "error"} />
+        <InventoryPill label="\u753b\u9762\u8cc7\u7523" value={frontendAssets > 0 ? "\u751f\u6210\u6e08\u307f" : "\u672a\u691c\u51fa"} tone={frontendAssets > 0 ? "ready" : "warn"} />
+      </div>
+      <div className="diagnostic-route-list" aria-label="critical API routes">
+        {routeEntries.map(([path, ok]) => (
+          <span className={`diagnostic-route ${ok === true ? "ready" : "error"}`} key={path}>
+            <code>{path}</code>
+            <b>{ok === true ? "\u5229\u7528\u53ef" : "\u4e0d\u8db3"}</b>
+          </span>
+        ))}
+        {routeEntries.length === 0 && !props.loading && <p className="muted">{"\u4e3b\u8981API\u306e\u72b6\u614b\u306f\u307e\u3060\u53d6\u5f97\u3057\u3066\u3044\u307e\u305b\u3093\u3002"}</p>}
+      </div>
+      <p className={`notice ${safeFlagsOk ? "safe" : ""}`}>
+        {"\u5b89\u5168\u30d5\u30e9\u30b0: \u81ea\u52d5\u58f2\u8cb7=false / \u5b9fAPI\u547c\u3073\u51fa\u3057=false"}
+      </p>
+    </section>
+  );
+}
 function DataInventory(props: {
   data: Json | null;
   loading: boolean;
@@ -760,6 +1074,9 @@ function DataInventory(props: {
   const datasets = Array.isArray(props.data?.datasets) ? (props.data.datasets as Json[]) : [];
   const actions = Array.isArray(props.data?.actions) ? (props.data.actions as Json[]) : [];
   const status = String(props.data?.status ?? "unknown");
+  const coreDatasetIds = new Set(["market_financials", "daily_bars", "selected_financials", "rag_db"]);
+  const coreDatasets = datasets.filter((item) => coreDatasetIds.has(String(item.id ?? "")));
+  const attentionDatasets = datasets.filter(isActionableAttentionDataset);
   return (
     <section className="inventory">
       <header className="inventory-head">
@@ -775,9 +1092,10 @@ function DataInventory(props: {
       <div className="inventory-summary">
         <InventoryPill label="全体" value={statusLabel(status)} tone={statusTone(status)} />
         <InventoryPill label="利用可" value={`${String(summary.ready_count ?? 0)}件`} tone="ready" />
-        <InventoryPill label="未取得" value={`${String(summary.missing_count ?? 0)}件`} tone="muted" />
-        <InventoryPill label="要更新" value={`${String(summary.stale_count ?? 0)}件`} tone="warn" />
+        <InventoryPill label="今すぐ必要" value={`${String(summary.required_action_count ?? 0)}件`} tone={Number(summary.required_action_count ?? 0) > 0 ? "warn" : "ready"} />
+        <InventoryPill label="任意補完" value={`${String(summary.optional_action_count ?? 0)}件`} tone={Number(summary.optional_action_count ?? 0) > 0 ? "muted" : "ready"} />
       </div>
+      <DataInventoryGuide coreDatasets={coreDatasets} attentionDatasets={attentionDatasets} actions={actions} />
       <RefreshActions actions={actions} onRun={props.onRunAction} running={props.runningAction} />
       <div className="inventory-list">
         {datasets.map((item) => (
@@ -803,6 +1121,92 @@ function DataInventory(props: {
   );
 }
 
+function isActionableAttentionDataset(item: Json): boolean {
+  const itemStatus = String(item.status ?? "");
+  if (!["missing", "stale", "partial", "empty", "error"].includes(itemStatus)) {
+    return false;
+  }
+  if (itemStatus === "empty" && item.required !== true) {
+    return false;
+  }
+  return true;
+}
+function formatDatasetAge(item: Json | undefined): string {
+  if (!item) return "経過時間不明";
+  const ageHours = Number(item.age_hours ?? NaN);
+  const freshnessDays = Number(item.freshness_days ?? NaN);
+  const ageText = Number.isFinite(ageHours)
+    ? ageHours >= 24
+      ? `約${(ageHours / 24).toLocaleString("ja-JP", { maximumFractionDigits: 1 })}日経過`
+      : `約${Math.round(ageHours)}時間経過`
+    : "経過時間不明";
+  const freshnessText = Number.isFinite(freshnessDays) ? `基準${freshnessDays}日` : "基準不明";
+  return `${ageText} / ${freshnessText}`;
+}
+
+function formatAttentionDataset(item: Json): string {
+  const label = String(item.label ?? item.id ?? "データ");
+  const status = statusLabel(String(item.status ?? "unknown"));
+  const rows = formatRows(item);
+  const age = formatDatasetAge(item);
+  return `${label}: ${status}（${rows}、${age}）`;
+}
+function DataInventoryGuide(props: { coreDatasets: Json[]; attentionDatasets: Json[]; actions: Json[] }) {
+  if (props.coreDatasets.length === 0 && props.attentionDatasets.length === 0 && props.actions.length === 0) return null;
+  const marketFinancials = props.coreDatasets.find((item) => String(item.id ?? "") === "market_financials");
+  const dailyBars = props.coreDatasets.find((item) => String(item.id ?? "") === "daily_bars");
+  const marketTickerCount = Number(marketFinancials?.ticker_count ?? 0);
+  const barsTickerCount = Number(dailyBars?.ticker_count ?? 0);
+  const rawCoveragePercent = Number(dailyBars?.coverage_percent ?? (marketTickerCount > 0 ? (barsTickerCount / marketTickerCount) * 100 : 0));
+  const coveragePercent = Number.isFinite(rawCoveragePercent) ? rawCoveragePercent : 0;
+  const coverageMinimum = marketTickerCount > 0 ? Math.min(marketTickerCount, 50) : 0;
+  const coverageMeetsMinimum = marketTickerCount > 0 && barsTickerCount >= coverageMinimum;
+  const coverageBroad = marketTickerCount > 0 && (barsTickerCount >= marketTickerCount || coveragePercent >= 25);
+  const coverageText = marketTickerCount > 0
+    ? `OHLCV ${barsTickerCount}/${marketTickerCount}銘柄（${formatCompactPercent(coveragePercent)}）`
+    : "市場財務の銘柄数を確認中です。";
+  const barsStale = String(dailyBars?.status ?? "") === "stale";
+  const coverageHint = barsStale
+    ? `価格系列が古くなっています（${formatDatasetAge(dailyBars)}）。OHLCV更新を優先してください。`
+    : coverageBroad
+      ? "広い範囲で価格系列を確認できます。"
+      : coverageMeetsMinimum
+        ? `最低基準（${coverageMinimum}銘柄）は達成していますが、全体カバーは低めです。必要ならOHLCV更新を追加してください。`
+        : "予測は一部銘柄だけになります。必要ならYahoo!一括更新でOHLCVを増やしてください。";
+  const coreText = props.coreDatasets.length > 0
+    ? props.coreDatasets.map((item) => `${String(item.label ?? item.id)} ${formatRows(item)}`).join(" / ")
+    : "主要データはまだ確認していません。";
+  const attentionText = props.attentionDatasets.length > 0
+    ? props.attentionDatasets.slice(0, 3).map(formatAttentionDataset).join(" / ")
+    : "主要データは利用できます。";
+  const requiredActions = props.actions.filter((action) => !Boolean(action.optional));
+  const optionalActions = props.actions.filter((action) => Boolean(action.optional));
+  const actionText = requiredActions.length > 0
+    ? `今すぐ必要: ${requiredActions.slice(0, 2).map(refreshActionSummary).join(" / ")}`
+    : optionalActions.length > 0
+      ? `今すぐ必要はありません。任意: ${optionalActions.slice(0, 2).map(refreshActionSummary).join(" / ")}`
+      : "追加の実行アクションはありません。";
+  return (
+    <div className="inventory-guide" aria-label="データ状態の読み方">
+      <div>
+        <b>中心データ</b>
+        <span>{coreText}</span>
+      </div>
+      <div className={coverageBroad ? "ready" : "attention"}>
+        <b>OHLCVカバー率</b>
+        <span>{coverageText}。{coverageHint}</span>
+      </div>
+      <div className={props.attentionDatasets.length > 0 ? "attention" : "ready"}>
+        <b>{props.attentionDatasets.length > 0 ? "確認点" : "状態"}</b>
+        <span>{attentionText}</span>
+      </div>
+      <div className={requiredActions.length > 0 ? "attention" : "ready"}>
+        <b>{requiredActions.length > 0 ? "次の作業" : "任意補完"}</b>
+        <span>{actionText}</span>
+      </div>
+    </div>
+  );
+}
 function FinancialsPreviewPanel(props: {
   data: Json | null;
   loading: boolean;
@@ -913,40 +1317,110 @@ function FinancialsPreviewTable(props: { rows: Json[]; onOpenDetail: (code: stri
   );
 }
 
+function actionScopeLabel(value: unknown): string {
+  const scope = String(value ?? "");
+  const labels: Record<string, string> = {
+    tickers: "入力した銘柄",
+    nikkei225: "日経225",
+    financials_csv: "財務CSV",
+    domestic: "全国内株式",
+  };
+  return labels[scope] ?? scope;
+}
+
+function formatRecommendedCount(value: unknown): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  return raw === "0" ? "全件" : `${raw}件`;
+}
+
+function refreshActionMeta(action: Json): string[] {
+  const meta: string[] = [];
+  if (action.recommended_scope) {
+    meta.push(`対象: ${actionScopeLabel(action.recommended_scope)}`);
+  }
+  const count = formatRecommendedCount(action.recommended_max_count);
+  if (count) {
+    meta.push(`上限: ${count}`);
+  }
+  const range = String(action.recommended_range ?? "").trim();
+  if (range) {
+    meta.push(`期間: ${range}`);
+  }
+  return meta;
+}
+
+function refreshActionSummary(action: Json): string {
+  const label = String(action.label ?? action.id ?? "更新");
+  const meta = refreshActionMeta(action).join(" / ");
+  return meta ? `${label}（${meta}）` : label;
+}
+
 function RefreshActions(props: { actions: Json[]; onRun: (action: Json) => void; running: boolean }) {
   if (props.actions.length === 0) {
     return <p className="status">追加で必要な更新はありません。</p>;
   }
+  const requiredActions = props.actions.filter((action) => !Boolean(action.optional));
+  const optionalActions = props.actions.filter((action) => Boolean(action.optional));
+  const renderAction = (action: Json) => {
+    const safe = Boolean(action.safe_to_run);
+    const optional = Boolean(action.optional);
+    const meta = refreshActionMeta(action);
+    return (
+      <article className={optional ? "refresh-action optional" : "refresh-action"} key={String(action.id)}>
+        <div className="refresh-action-content">
+          <div className="refresh-action-title-row">
+            <b>{String(action.label ?? action.id)}</b>
+            <span className={optional ? "optional-chip" : "recommended-chip"}>{optional ? "任意" : "推奨"}</span>
+          </div>
+          <span>{String(action.reason ?? "")}</span>
+          {meta.length > 0 && (
+            <div className="refresh-action-meta">
+              {meta.map((item) => (
+                <span className="action-meta-chip" key={item}>{item}</span>
+              ))}
+            </div>
+          )}
+        </div>
+        {safe ? (
+          <button className={optional ? "secondary-action" : undefined} disabled={props.running} onClick={() => props.onRun(action)}>
+            実行
+          </button>
+        ) : (
+          <span className="manual-chip">手動確認</span>
+        )}
+      </article>
+    );
+  };
   return (
     <div className="refresh-actions">
       <div>
-        <h4>次の更新</h4>
-        <p>未取得・古いデータから、次に処理すべきものを並べています。</p>
+        <h4>次の更新・任意の補完</h4>
+        <p>{requiredActions.length > 0 ? "不足データを優先して表示します。" : "必須の不足はありません。必要な範囲だけ追加取得できます。"}</p>
       </div>
-      <div className="refresh-action-list">
-        {props.actions.map((action) => {
-          const safe = Boolean(action.safe_to_run);
-          return (
-            <article className="refresh-action" key={String(action.id)}>
-              <div>
-                <b>{String(action.label ?? action.id)}</b>
-                <span>{String(action.reason ?? "")}</span>
-              </div>
-              {safe ? (
-                <button disabled={props.running} onClick={() => props.onRun(action)}>
-                  実行
-                </button>
-              ) : (
-                <span className="manual-chip">手動確認</span>
-              )}
-            </article>
-          );
-        })}
-      </div>
+      {requiredActions.length > 0 && (
+        <section className="refresh-action-section">
+          <div className="refresh-action-section-head">
+            <h5>優先して実行</h5>
+            <span>{requiredActions.length}件</span>
+          </div>
+          <div className="refresh-action-list">{requiredActions.map(renderAction)}</div>
+        </section>
+      )}
+      {optionalActions.length > 0 && (
+        <section className="refresh-action-section optional">
+          <div className="refresh-action-section-head">
+            <h5>必要なら補完</h5>
+            <span>{optionalActions.length}件</span>
+          </div>
+          <div className="refresh-action-list">{optionalActions.map(renderAction)}</div>
+        </section>
+      )}
     </div>
   );
 }
-
 function InventoryPill({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
     <div className={`inventory-pill ${tone}`}>
@@ -2410,21 +2884,126 @@ function RagSearchResults(props: {
   );
 }
 
+// Detect if a query is requesting a portfolio simulation
+function isSimQuery(q: string): boolean {
+  return /シミュレーション|simulation|ポートフォリオ.*組|銘柄.*予算|予算.*銘柄|配当.*目標|目標.*配当|年間.*万.*達成|達成.*年間/i.test(q);
+}
+
+// Parse holdings from CSV text into the format expected by /api/chat/simulate
+function holdingsCsvToSimHoldings(csv: string): Json[] {
+  const lines = csv.trim().split("\n");
+  if (lines.length < 2) return [];
+  const header = lines[0].split(",").map((h) => h.trim());
+  const tickerIdx = header.findIndex((h) => h === "ticker_or_fund_code");
+  const nameIdx = header.findIndex((h) => h === "name");
+  const costIdx = header.findIndex((h) => h === "avg_cost");
+  if (tickerIdx < 0) return [];
+  const holdings: Json[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",");
+    const ticker = cols[tickerIdx]?.trim();
+    if (!ticker) continue;
+    const price = costIdx >= 0 ? Number(cols[costIdx]?.trim()) : 0;
+    const name = nameIdx >= 0 ? (cols[nameIdx]?.trim() ?? ticker) : ticker;
+    holdings.push({ ticker, name, price: price || 0 });
+  }
+  return holdings;
+}
+
+// Extract budget (予算) and target dividend (目標配当) from natural language
+function parseSimParams(q: string): { budget: number; target: number } {
+  // Match patterns like 予算3000万, 予算30,000,000円, 3000万円の予算
+  const budgetMatch = q.match(/(?:予算|budget)[^\d]*?([\d,]+)\s*(億|千万|万)?円?/i)
+    ?? q.match(/([\d,]+)\s*(億|千万|万)円?.*?(?:予算|budget)/i);
+  let budget = 0;
+  if (budgetMatch) {
+    const num = parseFloat(budgetMatch[1].replace(/,/g, ""));
+    const unit = budgetMatch[2] ?? "";
+    budget = unit === "億" ? num * 1e8 : unit === "千万" ? num * 1e7 : unit === "万" ? num * 1e4 : num;
+  }
+  // Match patterns like 年間配当120万, 配当目標120万, 120万の配当
+  const targetMatch = q.match(/(?:年間配当|配当目標|目標配当)[^\d]*?([\d,]+)\s*(億|万)?円?/i)
+    ?? q.match(/([\d,]+)\s*(億|万)円?.*?(?:年間配当|配当目標|目標配当)/i);
+  let target = 0;
+  if (targetMatch) {
+    const num = parseFloat(targetMatch[1].replace(/,/g, ""));
+    const unit = targetMatch[2] ?? "";
+    target = unit === "億" ? num * 1e8 : unit === "万" ? num * 1e4 : num;
+  }
+  return { budget, target };
+}
+
 function ChatPanel(props: {
   draft: ChatDraft;
   onDraftChange: (value: ChatDraft) => void;
   onSearchAgain: (value: RagSearchDraft) => void;
   onOpenData: () => void;
+  holdingsCsv?: string;
 }) {
   const [query, setQuery] = useState(props.draft.query);
   const [dbPath, setDbPath] = useState(props.draft.dbPath);
   const [limit, setLimit] = useState(String(props.draft.limit));
+  const [dividendOverrides, setDividendOverrides] = useState<string>("");
   const state = useAsync<Json>();
   const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
   const handoffEvidence = Array.isArray(props.draft.evidence) ? props.draft.evidence : [];
   const answerText = String(state.data?.answer ?? state.data?.text ?? "回答がありません。");
+  const isOrchestrateResult = !!state.data && "synthesis" in state.data;
   const requestedLimit = Number(limit) || DEFAULT_CHAT_LIMIT;
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  // --- Save simulation state ---
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [savedSims, setSavedSims] = useState<Json[]>([]);
+  const [showSaved, setShowSaved] = useState(false);
+  const [showSaveInput, setShowSaveInput] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const isSimResult = state.data !== null;
+
+  const loadSavedSims = async () => {
+    try {
+      const res = await api<Json>("/api/simulations");
+      if (Array.isArray(res.simulations)) setSavedSims(res.simulations as Json[]);
+    } catch (_e) {
+      // ignore
+    }
+  };
+  useEffect(() => { void loadSavedSims(); }, []);
+
+  const saveSimulation = async () => {
+    if (!state.data) return;
+    const defaultName = `Plan-${new Date().toISOString().slice(0,16).replace("T","_")}`;
+    const name = saveName.trim() || defaultName;
+    try {
+      const res = await api<Json>("/api/simulations/save", {
+        name,
+        query,
+        result: state.data,
+      });
+      setSaveNotice(`✅ 保存しました: ${String(res.name ?? "")}（合計 ${String(res.total ?? "")} 件）`);
+      setSaveName("");
+      setShowSaveInput(false);
+      void loadSavedSims();
+    } catch (caught) {
+      setSaveNotice(`❌ 保存失敗: ${caught instanceof Error ? caught.message : String(caught)}`);
+    }
+    setTimeout(() => setSaveNotice(null), 4000);
+  };
+
+  const deleteSim = async (simId: string) => {
+    try {
+      await api<Json>("/api/simulations/delete", { id: simId });
+      void loadSavedSims();
+    } catch (caught) {
+      setSaveNotice(`❌ 削除失敗: ${caught instanceof Error ? caught.message : String(caught)}`);
+      setTimeout(() => setSaveNotice(null), 3000);
+    }
+  };
+
+  const reloadSim = (sim: Json) => {
+    const q = String(sim.query ?? "");
+    if (q) updateQuery(q);
+  };
+
   const copyAnswer = async () => {
     try {
       await copyTextToClipboard(buildAnswerCopyText(query, answerText, ragResults));
@@ -2476,9 +3055,60 @@ function ChatPanel(props: {
       version: Date.now(),
     });
   };
-  const ask = () =>
-    state.run(() =>
+  // Parse dividend overrides from "7267:70,2914:242,8593:51" style input
+  const parsedOverrides = (): Record<string, number> => {
+    const out: Record<string, number> = {};
+    if (!dividendOverrides.trim()) return out;
+    for (const part of dividendOverrides.split(/[,\s]+/)) {
+      const [ticker, dps] = part.split(":");
+      if (ticker && dps) out[ticker.trim()] = parseFloat(dps.trim());
+    }
+    return out;
+  };
+  const askSimulate = () => {
+    const holdings = holdingsCsvToSimHoldings(props.holdingsCsv ?? "");
+    const { budget, target } = parseSimParams(query);
+    const manualOverrides = parsedOverrides();
+    return state.run(async () => {
+      // 手動入力が空の場合はYahoo Finance APIから1株配当を自動取得
+      let overrides: Record<string, number> = manualOverrides;
+      if (Object.keys(overrides).length === 0 && holdings.length > 0) {
+        try {
+          const tickers = holdings.map((h) => String((h as Json).ticker));
+          const yahooResult = await api<Json>("/api/yahoo/dps", { tickers });
+          if (yahooResult.dps && typeof yahooResult.dps === "object") {
+            overrides = yahooResult.dps as Record<string, number>;
+          }
+        } catch (_e) {
+          // Yahoo Finance取得失敗 → EDINETデータにフォールバック
+        }
+      }
+      return api<Json>("/api/chat/simulate", {
+        query,
+        holdings,
+        budget,
+        target_annual_dividend: target,
+        dividend_overrides: overrides,
+        dividend_basis: "latest",
+      });
+    });
+  };
+  const ask = () => {
+    if (isSimQuery(query) && (props.holdingsCsv ?? "").includes("ticker_or_fund_code")) {
+      return askSimulate();
+    }
+    return state.run(() =>
       api<Json>("/api/rag/answer", {
+        query,
+        db_path: dbPath,
+        limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+        call_real_api: false,
+      }),
+    );
+  };
+  const askDetailed = () =>
+    state.run(() =>
+      api<Json>("/api/orchestrate", {
         query,
         db_path: dbPath,
         limit: Number(limit) || DEFAULT_CHAT_LIMIT,
@@ -2487,6 +3117,33 @@ function ChatPanel(props: {
     );
   const askWith = (q: string) => {
     updateQuery(q);
+    if (isSimQuery(q) && (props.holdingsCsv ?? "").includes("ticker_or_fund_code")) {
+      const holdings = holdingsCsvToSimHoldings(props.holdingsCsv ?? "");
+      const { budget, target } = parseSimParams(q);
+      const manualOverrides = parsedOverrides();
+      return state.run(async () => {
+        let overrides: Record<string, number> = manualOverrides;
+        if (Object.keys(overrides).length === 0 && holdings.length > 0) {
+          try {
+            const tickers = holdings.map((h) => String((h as Json).ticker));
+            const yahooResult = await api<Json>("/api/yahoo/dps", { tickers });
+            if (yahooResult.dps && typeof yahooResult.dps === "object") {
+              overrides = yahooResult.dps as Record<string, number>;
+            }
+          } catch (_e) {
+            // Yahoo Finance取得失敗 → フォールバック
+          }
+        }
+        return api<Json>("/api/chat/simulate", {
+          query: q,
+          holdings,
+          budget,
+          target_annual_dividend: target,
+          dividend_overrides: overrides,
+          dividend_basis: "latest",
+        });
+      });
+    }
     return state.run(() =>
       api<Json>("/api/rag/answer", {
         query: q,
@@ -2496,9 +3153,11 @@ function ChatPanel(props: {
       }),
     );
   };
+  const hasHoldings = (props.holdingsCsv ?? "").includes("ticker_or_fund_code") &&
+    holdingsCsvToSimHoldings(props.holdingsCsv ?? "").length > 0;
   return (
     <section className="screen">
-      <ScreenTitle title="AI確認" body="RAGの根拠を確認するための補助チャットです。数値判断は決定論エンジンを優先します。" />
+      <ScreenTitle title="AI確認" body="RAGの根拠確認 + 保有分析の銘柄でポートフォリオシミュレーションができます。" />
       <div className="form-grid tight">
         <Field label="RAG DB">
           <input value={dbPath} onChange={(event) => updateDbPath(event.target.value)} />
@@ -2528,7 +3187,26 @@ function ChatPanel(props: {
             {item}
           </button>
         ))}
+        {hasHoldings && (
+          <button
+            className="table-action"
+            onClick={() => void askWith("保有分析の銘柄で予算3000万円、年間配当120万円目標でシミュレーションして")}
+          >
+            📊 配当シミュレーション
+          </button>
+        )}
       </div>
+      {hasHoldings && (
+        <div className="form-grid tight" style={{ marginTop: "8px" }}>
+          <Field label="配当上書き（例: 7267:70,2914:242,8593:51）">
+            <input
+              value={dividendOverrides}
+              onChange={(e) => setDividendOverrides(e.target.value)}
+              placeholder="ticker:円,ticker:円 ..."
+            />
+          </Field>
+        </div>
+      )}
       <RagEvidenceQuality
         title="AI確認に渡す根拠量"
         results={handoffEvidence}
@@ -2544,6 +3222,18 @@ function ChatPanel(props: {
         <button className="primary" onClick={() => void ask()}>
           確認する
         </button>
+        <button
+          className="primary"
+          onClick={() => void askDetailed()}
+          title="3案生成→批評→統合の多段処理（通常確認より時間がかかります）"
+        >
+          詳細分析（マルチエージェント）
+        </button>
+        {hasHoldings && (
+          <button className="primary" onClick={() => void askSimulate()} title="保有分析の銘柄でシミュレーション実行">
+            📊 シミュレーション
+          </button>
+        )}
         <button onClick={searchAgain}>根拠を追加検索</button>
       </ActionRow>
       <Status loading={state.loading} error={state.error} />
@@ -2554,8 +3244,26 @@ function ChatPanel(props: {
             <button className="table-action" onClick={() => void copyAnswer()}>
               回答をコピー
             </button>
+            {isSimResult && !showSaveInput && (
+              <button className="table-action" onClick={() => {
+                setSaveName(`Plan-${new Date().toISOString().slice(0,16).replace("T","_")}`);
+                setShowSaveInput(true);
+              }}>
+                💾 保存
+              </button>
+            )}
           </div>
+          {isSimResult && showSaveInput && (
+            <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap" }}>
+              <input value={saveName} onChange={(e) => setSaveName(e.target.value)}
+                placeholder="保存名" style={{ padding: "4px 10px", border: "1px solid var(--color-border,#ccc)", borderRadius: "4px", minWidth: "200px" }}
+                onKeyDown={(e) => { if (e.key === "Enter") void saveSimulation(); if (e.key === "Escape") setShowSaveInput(false); }} />
+              <button className="primary" onClick={() => void saveSimulation()}>保存</button>
+              <button onClick={() => setShowSaveInput(false)}>キャンセル</button>
+            </div>
+          )}
           {copyNotice && <p className="notice safe">{copyNotice}</p>}
+          {saveNotice && <p className="notice safe">{saveNotice}</p>}
           <ForecastHighlights highlights={Array.isArray(state.data.highlights) ? (state.data.highlights as Json[]) : []} />
           <RagEvidenceQuality
             title="回答時の根拠量"
@@ -2565,13 +3273,851 @@ function ChatPanel(props: {
             onAction={props.onOpenData}
           />
           <CitationLinkedText text={answerText} citationCount={ragResults.length} targetPrefix="answer-evidence" />
+          {isOrchestrateResult && (
+            <>
+              <p className="notice">詳細分析: 3ドラフト→批評→統合（計5回のローカルLLM処理・無料）</p>
+              {typeof state.data.disclaimer === "string" && (
+                <p className="notice">{state.data.disclaimer}</p>
+              )}
+            </>
+          )}
           {ragResults.length > 0 && (
             <RagEvidenceCards title="回答時に照合した根拠" results={ragResults} idPrefix="answer-evidence" />
           )}
           <JsonDetails data={state.data} />
         </div>
       )}
+      {/* Saved simulations panel */}
+      <SavedSimsPanel
+        savedSims={savedSims}
+        showSaved={showSaved}
+        onToggle={() => { setShowSaved((v) => !v); void loadSavedSims(); }}
+        onReload={reloadSim}
+        onDelete={(id) => void deleteSim(id)}
+      />
     </section>
+  );
+}
+
+const DONUT_COLORS = ["#534AB7","#0F6E56","#993C1D","#185FA5","#854F0B","#993556","#3B6D11","#636363"];
+
+function DonutChart({ allocations, summary }: { allocations: Json[]; summary?: Json }) {
+  const [sel, setSel] = useState<number | null>(null);
+  const R = 155, CX = 190, CY = 190, SW = 46;
+  const C = 2 * Math.PI * R;
+  const total = allocations.reduce((s, a) => s + Number(a.invested), 0);
+  let cum = 0;
+  const segs = allocations.map((a, i) => {
+    const len = (Number(a.invested) / total) * C;
+    const off = cum;
+    cum += len;
+    return { a, len, off, color: DONUT_COLORS[i % DONUT_COLORS.length] };
+  });
+  const selSeg = sel !== null ? segs[sel] : null;
+
+  return (
+    <div style={{ marginTop: "16px" }}>
+      {/* Summary cards */}
+      <div style={{ display:"flex", gap:"10px", marginBottom:"16px", flexWrap:"wrap" }}>
+        {[
+          { label:"投資総額", value:`${(total/10000).toFixed(0)}万円` },
+          { label:"年間配当", value: summary?.annual_dividend ? `${(Number(summary.annual_dividend)/10000).toFixed(1)}万円` : "-" },
+          { label:"利回り",   value: summary?.portfolio_yield ? `${(Number(summary.portfolio_yield)*100).toFixed(2)}%` : "-" },
+        ].map(c => (
+          <div key={c.label} style={{ background:"var(--color-background-secondary)", borderRadius:"8px", padding:"10px 16px", flex:1, minWidth:"100px" }}>
+            <p style={{ fontSize:"12px", color:"var(--color-text-secondary)", margin:"0 0 3px" }}>{c.label}</p>
+            <p style={{ fontSize:"20px", fontWeight:"500", margin:0 }}>{c.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* SVG donut — full-width responsive */}
+      <svg viewBox="0 0 380 380"
+        style={{ width:"100%", maxWidth:"520px", display:"block", margin:"0 auto", overflow:"visible" }}>
+        {segs.map(({ len, off, color }, i) => (
+          <circle key={i} r={R} cx={CX} cy={CY} fill="none" stroke={color}
+            strokeWidth={sel === i ? SW + 10 : SW}
+            strokeDasharray={`${len} ${C - len}`}
+            strokeDashoffset={C - off}
+            transform={`rotate(-90 ${CX} ${CY})`}
+            style={{ cursor:"pointer", transition:"stroke-width 0.2s, opacity 0.2s",
+                     opacity: sel !== null && sel !== i ? 0.35 : 1 }}
+            onClick={() => setSel(sel === i ? null : i)}
+          />
+        ))}
+        {/* Center text */}
+        {selSeg ? (
+          <>
+            <text x={CX} y={CY - 32} textAnchor="middle" fontSize="16" fill="var(--color-text-secondary)">{String(selSeg.a.name ?? "")}</text>
+            <text x={CX} y={CY + 4}  textAnchor="middle" fontSize="30" fontWeight="500" fill="var(--color-text-primary)">{(Number(selSeg.a.invested)/10000).toFixed(0)}万円</text>
+            <text x={CX} y={CY + 34} textAnchor="middle" fontSize="17" fill="var(--color-text-secondary)">{(Number(selSeg.a.invested)/total*100).toFixed(1)}%</text>
+            <text x={CX} y={CY + 58} textAnchor="middle" fontSize="15" fill="var(--color-text-secondary)">利回り {(Number(selSeg.a.yield)*100).toFixed(2)}%</text>
+          </>
+        ) : (
+          <>
+            <text x={CX} y={CY - 22} textAnchor="middle" fontSize="16" fill="var(--color-text-secondary)">投資総額</text>
+            <text x={CX} y={CY + 14} textAnchor="middle" fontSize="32" fontWeight="500" fill="var(--color-text-primary)">{(total/10000).toFixed(0)}万円</text>
+            <text x={CX} y={CY + 46} textAnchor="middle" fontSize="16" fill="var(--color-text-secondary)">
+              {summary?.portfolio_yield ? `利回り ${(Number(summary.portfolio_yield)*100).toFixed(2)}%` : ""}
+            </text>
+          </>
+        )}
+      </svg>
+
+      {/* Allocation table — always visible */}
+      <table className="data-table" style={{ marginTop: "14px", width: "100%" }}>
+        <thead>
+          <tr>
+            <th></th>
+            <th style={{ textAlign: "left" }}>銘柄</th>
+            <th style={{ textAlign: "right" }}>株数</th>
+            <th style={{ textAlign: "right" }}>単価</th>
+            <th style={{ textAlign: "right" }}>投資額</th>
+            <th style={{ textAlign: "right" }}>年間配当</th>
+            <th style={{ textAlign: "right" }}>利回り</th>
+            <th style={{ textAlign: "right" }}>比率</th>
+          </tr>
+        </thead>
+        <tbody>
+          {segs.map(({ a, color }, i) => {
+            const pct = (Number(a.invested) / total * 100).toFixed(1);
+            const isSel = sel === i;
+            return (
+              <tr key={i} onClick={() => setSel(sel === i ? null : i)}
+                style={{ cursor: "pointer", background: isSel ? "var(--color-background-secondary)" : "transparent" }}>
+                <td style={{ width: "10px", padding: "6px 4px" }}>
+                  <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", background: color }} />
+                </td>
+                <td>
+                  <span style={{ fontWeight: isSel ? "700" : "500" }}>{String(a.name ?? "")}</span>
+                  <span style={{ fontSize: "0.8em", color: "var(--color-text-secondary)", marginLeft: "4px" }}>{String(a.ticker ?? "")}</span>
+                </td>
+                <td style={{ textAlign: "right", fontWeight: "700", fontSize: "1.05em" }}>
+                  {a.shares ? `${Number(a.shares).toLocaleString()}株` : "-"}
+                </td>
+                <td style={{ textAlign: "right", fontSize: "0.9em" }}>
+                  {a.price ? `${Number(a.price).toLocaleString()}円` : "-"}
+                </td>
+                <td style={{ textAlign: "right" }}>
+                  {(Number(a.invested) / 10000).toFixed(1)}万円
+                </td>
+                <td style={{ textAlign: "right", color: "var(--color-accent,#1a7a4a)" }}>
+                  {Number(a.annual_dividend ?? 0).toLocaleString()}円
+                </td>
+                <td style={{ textAlign: "right", fontWeight: "600", color: "var(--color-accent,#1a7a4a)" }}>
+                  {a.yield ? `${(Number(a.yield) * 100).toFixed(2)}%` : "-"}
+                </td>
+                <td style={{ textAlign: "right", color: "var(--color-text-secondary)" }}>{pct}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Plan Builder ──────────────────────────────────────────────────────────
+
+type StockRow = { ticker: string; name: string; price: string; dps2026: string; dps2027: string };
+type PlanDef = { id: string; label: string; stocks: StockRow[] };
+
+const DEFAULT_PLAN_DEFS: PlanDef[] = [
+  { id: "A", label: "プランA", stocks: [] },
+  { id: "B", label: "プランB", stocks: [] },
+  { id: "C", label: "プランC", stocks: [] },
+  { id: "D", label: "プランD", stocks: [] },
+];
+
+function migratePlanDefs(raw: unknown[]): PlanDef[] {
+  return raw.map((p: unknown) => {
+    const plan = p as Record<string, unknown>;
+    return {
+      id: String(plan.id ?? ""),
+      label: String(plan.label ?? ""),
+      stocks: (Array.isArray(plan.stocks) ? plan.stocks : []).map((s: unknown) => {
+        const row = s as Record<string, unknown>;
+        return {
+          ticker: String(row.ticker ?? ""),
+          name: String(row.name ?? ""),
+          price: String(row.price ?? ""),
+          dps2026: String(row.dps2026 ?? row.dps ?? ""),
+          dps2027: String(row.dps2027 ?? ""),
+        };
+      }),
+    };
+  });
+}
+
+function PlanBuilderPanel() {
+  const [plans, setPlans] = useState<PlanDef[]>(() => {
+    try {
+      const saved = localStorage.getItem("ia.plan-builder.defs");
+      if (saved) return migratePlanDefs(JSON.parse(saved) as unknown[]);
+    } catch { /* ignore */ }
+    return DEFAULT_PLAN_DEFS;
+  });
+  const [activePlan, setActivePlan] = useState("A");
+  const [targetMode, setTargetMode] = useState<"target" | "budget">("target");
+  const [targetValue, setTargetValue] = useState("1200000");
+  const [fetchingDps, setFetchingDps] = useState(false);
+  const [result, setResult] = useState<Json | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [computeError, setComputeError] = useState<string | null>(null);
+  const [selectedResultPlan, setSelectedResultPlan] = useState<string>("");
+  const [selectedResultYear, setSelectedResultYear] = useState<"2026" | "2027">("2026");
+  const [showSaveInput, setShowSaveInput] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [savedSims, setSavedSims] = useState<Json[]>([]);
+  const [showSaved, setShowSaved] = useState(false);
+
+  // Persist plan defs
+  useEffect(() => {
+    try { localStorage.setItem("ia.plan-builder.defs", JSON.stringify(plans)); } catch { /* ignore */ }
+  }, [plans]);
+
+  const loadSavedSims = async () => {
+    try {
+      const res = await api<Json>("/api/simulations");
+      if (Array.isArray(res.simulations)) setSavedSims(res.simulations as Json[]);
+    } catch { /* ignore */ }
+  };
+  useEffect(() => { void loadSavedSims(); }, []);
+
+  const currentPlan = plans.find((p) => p.id === activePlan) ?? plans[0];
+
+  const updatePlanDef = (id: string, update: Partial<PlanDef>) =>
+    setPlans((prev) => prev.map((p) => (p.id === id ? { ...p, ...update } : p)));
+
+  const addPlan = () => {
+    const usedIds = new Set(plans.map((p) => p.id));
+    let newId = "";
+    for (let i = 0; i < 26; i++) {
+      const c = String.fromCharCode(65 + i);
+      if (!usedIds.has(c)) { newId = c; break; }
+    }
+    if (!newId) return;
+    setPlans((prev) => [...prev, { id: newId, label: `プラン${newId}`, stocks: [] }]);
+    setActivePlan(newId);
+  };
+
+  const removePlan = (id: string) => {
+    if (plans.length <= 1) return;
+    setPlans((prev) => prev.filter((p) => p.id !== id));
+    if (activePlan === id) setActivePlan(plans.find((p) => p.id !== id)?.id ?? "");
+  };
+
+  const addStock = () => {
+    updatePlanDef(activePlan, {
+      stocks: [...(currentPlan?.stocks ?? []), { ticker: "", name: "", price: "", dps2026: "", dps2027: "" }],
+    });
+  };
+
+  const updateStock = (idx: number, field: keyof StockRow, value: string) => {
+    const stocks = [...(currentPlan?.stocks ?? [])];
+    stocks[idx] = { ...stocks[idx], [field]: value };
+    updatePlanDef(activePlan, { stocks });
+  };
+
+  const removeStock = (idx: number) => {
+    const stocks = (currentPlan?.stocks ?? []).filter((_, i) => i !== idx);
+    updatePlanDef(activePlan, { stocks });
+  };
+
+  const copyStocksFrom = (fromId: string) => {
+    const src = plans.find((p) => p.id === fromId);
+    if (!src) return;
+    updatePlanDef(activePlan, { stocks: src.stocks.map((s) => ({ ...s })) });
+  };
+
+  const fetchDps = async () => {
+    const tickers = (currentPlan?.stocks ?? []).map((s) => s.ticker).filter(Boolean);
+    if (!tickers.length) return;
+    setFetchingDps(true);
+    try {
+      const res = await api<Json>("/api/yahoo/dps", { tickers });
+      if (res.dps && typeof res.dps === "object") {
+        const dpsMap = res.dps as Record<string, number>;
+        const stocks = (currentPlan?.stocks ?? []).map((s) => ({
+          ...s,
+          dps2026: s.ticker && dpsMap[s.ticker] != null ? String(dpsMap[s.ticker]) : s.dps2026,
+        }));
+        updatePlanDef(activePlan, { stocks });
+      }
+    } catch { /* ignore */ } finally {
+      setFetchingDps(false);
+    }
+  };
+
+  const computePlans = async () => {
+    setLoading(true);
+    setComputeError(null);
+    try {
+      const makePayload = (dpsField: "dps2026" | "dps2027"): Json => {
+        const base: Json = {
+          plans: plans.map((p) => ({
+            id: p.id,
+            label: p.label,
+            stocks: p.stocks
+              .filter((s) => s.ticker.trim())
+              .map((s) => ({
+                ticker: s.ticker.trim(),
+                name: s.name.trim() || s.ticker.trim(),
+                price: parseFloat(s.price) || 0,
+                dps: parseFloat(s[dpsField]) || 0,
+              })),
+          })),
+        };
+        if (targetMode === "target") {
+          base.target_annual_dividend = parseFloat(targetValue) || 1200000;
+        } else {
+          base.budget = parseFloat(targetValue) || 30000000;
+        }
+        return base;
+      };
+
+      const [res2026, res2027] = await Promise.all([
+        api<Json>("/api/simulations/compute-plans", makePayload("dps2026")),
+        api<Json>("/api/simulations/compute-plans", makePayload("dps2027")),
+      ]);
+
+      // Build DPS comparison from current plan stock definitions
+      const stockMap = new Map<string, { name: string; dps2026: string; dps2027: string }>();
+      plans.forEach((p) =>
+        p.stocks.forEach((s) => {
+          if (s.ticker.trim()) {
+            stockMap.set(s.ticker.trim(), {
+              name: s.name.trim() || s.ticker.trim(),
+              dps2026: s.dps2026,
+              dps2027: s.dps2027,
+            });
+          }
+        })
+      );
+      const dps_comparison = Array.from(stockMap.entries()).map(([ticker, v]) => ({
+        ticker,
+        name: v.name,
+        dps_2026: parseFloat(v.dps2026) || 0,
+        dps_2027: parseFloat(v.dps2027) || 0,
+        diff: (parseFloat(v.dps2027) || 0) - (parseFloat(v.dps2026) || 0),
+      }));
+
+      const combined: Json = {
+        plans_2026: res2026.plans,
+        plan_comparison_2026: res2026.plan_comparison,
+        plans_2027: res2027.plans,
+        plan_comparison_2027: res2027.plan_comparison,
+        dps_comparison,
+        // For SavedSimsPanel compat:
+        plan_comparison: res2026.plan_comparison,
+        plans: res2026.plans,
+        available: true,
+      };
+      setResult(combined);
+      setSelectedResultYear("2026");
+      const firstPlan = Array.isArray(res2026.plan_comparison) && res2026.plan_comparison.length > 0
+        ? String((res2026.plan_comparison as Json[])[0].plan ?? "")
+        : "";
+      setSelectedResultPlan(firstPlan);
+    } catch (e) {
+      setComputeError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveResult = async () => {
+    if (!result) return;
+    const name = saveName.trim() || `Plans-${new Date().toISOString().slice(0, 16).replace("T", "_")}`;
+    try {
+      const res = await api<Json>("/api/simulations/save", {
+        name,
+        query: `プラン設計 ${targetMode === "target" ? "目標配当" : "予算"}${Number(targetValue).toLocaleString()}円`,
+        result: { ...result, plan_defs: plans, target_value: targetValue, target_mode: targetMode },
+      });
+      setSaveNotice(`✅ 保存しました（合計 ${String(res.total ?? "")} 件）`);
+      setSaveName("");
+      setShowSaveInput(false);
+      void loadSavedSims();
+    } catch (e) {
+      setSaveNotice(`❌ ${e instanceof Error ? e.message : String(e)}`);
+    }
+    setTimeout(() => setSaveNotice(null), 4000);
+  };
+
+  const deleteSim = async (simId: string) => {
+    try {
+      await api<Json>("/api/simulations/delete", { id: simId });
+      void loadSavedSims();
+    } catch { /* ignore */ }
+  };
+
+  const planComparison2026 = Array.isArray(result?.plan_comparison_2026) ? (result!.plan_comparison_2026 as Json[]) : [];
+  const planComparison2027 = Array.isArray(result?.plan_comparison_2027) ? (result!.plan_comparison_2027 as Json[]) : [];
+  const dpsComparison = Array.isArray(result?.dps_comparison) ? (result!.dps_comparison as Json[]) : [];
+  const resultPlans2026 = result?.plans_2026 as Record<string, Json> | undefined;
+  const resultPlans2027 = result?.plans_2027 as Record<string, Json> | undefined;
+  const activeResultPlans = selectedResultYear === "2026" ? resultPlans2026 : resultPlans2027;
+  const selPlanData = activeResultPlans && selectedResultPlan ? activeResultPlans[selectedResultPlan] as Json | undefined : undefined;
+  const selAllocs = Array.isArray(selPlanData?.allocations) ? selPlanData!.allocations as Json[] : [];
+  const selSummary = selPlanData?.summary as Json | undefined;
+
+  return (
+    <section className="screen">
+      <ScreenTitle title="プラン設計" body="銘柄を自由に組み合わせてプランA-Dを定義し、配当シミュレーションを一括実行・保存します。" />
+
+      {/* Shared params */}
+      <div className="form-grid tight" style={{ marginBottom: "16px" }}>
+        <Field label="計算モード">
+          <select value={targetMode} onChange={(e) => setTargetMode(e.target.value as "target" | "budget")}
+            style={{ padding: "4px 8px", borderRadius: "4px" }}>
+            <option value="target">目標配当額（逆算）</option>
+            <option value="budget">予算（順算）</option>
+          </select>
+        </Field>
+        <Field label={targetMode === "target" ? "目標年間配当（円）" : "投資予算（円）"}>
+          <input value={targetValue} onChange={(e) => setTargetValue(e.target.value)} inputMode="numeric"
+            placeholder={targetMode === "target" ? "1200000" : "30000000"} />
+        </Field>
+      </div>
+
+      {/* Plan tabs */}
+      <div style={{ display: "flex", gap: "4px", marginBottom: "0", borderBottom: "1px solid var(--color-border,#e0e0e0)", flexWrap: "wrap" }}>
+        {plans.map((p) => (
+          <button key={p.id}
+            onClick={() => setActivePlan(p.id)}
+            style={{
+              padding: "6px 14px", border: "none", borderRadius: "6px 6px 0 0",
+              background: activePlan === p.id ? "var(--color-background-secondary)" : "transparent",
+              fontWeight: activePlan === p.id ? "600" : "400",
+              borderBottom: activePlan === p.id ? "2px solid var(--color-accent,#1a7a4a)" : "2px solid transparent",
+              cursor: "pointer",
+            }}>
+            {p.label}
+          </button>
+        ))}
+        <button onClick={addPlan}
+          style={{ padding: "6px 10px", border: "none", background: "transparent", cursor: "pointer", opacity: 0.6 }}>
+          ＋プラン追加
+        </button>
+      </div>
+
+      {/* Active plan editor */}
+      {currentPlan && (
+        <div style={{ border: "1px solid var(--color-border,#e0e0e0)", borderTop: "none", padding: "14px 16px", marginBottom: "16px" }}>
+          {/* Plan header */}
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "10px", flexWrap: "wrap" }}>
+            <input
+              value={currentPlan.label}
+              onChange={(e) => updatePlanDef(activePlan, { label: e.target.value })}
+              style={{ fontWeight: "600", fontSize: "0.95em", padding: "3px 8px", border: "1px solid var(--color-border,#ccc)", borderRadius: "4px", width: "140px" }}
+              placeholder="プラン名"
+            />
+            {plans.filter((p) => p.id !== activePlan).map((p) => (
+              <button key={p.id} className="table-action" onClick={() => copyStocksFrom(p.id)}>
+                {p.label}からコピー
+              </button>
+            ))}
+            <span style={{ flex: 1 }} />
+            {plans.length > 1 && (
+              <button className="table-action" style={{ color: "var(--color-danger,#c00)" }} onClick={() => removePlan(activePlan)}>
+                このプランを削除
+              </button>
+            )}
+          </div>
+
+          {/* Stock table */}
+          {currentPlan.stocks.length > 0 && (
+            <table className="data-table" style={{ marginBottom: "8px" }}>
+              <thead>
+                <tr>
+                  <th>ティッカー</th>
+                  <th>銘柄名</th>
+                  <th>株価（円）</th>
+                  <th style={{ color: "var(--color-accent,#1a7a4a)" }}>DPS 2026</th>
+                  <th style={{ color: "#2563eb" }}>DPS 2027</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentPlan.stocks.map((s, idx) => (
+                  <tr key={idx}>
+                    <td><input value={s.ticker} onChange={(e) => updateStock(idx, "ticker", e.target.value)}
+                      placeholder="8316" style={{ width: "70px", padding: "2px 6px", fontSize: "0.9em" }} /></td>
+                    <td><input value={s.name} onChange={(e) => updateStock(idx, "name", e.target.value)}
+                      placeholder="銘柄名" style={{ width: "120px", padding: "2px 6px", fontSize: "0.9em" }} /></td>
+                    <td><input value={s.price} onChange={(e) => updateStock(idx, "price", e.target.value)}
+                      placeholder="3233" inputMode="decimal" style={{ width: "80px", padding: "2px 6px", fontSize: "0.9em" }} /></td>
+                    <td><input value={s.dps2026} onChange={(e) => updateStock(idx, "dps2026", e.target.value)}
+                      placeholder="60" inputMode="decimal" style={{ width: "66px", padding: "2px 6px", fontSize: "0.9em", borderColor: "var(--color-accent,#1a7a4a)" }} /></td>
+                    <td><input value={s.dps2027} onChange={(e) => updateStock(idx, "dps2027", e.target.value)}
+                      placeholder="65" inputMode="decimal" style={{ width: "66px", padding: "2px 6px", fontSize: "0.9em", borderColor: "#2563eb" }} /></td>
+                    <td><button className="table-action" style={{ color: "var(--color-danger,#c00)" }} onClick={() => removeStock(idx)}>削除</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {currentPlan.stocks.length === 0 && (
+            <p className="hint" style={{ marginBottom: "8px" }}>銘柄を追加してください。ティッカー・株価・2026/2027年DPSを入力するか、Yahoo取得でDPS 2026を自動入力できます。</p>
+          )}
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            <button className="table-action" onClick={addStock}>＋銘柄追加</button>
+            <button className="table-action" onClick={() => void fetchDps()} disabled={fetchingDps}>
+              {fetchingDps ? "取得中…" : "📡 Yahoo DPS取得"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Run */}
+      <ActionRow>
+        <button className="primary" onClick={() => void computePlans()} disabled={loading}>
+          {loading ? "計算中…" : "▶ 全プラン計算"}
+        </button>
+      </ActionRow>
+      {computeError && <p className="notice error">{computeError}</p>}
+
+      {/* Results */}
+      {result && (
+        <div style={{ marginTop: "20px" }}>
+
+          {/* DPS比較表 */}
+          {dpsComparison.length > 0 && (
+            <div style={{ marginBottom: "20px" }}>
+              <h4 style={{ marginBottom: "8px" }}>DPS比較（2026 vs 2027）</h4>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>銘柄</th>
+                    <th style={{ color: "var(--color-accent,#1a7a4a)" }}>2026年DPS</th>
+                    <th style={{ color: "#2563eb" }}>2027年DPS</th>
+                    <th>増減</th>
+                    <th>増減率</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dpsComparison.map((d, i) => {
+                    const rawDiff = Number(d.diff ?? 0);
+                    const diff = Math.round(rawDiff * 100) / 100; // 浮動小数点丸め
+                    const d26 = Number(d.dps_2026 ?? 0);
+                    const d27 = Number(d.dps_2027 ?? 0);
+                    const pct = d26 > 0 ? (diff / d26 * 100).toFixed(1) : "-";
+                    const color = diff > 0 ? "var(--color-accent,#1a7a4a)" : diff < 0 ? "#c00" : "inherit";
+                    const fmtDps = (v: number) => v % 1 === 0 ? `${v}円` : `${v}円`;
+                    return (
+                      <tr key={i}>
+                        <td style={{ minWidth: "120px" }}>
+                          <div style={{ fontWeight: "700", fontSize: "1.08em", lineHeight: 1.2 }}>{String(d.name ?? "")}</div>
+                          <div style={{ fontSize: "0.76em", color: "var(--color-text-secondary,#888)", marginTop: "2px" }}>{String(d.ticker ?? "")}</div>
+                        </td>
+                        <td style={{ fontSize: "1.05em", fontWeight: "600" }}>{d26 > 0 ? fmtDps(d26) : "-"}</td>
+                        <td style={{ fontSize: "1.05em", fontWeight: "600", color: "#2563eb" }}>{d27 > 0 ? fmtDps(d27) : "-"}</td>
+                        <td style={{ color, fontWeight: diff !== 0 ? "700" : "400", fontSize: "1.0em" }}>
+                          {diff !== 0 ? `${diff > 0 ? "+" : ""}${diff}円` : "±0"}
+                        </td>
+                        <td style={{ color }}>{diff !== 0 && d26 > 0 ? `${diff > 0 ? "+" : ""}${pct}%` : "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* プランA-D 年度別比較 */}
+          {(planComparison2026.length > 0 || planComparison2027.length > 0) && (
+            <div style={{ marginBottom: "16px" }}>
+              <h4 style={{ marginBottom: "8px" }}>プランA-D 年度別比較</h4>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>プラン</th>
+                    <th style={{ color: "var(--color-accent,#1a7a4a)" }}>2026 投資額</th>
+                    <th style={{ color: "var(--color-accent,#1a7a4a)" }}>2026 年間配当</th>
+                    <th style={{ color: "var(--color-accent,#1a7a4a)" }}>2026 利回り</th>
+                    <th style={{ color: "#2563eb" }}>2027 年間配当</th>
+                    <th style={{ color: "#2563eb" }}>2027 利回り</th>
+                    <th>配当増減</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {planComparison2026.map((p26, i) => {
+                    const pid = String(p26.plan ?? "");
+                    const p27 = planComparison2027.find((x) => String(x.plan ?? "") === pid);
+                    const isAvail26 = (resultPlans2026?.[pid] as Json | undefined)?.available !== false;
+                    const isAvail27 = (resultPlans2027?.[pid] as Json | undefined)?.available !== false;
+                    const div26 = Number(p26.annual_dividend ?? 0);
+                    const div27 = p27 ? Number(p27.annual_dividend ?? 0) : 0;
+                    const divDiff = div27 - div26;
+                    const isSel = selectedResultPlan === pid;
+                    return (
+                      <tr key={i} style={{ background: isSel ? "var(--color-background-secondary)" : "transparent" }}>
+                        <td><b>{pid}</b> <span style={{ fontSize: "0.82em" }}>{String(p26.label ?? "")}</span></td>
+                        <td>{isAvail26 ? `${Number(p26.invested).toLocaleString()}円` : "-"}</td>
+                        <td>{isAvail26 ? `${div26.toLocaleString()}円` : "-"}</td>
+                        <td style={{ color: "var(--color-accent,#1a7a4a)", fontWeight: "bold" }}>
+                          {isAvail26 ? `${(Number(p26.yield) * 100).toFixed(2)}%` : "-"}
+                        </td>
+                        <td>{isAvail27 && p27 ? `${div27.toLocaleString()}円` : "-"}</td>
+                        <td style={{ color: "#2563eb", fontWeight: "bold" }}>
+                          {isAvail27 && p27 ? `${(Number(p27.yield) * 100).toFixed(2)}%` : "-"}
+                        </td>
+                        <td style={{ color: divDiff > 0 ? "var(--color-accent,#1a7a4a)" : divDiff < 0 ? "#c00" : "inherit", fontWeight: "600" }}>
+                          {div26 > 0 || div27 > 0 ? `${divDiff >= 0 ? "+" : ""}${divDiff.toLocaleString()}円` : "-"}
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                            {isAvail26 && (
+                              <button className="table-action"
+                                style={{ borderColor: isSel && selectedResultYear === "2026" ? "var(--color-accent,#1a7a4a)" : undefined, fontSize: "0.8em" }}
+                                onClick={() => { setSelectedResultPlan(pid); setSelectedResultYear("2026"); }}>
+                                2026詳細
+                              </button>
+                            )}
+                            {isAvail27 && (
+                              <button className="table-action"
+                                style={{ borderColor: isSel && selectedResultYear === "2027" ? "#2563eb" : undefined, fontSize: "0.8em" }}
+                                onClick={() => { setSelectedResultPlan(pid); setSelectedResultYear("2027"); }}>
+                                2027詳細
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Selected plan donut */}
+          {selAllocs.length > 0 && (
+            <div style={{ marginBottom: "16px" }}>
+              <h4 style={{ marginBottom: "8px" }}>
+                プラン{selectedResultPlan}（{selectedResultYear}年） 詳細
+              </h4>
+              <DonutChart allocations={selAllocs} summary={selSummary} />
+            </div>
+          )}
+
+          {/* Save */}
+          <div style={{ marginTop: "16px", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+            {!showSaveInput ? (
+              <button className="table-action" onClick={() => {
+                setSaveName(`Plans-${new Date().toISOString().slice(0,16).replace("T","_")}`);
+                setShowSaveInput(true);
+              }}>
+                💾 結果を保存
+              </button>
+            ) : (
+              <>
+                <input value={saveName} onChange={(e) => setSaveName(e.target.value)}
+                  placeholder="保存名" style={{ padding: "4px 10px", border: "1px solid var(--color-border,#ccc)", borderRadius: "4px", minWidth: "220px" }}
+                  onKeyDown={(e) => { if (e.key === "Enter") void saveResult(); if (e.key === "Escape") setShowSaveInput(false); }} />
+                <button className="primary" onClick={() => void saveResult()}>保存</button>
+                <button onClick={() => setShowSaveInput(false)}>キャンセル</button>
+              </>
+            )}
+          </div>
+          {saveNotice && <p className="notice safe" style={{ marginTop: "8px" }}>{saveNotice}</p>}
+        </div>
+      )}
+
+      {/* Saved sims panel */}
+      <SavedSimsPanel
+        savedSims={savedSims}
+        showSaved={showSaved}
+        onToggle={() => { setShowSaved((v) => !v); void loadSavedSims(); }}
+        onReload={() => {}}
+        onDelete={(id) => void deleteSim(id)}
+      />
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SavedSimCard({ sim, onReload, onDelete }: { sim: Json; onReload: (s: Json) => void; onDelete: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [selPlan, setSelPlan] = useState("A");
+  const [selYear, setSelYear] = useState<"2026" | "2027">("2026");
+
+  const simId = String(sim.id ?? "");
+  const r = sim.result as Json | undefined;
+  const savedAt = String(sim.saved_at ?? "").slice(0, 16).replace("T", " ");
+
+  // Detect format: new = has plan_comparison_2026
+  const isNew = Array.isArray(r?.plan_comparison_2026);
+  const pc26 = isNew ? (r!.plan_comparison_2026 as Json[]) : [];
+  const pc27 = isNew ? (r!.plan_comparison_2027 as Json[]) : [];
+  const plans26 = ((isNew ? r?.plans_2026 : r?.plans) ?? {}) as Record<string, Json>;
+  const plans27 = (r?.plans_2027 ?? plans26) as Record<string, Json>;
+  const dpsComp = Array.isArray(r?.dps_comparison) ? (r!.dps_comparison as Json[]) : [];
+
+  // Legacy single-plan saves
+  const legacyAllocs = Array.isArray(r?.allocations) ? (r!.allocations as Json[]) : [];
+  const legacySummary = r?.summary as Json | undefined;
+  const legacyInvested = legacySummary?.invested ? `${Number(legacySummary.invested).toLocaleString()}円` : null;
+  const legacyYld = legacySummary?.portfolio_yield ? `${(Number(legacySummary.portfolio_yield) * 100).toFixed(2)}%` : null;
+
+  const activeDonutPlans = selYear === "2026" ? plans26 : plans27;
+  const selPlanData = activeDonutPlans[selPlan] as Json | undefined;
+  const selAllocs = Array.isArray(selPlanData?.allocations) ? (selPlanData!.allocations as Json[]) : [];
+  const selSummary = selPlanData?.summary as Json | undefined;
+
+  return (
+    <div style={{ border: "1px solid var(--color-border, #e0e0e0)", borderRadius: "6px", marginBottom: "8px", overflow: "hidden" }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px", background: "var(--color-surface, #f8f8f8)", flexWrap: "wrap" }}>
+        <b style={{ minWidth: "140px", fontSize: "0.95em" }}>{String(sim.name ?? "")}</b>
+        <span style={{ color: "var(--color-muted, #888)", fontSize: "0.82em" }}>{savedAt}</span>
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.82em" }}>{String(sim.query ?? "")}</span>
+        {legacyInvested && <span><b>{legacyInvested}</b></span>}
+        {legacyYld && <span style={{ color: "var(--color-accent, #1a7a4a)", fontWeight: "bold" }}>{legacyYld}</span>}
+        <button className="table-action" onClick={() => setExpanded(v => !v)}>{expanded ? "閉じる" : "内訳"}</button>
+        <button className="table-action" onClick={() => onReload(sim)}>再クエリ</button>
+        <button className="table-action" onClick={() => onDelete(simId)} style={{ color: "var(--color-danger, #c00)" }}>削除</button>
+      </div>
+
+      {expanded && (
+        <div style={{ padding: "14px 16px" }}>
+          {/* DPS comparison */}
+          {dpsComp.length > 0 && (
+            <div style={{ marginBottom: "16px" }}>
+              <h4 style={{ marginBottom: "8px" }}>DPS比較（2026 vs 2027）</h4>
+              <table className="data-table">
+                <thead><tr><th>銘柄</th><th>2026年DPS</th><th>2027年DPS</th><th>増減</th><th>増減率</th></tr></thead>
+                <tbody>
+                  {dpsComp.map((d, i) => {
+                    const rawDiff = Number(d.diff ?? 0);
+                    const diff = Math.round(rawDiff * 100) / 100;
+                    const d26 = Number(d.dps_2026 ?? 0);
+                    const d27 = Number(d.dps_2027 ?? 0);
+                    const pct = d26 > 0 ? (diff / d26 * 100).toFixed(1) : "-";
+                    const color = diff > 0 ? "var(--color-accent,#1a7a4a)" : diff < 0 ? "#c00" : "inherit";
+                    return (
+                      <tr key={i}>
+                        <td style={{ minWidth: "120px" }}>
+                          <div style={{ fontWeight: "700", fontSize: "1.08em", lineHeight: 1.2 }}>{String(d.name ?? "")}</div>
+                          <div style={{ fontSize: "0.76em", color: "var(--color-text-secondary,#888)", marginTop: "2px" }}>{String(d.ticker ?? "")}</div>
+                        </td>
+                        <td style={{ fontSize: "1.05em", fontWeight: "600" }}>{d26 > 0 ? `${d26}円` : "-"}</td>
+                        <td style={{ fontSize: "1.05em", fontWeight: "600", color: "#2563eb" }}>{d27 > 0 ? `${d27}円` : "-"}</td>
+                        <td style={{ color, fontWeight: diff !== 0 ? "700" : "400", fontSize: "1.0em" }}>
+                          {diff !== 0 ? `${diff > 0 ? "+" : ""}${diff}円` : "±0"}
+                        </td>
+                        <td style={{ color }}>{diff !== 0 && d26 > 0 ? `${diff > 0 ? "+" : ""}${pct}%` : "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* New-format: 年度別比較 */}
+          {isNew && pc26.length > 0 && (
+            <div style={{ marginBottom: "16px" }}>
+              <h4 style={{ marginBottom: "8px" }}>プランA-D 年度別比較</h4>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>プラン</th>
+                    <th style={{ color: "var(--color-accent,#1a7a4a)" }}>2026 投資額</th>
+                    <th style={{ color: "var(--color-accent,#1a7a4a)" }}>2026 利回り</th>
+                    <th style={{ color: "#2563eb" }}>2027 年間配当</th>
+                    <th style={{ color: "#2563eb" }}>2027 利回り</th>
+                    <th>配当増減</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pc26.map((p26, i) => {
+                    const pid = String(p26.plan ?? "");
+                    const p27 = pc27.find(x => String(x.plan ?? "") === pid);
+                    const div26 = Number(p26.annual_dividend ?? 0);
+                    const div27 = p27 ? Number(p27.annual_dividend ?? 0) : 0;
+                    const divDiff = div27 - div26;
+                    const isSel = selPlan === pid;
+                    return (
+                      <tr key={i} style={{ background: isSel ? "var(--color-background-secondary)" : "transparent" }}>
+                        <td><b>{pid}</b></td>
+                        <td>{Number(p26.invested).toLocaleString()}円</td>
+                        <td style={{ color: "var(--color-accent,#1a7a4a)", fontWeight: "bold" }}>{(Number(p26.yield) * 100).toFixed(2)}%</td>
+                        <td>{p27 ? `${div27.toLocaleString()}円` : "-"}</td>
+                        <td style={{ color: "#2563eb", fontWeight: "bold" }}>{p27 ? `${(Number(p27.yield) * 100).toFixed(2)}%` : "-"}</td>
+                        <td style={{ color: divDiff > 0 ? "var(--color-accent,#1a7a4a)" : divDiff < 0 ? "#c00" : "inherit", fontWeight: "600" }}>
+                          {div26 > 0 ? `${divDiff >= 0 ? "+" : ""}${divDiff.toLocaleString()}円` : "-"}
+                        </td>
+                        <td style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                          <button className="table-action" style={{ fontSize: "0.8em", borderColor: isSel && selYear === "2026" ? "var(--color-accent,#1a7a4a)" : undefined }}
+                            onClick={() => { setSelPlan(pid); setSelYear("2026"); }}>2026</button>
+                          {p27 && <button className="table-action" style={{ fontSize: "0.8em", borderColor: isSel && selYear === "2027" ? "#2563eb" : undefined }}
+                            onClick={() => { setSelPlan(pid); setSelYear("2027"); }}>2027</button>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* DonutChart */}
+          {isNew && selAllocs.length > 0 && (
+            <div style={{ marginBottom: "16px" }}>
+              <h4 style={{ marginBottom: "8px" }}>プラン{selPlan}（{selYear}年）内訳</h4>
+              <DonutChart allocations={selAllocs} summary={selSummary} />
+            </div>
+          )}
+
+          {/* Legacy single-plan donut */}
+          {!isNew && legacyAllocs.length > 0 && (
+            <div style={{ marginBottom: "16px" }}>
+              <h4 style={{ marginBottom: "8px" }}>銘柄内訳</h4>
+              <DonutChart allocations={legacyAllocs} summary={legacySummary} />
+            </div>
+          )}
+
+          {/* Fallback: answer text */}
+          {legacyAllocs.length === 0 && !isNew && dpsComp.length === 0 && r?.answer && (
+            <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.85em", fontFamily: "inherit" }}>{String(r.answer)}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SavedSimsPanel(props: {
+  savedSims: Json[];
+  showSaved: boolean;
+  onToggle: () => void;
+  onReload: (sim: Json) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="detail-section" style={{ marginTop: "24px" }}>
+      <div className="answer-head">
+        <h3>保存済みシミュレーション</h3>
+        <button className="table-action" onClick={props.onToggle}>
+          {props.showSaved ? "折りたたむ" : `一覧を見る（${props.savedSims.length}件）`}
+        </button>
+      </div>
+      {props.showSaved && (
+        props.savedSims.length === 0
+          ? <p className="hint">まだ保存されたシミュレーションはありません。</p>
+          : <div>
+              {props.savedSims.map(sim => (
+                <SavedSimCard key={String(sim.id ?? "")} sim={sim} onReload={props.onReload} onDelete={props.onDelete} />
+              ))}
+            </div>
+      )}
+    </div>
   );
 }
 
@@ -2736,6 +4282,7 @@ function MarketResult({ data, mode }: { data: Json; mode: string }) {
         title="ファイル取込（inbox）"
         meta={`状態: ${String(data.status ?? "-")} / ${String(data.tickers ?? 0)}銘柄 / 入力: ${String(data.path ?? "-")}`}
       >
+        <MarketResultDiagnostics data={data} mode={mode} rowCount={rows.length} />
         {rows.length > 0 ? (
           <SimpleTable rows={rows} columns={[["ticker", "コード"], ["price", "価格"]]} />
         ) : (
@@ -2753,6 +4300,7 @@ function MarketResult({ data, mode }: { data: Json; mode: string }) {
     }));
     return (
       <ResultBlock title="市場財務指標" meta={`保存先: ${String(data.output_path ?? "-")}`}>
+        <MarketResultDiagnostics data={data} mode={mode} rowCount={rows.length} />
         <SimpleTable
           rows={rows}
           columns={[
@@ -2771,8 +4319,10 @@ function MarketResult({ data, mode }: { data: Json; mode: string }) {
   const key = mode === "intraday" ? "intraday" : "ohlcv";
   const series = (data[key] ?? {}) as Record<string, Json[]>;
   const firstTicker = Object.keys(series)[0];
+  const rowCount = Object.values(series).reduce((sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0), 0);
   return (
     <ResultBlock title="価格系列" meta={`保存先: ${String(data.daily_bars_path ?? data.output_dir ?? "-")}`}>
+      <MarketResultDiagnostics data={data} mode={mode} rowCount={rowCount} />
       {firstTicker ? (
         <SimpleTable
           rows={(series[firstTicker] ?? []).slice(0, 30)}
@@ -2785,6 +4335,51 @@ function MarketResult({ data, mode }: { data: Json; mode: string }) {
   );
 }
 
+function MarketResultDiagnostics({ data, mode, rowCount }: { data: Json; mode: string; rowCount: number }) {
+  const warnings = marketResultWarnings(data, mode, rowCount);
+  const saved = data.saved === true || Number(data.daily_bars_count ?? 0) > 0 || Boolean(data.output_path || data.daily_bars_path);
+  const tickerCount = Number(data.ticker_count ?? data.tickers_count ?? data.tickers ?? 0);
+  const outputPath = String(data.output_path ?? data.daily_bars_path ?? data.output_dir ?? data.path ?? "-");
+  const source = String(data.universe_source ?? data.provider ?? data.provider_id ?? "Yahoo!/local");
+  return (
+    <section className="market-result-diagnostics">
+      <div className="inventory-summary">
+        <InventoryPill label="取得行" value={`${rowCount}件`} tone={rowCount > 0 ? "ready" : "warn"} />
+        <InventoryPill label="銘柄" value={tickerCount ? `${tickerCount}件` : "-"} tone="muted" />
+        <InventoryPill label="保存" value={saved ? "あり" : "なし"} tone={saved ? "ready" : "warn"} />
+        <InventoryPill label="取得元" value={source} tone="muted" />
+      </div>
+      <code className="path-chip">{outputPath}</code>
+      {warnings.length > 0 ? (
+        <ul className="warning-list market-warning-list">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="notice safe">データ取得結果を確認できました。売買推奨ではなく、比較材料として表示しています。</p>
+      )}
+    </section>
+  );
+}
+
+function marketResultWarnings(data: Json, mode: string, rowCount: number): string[] {
+  const warnings: string[] = [];
+  const rawWarnings = Array.isArray(data.warnings) ? data.warnings : [];
+  for (const warning of rawWarnings) warnings.push(String(warning));
+  if (data.error) warnings.push(String(data.error));
+  if (rowCount > 0) return warnings;
+  if (mode === "financials") {
+    warnings.push("市場財務指標が0件です。銘柄コード、対象範囲、Yahoo!取得の制限、またはネットワーク状態を確認してください。");
+    warnings.push("保存先CSVが更新されない場合は、対象を『入力した銘柄』にして少数銘柄から再実行してください。");
+  } else if (mode === "inbox") {
+    warnings.push("inboxに読み取れる価格ファイルがありません。CSVの保存場所と文字コードを確認してください。");
+  } else {
+    warnings.push("価格系列が0件です。対象銘柄、期間、Yahoo!取得制限、またはdaily_bars.csvの保存状態を確認してください。");
+    warnings.push("大量取得ではレート制限が起きやすいため、まず上限件数を小さくして再実行してください。");
+  }
+  return Array.from(new Set(warnings));
+}
 const PIE_COLORS = [
   "#4f8cff", "#ff8a5b", "#2dd4bf", "#f6c453", "#a78bfa",
   "#f472b6", "#34d399", "#fb7185", "#60a5fa", "#facc15",
@@ -3687,6 +5282,335 @@ function useAsync<T>() {
   return { loading, error, data, run, reset };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AI銘柄分析パネル
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCORE_AXES: Array<[string, string]> = [
+  ["stability_score",   "安定性"],
+  ["health_score",      "財務"],
+  ["yield_score",       "利回り"],
+  ["momentum_score",    "成長"],
+  ["payout_score",      "性向"],
+  ["streak_score",      "連配"],
+  ["sector_rank_score", "業種内"],
+];
+
+function ScoreBar({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  const color = pct >= 70 ? "#16a34a" : pct >= 45 ? "#ca8a04" : "#dc2626";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+      <div style={{ flex: 1, height: "6px", background: "var(--color-border,#e2e8f0)", borderRadius: "3px" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: "3px" }} />
+      </div>
+      <span style={{ fontSize: "0.78em", fontWeight: 600, color, minWidth: "28px", textAlign: "right" }}>
+        {pct}
+      </span>
+    </div>
+  );
+}
+
+// ── AI銘柄分析パネル（フリック/スプリント統合版）─────────────────────────────
+
+type AiMode = "sprint" | "collect_score" | "analyze";
+
+function fmtAgo(iso: string | null | undefined): string {
+  if (!iso) return "なし";
+  try {
+    const diff = Date.now() - new Date(iso).getTime();
+    const h = Math.floor(diff / 3600000);
+    if (h < 1) return "1時間以内";
+    if (h < 24) return `約${h}時間前`;
+    return `約${Math.floor(h / 24)}日前`;
+  } catch { return iso; }
+}
+
+function StockAiPanel() {
+  const [tickers, setTickers] = useState("8306 8316 8411 9432 9433 2914 8058 8031");
+  const [mode, setMode] = useState<AiMode>("sprint");
+  const [useLlm, setUseLlm] = useState(false);
+  const [perspective, setPerspective] = useState("高配当・長期保有");
+
+  const flickUpdate = useAsync<Json>();
+  const sprintStatus = useAsync<Json>();
+  const output = useAsync<Json>();
+
+  // マウント時: スプリントキャッシュ状況を取得
+  useEffect(() => {
+    sprintStatus.run(() => api("/api/sprint/status", {}));
+  }, []);
+
+  const cacheInfo = sprintStatus.data;
+  const cacheStale = cacheInfo?.stale !== false;
+
+  async function handleFlickUpdate() {
+    const tickerList = tickers.split(/[\s,，]+/).map((t: string) => t.trim()).filter(Boolean);
+    const result = await flickUpdate.run(() =>
+      api("/api/flick/update", { watchlist: tickerList, max_age_hours: 24 })
+    );
+    if (result) {
+      // キャッシュステータス更新
+      sprintStatus.run(() => api("/api/sprint/status", {}));
+    }
+  }
+
+  async function handleOutput() {
+    const tickerList = tickers.split(/[\s,，]+/).map((t: string) => t.trim()).filter(Boolean);
+
+    if (mode === "sprint") {
+      // キャッシュから即時応答
+      await output.run(() =>
+        api("/api/sprint/rank", { tickers: tickerList.length > 0 ? tickerList : undefined })
+      );
+    } else if (mode === "collect_score") {
+      // ネットワーク取得 → スコア（同期）
+      await output.run(async () => {
+        await api("/api/stocks/collect", { tickers: tickerList });
+        return api("/api/stocks/score", { tickers: tickerList });
+      });
+    } else {
+      // collect + LLM分析
+      await output.run(async () => {
+        await api("/api/stocks/collect", { tickers: tickerList });
+        return api("/api/stocks/analyze", { tickers: tickerList, use_llm: useLlm, perspective });
+      });
+    }
+  }
+
+  const ranked: Json[] = output.data?.ranked ?? [];
+  const fromCache = output.data?.source === "sprint_cache";
+
+  return (
+    <section className="panel" style={{ maxWidth: "960px", margin: "0 auto" }}>
+      {/* ヘッダー */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: "12px", marginBottom: "16px", flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0 }}>AI銘柄分析</h2>
+        <span style={{ fontSize: "0.8em", color: "#6b7280" }}>
+          キャッシュ: {cacheInfo ? `${cacheInfo.cached}銘柄` : "–"} /
+          最終更新: {fmtAgo(cacheInfo?.newest)}
+          {cacheStale && <span style={{ color: "#ca8a04", marginLeft: "6px" }}>⚠ データが古い — 差分更新してください</span>}
+        </span>
+      </div>
+
+      {/* フリック（入力系）コントロール */}
+      <div className="card" style={{ marginBottom: "12px", padding: "14px 16px", borderLeft: "3px solid #2563eb" }}>
+        <div style={{ fontSize: "0.78em", fontWeight: 700, color: "#2563eb", marginBottom: "8px", letterSpacing: "0.05em" }}>
+          ① フリック（入力系）— バックグラウンド差分収集
+        </div>
+        <Field label="ウォッチリスト（スペース/カンマ区切り）">
+          <textarea
+            rows={2}
+            style={{ width: "100%", fontFamily: "monospace", fontSize: "0.9em", resize: "vertical" }}
+            value={tickers}
+            onChange={e => setTickers(e.target.value)}
+          />
+        </Field>
+        <div style={{ display: "flex", gap: "8px", marginTop: "10px", alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            className="btn-primary"
+            disabled={flickUpdate.loading}
+            onClick={handleFlickUpdate}
+            style={{ fontSize: "0.88em" }}
+          >
+            {flickUpdate.loading ? "差分取得中..." : "差分更新（期限切れデータのみ再取得）"}
+          </button>
+          {flickUpdate.data && (
+            <span style={{ fontSize: "0.82em", color: "#6b7280" }}>
+              更新 {flickUpdate.data.tickers_updated}件 / スキップ {flickUpdate.data.tickers_skipped}件
+              ({flickUpdate.data.elapsed_s}s)
+            </span>
+          )}
+          {flickUpdate.error && <span style={{ color: "#dc2626", fontSize: "0.82em" }}>{flickUpdate.error}</span>}
+        </div>
+      </div>
+
+      {/* スプリント（出力系）コントロール */}
+      <div className="card" style={{ marginBottom: "16px", padding: "14px 16px", borderLeft: "3px solid #16a34a" }}>
+        <div style={{ fontSize: "0.78em", fontWeight: 700, color: "#16a34a", marginBottom: "10px", letterSpacing: "0.05em" }}>
+          ② スプリント（出力系）— 応答モード選択
+        </div>
+        <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
+          {([ ["sprint", "⚡ スプリント（キャッシュ即時）"], ["collect_score", "🔄 取得→スコア"], ["analyze", "🤖 取得→LLM分析"] ] as const).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              style={{
+                padding: "5px 12px",
+                borderRadius: "6px",
+                border: mode === m ? "2px solid #16a34a" : "1px solid var(--color-border,#e2e8f0)",
+                background: mode === m ? "#f0fdf4" : "transparent",
+                fontWeight: mode === m ? 700 : 400,
+                cursor: "pointer",
+                fontSize: "0.85em",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "sprint" && (
+          <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: "10px" }}>
+            保存済みデータから即時返答。ネットワーク・AI不使用。{cacheStale ? "※データが古い可能性があります。「差分更新」を実行してください。" : ""}
+          </div>
+        )}
+        {mode === "analyze" && (
+          <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "10px", flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.88em" }}>
+              <input type="checkbox" checked={useLlm} onChange={e => setUseLlm(e.target.checked)} />
+              Gemini AIコメント付き
+            </label>
+            {useLlm && (
+              <input
+                placeholder="分析観点"
+                style={{ width: "180px", fontSize: "0.88em" }}
+                value={perspective}
+                onChange={e => setPerspective(e.target.value)}
+              />
+            )}
+          </div>
+        )}
+
+        <button
+          className="btn-primary"
+          disabled={output.loading}
+          onClick={handleOutput}
+          style={{ background: "#16a34a" }}
+        >
+          {output.loading
+            ? (mode === "sprint" ? "キャッシュ取得中..." : mode === "collect_score" ? "取得→スコア計算中..." : "LLM分析中...")
+            : (mode === "sprint" ? "⚡ スプリント実行" : mode === "collect_score" ? "取得→スコア" : "取得→LLM分析")}
+        </button>
+      </div>
+
+      <Status loading={output.loading} error={output.error} />
+
+      {/* 結果テーブル */}
+      {ranked.length > 0 && (
+        <>
+          <div style={{ fontSize: "0.8em", color: "#6b7280", marginBottom: "8px" }}>
+            {fromCache ? "⚡ キャッシュ応答" : "🔄 リアルタイム取得"} — {ranked.length}銘柄
+            {output.data?.cache_stale && <span style={{ color: "#ca8a04", marginLeft: "8px" }}>⚠ データが古い</span>}
+          </div>
+          <div className="card" style={{ padding: 0, overflow: "auto" }}>
+            <table className="data-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "center", width: "36px" }}>#</th>
+                  <th style={{ textAlign: "left" }}>銘柄</th>
+                  <th style={{ textAlign: "right" }}>利回り</th>
+                  <th style={{ textAlign: "right" }}>性向</th>
+                  <th style={{ textAlign: "right" }}>連配</th>
+                  <th style={{ textAlign: "right", fontWeight: 800 }}>総合</th>
+                  {SCORE_AXES.map(([, label]) => (
+                    <th key={label} style={{ textAlign: "left", minWidth: "76px", fontSize: "0.8em" }}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {ranked.map((s: Json) => <StockAiRow key={s.ticker} s={s} bd={s.breakdown ?? {}} />)}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function StockAiRow({ s, bd }: { s: Json; bd: Json }) {
+  const [open, setOpen] = useState(false);
+  const totalPct = Math.round((bd.total_score ?? 0) * 100);
+  const totalColor = totalPct >= 65 ? "#16a34a" : totalPct >= 45 ? "#ca8a04" : "#6b7280";
+  const hasDetail = (s.rationale?.length > 0) || s.llm_comment;
+
+  return (
+    <>
+      {/* メイン行 */}
+      <tr
+        onClick={() => hasDetail && setOpen(o => !o)}
+        style={{ cursor: hasDetail ? "pointer" : "default", background: open ? "var(--color-background-secondary)" : "transparent" }}
+      >
+        <td style={{ textAlign: "center", fontWeight: 700, color: "#6b7280" }}>#{s.rank}</td>
+        <td>
+          <div style={{ fontWeight: 700, fontSize: "1.05em" }}>
+            {s.name}
+            {hasDetail && <span style={{ fontSize: "0.7em", color: "#94a3b8", marginLeft: "4px" }}>{open ? "▲" : "▼"}</span>}
+          </div>
+          <div style={{ fontSize: "0.76em", color: "#888" }}>{s.ticker}</div>
+        </td>
+        <td style={{ textAlign: "right", fontWeight: 700, color: "#16a34a" }}>
+          {s.dividend_yield_pct != null ? `${Number(s.dividend_yield_pct).toFixed(2)}%` : "-"}
+        </td>
+        <td style={{ textAlign: "right", fontSize: "0.9em" }}>
+          {s.payout_ratio_pct != null ? `${Number(s.payout_ratio_pct).toFixed(0)}%` : "-"}
+        </td>
+        <td style={{ textAlign: "right", fontSize: "0.9em" }}>
+          {s.consecutive_raises != null ? `${s.consecutive_raises}年` : "-"}
+        </td>
+        <td style={{ textAlign: "right", fontWeight: 800, color: totalColor }}>
+          {totalPct}
+        </td>
+        {SCORE_AXES.map(([key, label]) => (
+          <td key={label} style={{ minWidth: "80px", paddingRight: "8px" }}>
+            <ScoreBar value={bd[key] ?? 0} />
+          </td>
+        ))}
+
+      </tr>
+
+      {/* AIコメント — 常時表示（LLM分析時）*/}
+      {s.llm_comment && !open && (
+        <tr style={{ background: "transparent" }}>
+          <td />
+          <td colSpan={6 + SCORE_AXES.length} style={{ padding: "2px 8px 8px 4px" }}>
+            <div style={{
+              fontSize: "0.82em", lineHeight: 1.55, color: "var(--color-text)",
+              borderLeft: "3px solid #2563eb", paddingLeft: "8px",
+              background: "color-mix(in srgb, #2563eb 6%, transparent)",
+              borderRadius: "0 4px 4px 0", padding: "6px 10px",
+            }}>
+              <span style={{ fontSize: "0.75em", fontWeight: 700, color: "#2563eb", marginRight: "6px" }}>AI評価</span>
+              {s.llm_comment}
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* 展開詳細（クリック時）*/}
+      {open && (
+        <tr style={{ background: "var(--color-background-secondary)" }}>
+          <td colSpan={7 + SCORE_AXES.length} style={{ padding: "10px 16px" }}>
+            {/* スコア根拠 */}
+            <div style={{ display: "grid", gap: "3px", marginBottom: s.llm_comment ? "10px" : "0" }}>
+              {(s.rationale ?? []).map((line: string, i: number) => (
+                <div key={i} style={{
+                  fontSize: "0.83em",
+                  color: line.startsWith("⚠") ? "#dc2626" : line.startsWith("✓") ? "#16a34a" : "var(--color-text-secondary,#6b7280)"
+                }}>
+                  {line}
+                </div>
+              ))}
+            </div>
+            {/* AIコメント（展開時も表示）*/}
+            {s.llm_comment && (
+              <div style={{
+                padding: "10px 12px", background: "var(--color-background)",
+                borderRadius: "6px", fontSize: "0.88em", lineHeight: 1.65,
+                borderLeft: "3px solid #2563eb",
+              }}>
+                <strong style={{ fontSize: "0.78em", color: "#2563eb", display: "block", marginBottom: "5px" }}>AI評価</strong>
+                {s.llm_comment}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 function buildWorkState(input: {
   marketSnapshot: Json | null;
   analysis: Json | null;
@@ -3717,6 +5641,13 @@ function splitTickers(value: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeUpdateScope(value: unknown): "tickers" | "nikkei225" | "financials_csv" | "domestic" | null {
+  if (value === "tickers" || value === "nikkei225" || value === "financials_csv" || value === "domestic") {
+    return value;
+  }
+  return null;
+}
+
 function marketCount(value: Json | null): string {
   if (!value) return "-";
   if (value.matched_tickers !== undefined) return `${String(value.matched_tickers)}銘柄`;
@@ -3724,10 +5655,27 @@ function marketCount(value: Json | null): string {
   return "取得済み";
 }
 
+function batchStepLabel(value: string): string {
+  const labels: Record<string, string> = {
+    pending: "待機",
+    running: "処理中",
+    done: "完了",
+    error: "要確認",
+    skip: "任意",
+  };
+  return labels[value] ?? value;
+}
+function formatCompactPercent(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  const digits = value > 0 && value < 10 ? 1 : 0;
+  return `${value.toFixed(digits)}%`;
+}
 function statusLabel(value: string): string {
   const labels: Record<string, string> = {
     ready: "利用可",
     stale: "要更新",
+    partial: "一部のみ",
+    needs_attention: "要確認",
     missing: "未取得",
     empty: "空",
     error: "エラー",
@@ -3768,7 +5716,7 @@ function formatDateTime(value: unknown): string {
 
 function statusTone(value: string): string {
   if (value === "ready") return "ready";
-  if (value === "stale") return "warn";
+  if (value === "stale" || value === "partial" || value === "needs_attention") return "warn";
   if (value === "error" || value === "needs_setup") return "error";
   return "muted";
 }
