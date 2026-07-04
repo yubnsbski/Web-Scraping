@@ -80,6 +80,7 @@ from investment_assistant.rag.embeddings import Embedder, resolve_embedder
 from investment_assistant.rag.indexer import index_directory
 from investment_assistant.rag.search import (
     SearchResult,
+    boost_by_entities,
     boost_by_feedback,
     build_answer_context,
     diversify_results,
@@ -1000,6 +1001,10 @@ def run_orchestrate_answer(
     # Learning loop: gently re-rank the pool by accumulated user feedback per
     # source, then diversify down so feedback influences which docs are kept.
     candidates = boost_by_feedback(candidates, feedback_source_scores(feedback_db))
+    # Entity-aware boost: when the query names a specific ticker/company, make
+    # sure its market-data doc surfaces even if BM25's OR-sum over common
+    # sentence words favors longer, more generic documents.
+    candidates = boost_by_entities(candidates, retrieval_query)
     results = diversify_results(candidates, limit=limit, max_per_source=max_per_source)
     context = build_answer_context(results)
     if not results:

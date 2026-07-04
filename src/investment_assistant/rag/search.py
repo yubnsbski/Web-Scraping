@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from investment_assistant.portfolio.jp_company_names import COMPANY_NAMES
 from investment_assistant.rag.embeddings import Embedder, HashingEmbedder, cosine
 from investment_assistant.rag.store import RagStore, StoredChunk
 from investment_assistant.rag.tokenize import tokenize
@@ -307,6 +309,85 @@ def boost_by_feedback(
     for result in results:
         net = source_scores.get(result.source, 0)
         factor = 1 + weight * math.tanh(net / 3)
+        adjusted.append(replace(result, score=result.score * factor))
+    adjusted.sort(key=lambda result: (-result.score, result.source, result.chunk_index))
+    return adjusted
+
+
+_TICKER_CODE_RE = re.compile(r"(?<![0-9A-Za-z])[0-9][0-9A-Za-z]{3}(?![0-9A-Za-z])")
+
+# ticker -> NFKC-normalized, casefolded company name, built once from the
+# built-in portfolio name map so brand mentions in a query (any width/case)
+# can be resolved back to a ticker without a network lookup.
+_NORMALIZED_COMPANY_NAMES: dict[str, str] = {
+    ticker: unicodedata.normalize("NFKC", name).casefold()
+    for ticker, name in COMPANY_NAMES.items()
+}
+
+
+def _extract_ticker_codes(query: str) -> set[str]:
+    """Return bare 4-character JPX-style codes mentioned in ``query``.
+
+    Covers both legacy numeric codes (``9433``) and newer digit-led
+    alphanumeric codes (``130A``). The query is NFKC-normalized first so
+    full-width digits (``９４３３``) are recognized too.
+    """
+
+    normalized = unicodedata.normalize("NFKC", query)
+    return set(_TICKER_CODE_RE.findall(normalized))
+
+
+def _extract_brand_tickers(query: str) -> set[str]:
+    """Return tickers whose known company/brand name appears in ``query``.
+
+    Looked up case-insensitively after NFKC normalization, so full-width
+    brand spellings (e.g. ``ＫＤＤＩ``) resolve the same as ``KDDI``.
+    """
+
+    folded = unicodedata.normalize("NFKC", query).casefold()
+    return {ticker for ticker, name in _NORMALIZED_COMPANY_NAMES.items() if name and name in folded}
+
+
+def extract_query_tickers(query: str) -> set[str]:
+    """Return ticker codes mentioned in ``query`` by bare code or brand name."""
+
+    return _extract_ticker_codes(query) | _extract_brand_tickers(query)
+
+
+def boost_by_entities(
+    results: list[SearchResult],
+    query: str,
+    *,
+    weight: float = 0.6,
+) -> list[SearchResult]:
+    """Boost results whose ticker matches a ticker/brand mentioned in ``query``.
+
+    BM25 sums scores over every query token, so a short, high-signal document
+    (e.g. a single ticker's market-data note) can be outscored by longer docs
+    that merely share many common words with a natural-language question. When
+    the query names a specific ticker and/or its company/brand name, a
+    matching result's score is nudged up by at most ``weight`` (bounded via
+    tanh over the number of distinct signals matched — bare code, brand name —
+    mirroring the bounded-multiplier pattern in :func:`boost_by_feedback`) so
+    the ticker-scoped document reliably surfaces regardless of that dilution.
+    Returns a new score-sorted list; when the query carries no ticker/brand
+    signal, this is a no-op (input order and scores are returned unchanged).
+    """
+
+    if weight <= 0:
+        return results
+    code_tickers = _extract_ticker_codes(query)
+    brand_tickers = _extract_brand_tickers(query)
+    if not code_tickers and not brand_tickers:
+        return results
+    adjusted: list[SearchResult] = []
+    for result in results:
+        ticker = result.metadata.get("ticker")
+        strength = (1 if ticker in code_tickers else 0) + (1 if ticker in brand_tickers else 0)
+        if strength == 0:
+            adjusted.append(result)
+            continue
+        factor = 1 + weight * math.tanh(strength)
         adjusted.append(replace(result, score=result.score * factor))
     adjusted.sort(key=lambda result: (-result.score, result.source, result.chunk_index))
     return adjusted
