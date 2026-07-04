@@ -14,6 +14,23 @@ from investment_assistant.webapi import market as market_api
 from investment_assistant.webapi.errors import ApiError
 
 
+@pytest.fixture(autouse=True)
+def _isolated_domestic_universe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default to a nonexistent domestic-universe CSV.
+
+    Prevents tests in this module from silently depending on an operator's
+    real ``local_docs/market/domestic_universe.csv`` file. Tests that want to
+    exercise the domestic-universe branch should override the env var
+    themselves.
+    """
+
+    monkeypatch.setenv(
+        "MARKET_DOMESTIC_UNIVERSE_PATH", str(tmp_path / "no_domestic_universe.csv")
+    )
+
+
 def test_resolve_universe_explicit_tickers() -> None:
     tickers, registry, source = market_api._resolve_bars_universe({"tickers": "8306, 7203"})
     assert tickers == ["8306", "7203"] and registry is None and source == "tickers"
@@ -31,7 +48,10 @@ def test_resolve_universe_nikkei225_maps_to_bundled_registry() -> None:
         assert source == "nikkei225_registry"
 
 
-def test_resolve_universe_financials_csv_expands_tickers() -> None:
+def test_resolve_universe_financials_csv_expands_tickers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MARKET_DOMESTIC_UNIVERSE_PATH", str(tmp_path / "no_universe.csv"))
     tickers, registry, source = market_api._resolve_bars_universe(
         {"universe": "all", "financials_csv": "examples/financials_sample.csv"}
     )

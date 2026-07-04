@@ -66,6 +66,7 @@ def test_detail_surfaces_yahoo_market_financials(tmp_path: Path) -> None:
     result = build_investment_detail(
         code="8306",
         asset_type="stock",
+        financials_csv=tmp_path / "no_financials.csv",
         market_financials_csv=market_csv,
     )
     assert result["available"] is True
