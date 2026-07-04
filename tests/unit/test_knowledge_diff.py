@@ -21,7 +21,7 @@ def _index(tmp_path: Path, *files: tuple[str, str]) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
     db = tmp_path / "rag.sqlite"
-    cli.run_rag_index_dir(path=str(root), db_path=str(db))
+    cli.run_rag_index_dir(path=str(root), db_path=str(db), content_only=False)
     return db
 
 

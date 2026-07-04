@@ -145,7 +145,13 @@ def test_run_rag_index_dir_indexes_supported_files_recursively(tmp_path) -> None
     binary_txt.write_bytes(b"\xff\xfe\x00")
     db_path = tmp_path / "rag.sqlite"
 
-    result = run_rag_index_dir(path=docs_dir, db_path=db_path, max_chars=80, overlap_chars=0)
+    result = run_rag_index_dir(
+        path=docs_dir,
+        db_path=db_path,
+        max_chars=80,
+        overlap_chars=0,
+        content_only=False,
+    )
     store = RagStore(db_path)
     chunks = store.list_chunks()
 
@@ -173,6 +179,142 @@ def test_run_rag_index_dir_handles_empty_directory(tmp_path) -> None:
     assert result["chunks_indexed"] == 0
     assert result["indexed_sources"] == []
     assert result["skipped_files"] == []
+
+
+def test_run_rag_index_dir_filters_files_without_front_matter_by_default(tmp_path) -> None:
+    docs_dir = tmp_path / "local_docs"
+    docs_dir.mkdir()
+    content_doc = docs_dir / "9433.md"
+    content_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9433"\n---\n\n# KDDI\n本文...',
+        encoding="utf-8",
+    )
+    operational_doc = docs_dir / "data_action_queue.md"
+    operational_doc.write_text(
+        "# データアクションキュー\n未処理タスク一覧...",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "rag.sqlite"
+
+    result = run_rag_index_dir(path=docs_dir, db_path=db_path)
+    store = RagStore(db_path)
+    chunks = store.list_chunks()
+
+    assert result["indexed_sources"] == [str(content_doc)]
+    assert str(operational_doc) in result["skipped_files"]
+    assert {chunk.source for chunk in chunks} == {str(content_doc)}
+
+
+def test_run_rag_index_dir_prunes_documents_removed_from_disk(tmp_path) -> None:
+    docs_dir = tmp_path / "local_docs"
+    docs_dir.mkdir()
+    keep_doc = docs_dir / "9433.md"
+    keep_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9433"\n---\n\n# KDDI\n本文...',
+        encoding="utf-8",
+    )
+    removed_doc = docs_dir / "9432.md"
+    removed_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9432"\n---\n\n# NTT\n本文...',
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "rag.sqlite"
+
+    first_result = run_rag_index_dir(path=docs_dir, db_path=db_path)
+    assert first_result["documents_pruned"] == 0
+    store = RagStore(db_path)
+    assert {chunk.source for chunk in store.list_chunks()} == {str(keep_doc), str(removed_doc)}
+
+    removed_doc.unlink()
+    second_result = run_rag_index_dir(path=docs_dir, db_path=db_path)
+
+    assert second_result["documents_pruned"] == 1
+    assert {chunk.source for chunk in store.list_chunks()} == {str(keep_doc)}
+
+
+def test_run_rag_index_dir_does_not_prune_outside_indexed_prefix(tmp_path) -> None:
+    root_dir = tmp_path / "local_docs"
+    kept_subdir = root_dir / "kept"
+    other_subdir = root_dir / "other"
+    kept_subdir.mkdir(parents=True)
+    other_subdir.mkdir(parents=True)
+    kept_doc = kept_subdir / "9433.md"
+    kept_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9433"\n---\n\n# KDDI\n本文...',
+        encoding="utf-8",
+    )
+    other_doc = other_subdir / "9432.md"
+    other_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9432"\n---\n\n# NTT\n本文...',
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "rag.sqlite"
+
+    run_rag_index_dir(path=root_dir, db_path=db_path)
+    store = RagStore(db_path)
+    assert {chunk.source for chunk in store.list_chunks()} == {str(kept_doc), str(other_doc)}
+
+    # Re-index only the "kept" subdirectory; documents under "other" are outside
+    # this run's prefix and must survive the prune.
+    result = run_rag_index_dir(path=kept_subdir, db_path=db_path)
+
+    assert result["documents_pruned"] == 0
+    assert {chunk.source for chunk in store.list_chunks()} == {str(kept_doc), str(other_doc)}
+
+
+def test_run_rag_index_dir_does_not_prune_sibling_dir_with_colliding_name_prefix(
+    tmp_path,
+) -> None:
+    # Regression test: a naive `source.startswith(under_prefix)` check treats
+    # ".../rag_priority1" as being "under" ".../rag" because the *string*
+    # "rag_priority1" starts with the string "rag" -- even though the
+    # directory "rag_priority1" is a sibling of "rag", not a descendant. The
+    # indexed prefix must require a path-separator boundary (or exact
+    # equality) so sibling directories whose names happen to share a prefix
+    # are never pruned.
+    market_dir = tmp_path / "market"
+    rag_dir = market_dir / "rag"
+    rag_priority1_dir = market_dir / "rag_priority1"
+    rag_priority2_dir = market_dir / "rag_priority2"
+    rag_dir.mkdir(parents=True)
+    rag_priority1_dir.mkdir(parents=True)
+    rag_priority2_dir.mkdir(parents=True)
+
+    rag_doc = rag_dir / "9433.md"
+    rag_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9433"\n---\n\n# KDDI\n本文...',
+        encoding="utf-8",
+    )
+    priority1_doc = rag_priority1_dir / "9432.md"
+    priority1_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9432"\n---\n\n# NTT\n本文...',
+        encoding="utf-8",
+    )
+    priority2_doc = rag_priority2_dir / "9613.md"
+    priority2_doc.write_text(
+        '---\ndoc_type: market_evidence\nticker: "9613"\n---\n\n# NTTデータ\n本文...',
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "rag.sqlite"
+
+    run_rag_index_dir(path=market_dir, db_path=db_path)
+    store = RagStore(db_path)
+    assert {chunk.source for chunk in store.list_chunks()} == {
+        str(rag_doc),
+        str(priority1_doc),
+        str(priority2_doc),
+    }
+
+    # Re-index only "rag"; the colliding-name siblings "rag_priority1" and
+    # "rag_priority2" are outside this run's prefix and must survive.
+    result = run_rag_index_dir(path=rag_dir, db_path=db_path)
+
+    assert result["documents_pruned"] == 0
+    assert {chunk.source for chunk in store.list_chunks()} == {
+        str(rag_doc),
+        str(priority1_doc),
+        str(priority2_doc),
+    }
 
 
 def test_load_document_extracts_front_matter_metadata(tmp_path) -> None:

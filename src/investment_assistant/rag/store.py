@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -171,6 +172,50 @@ class RagStore:
         with self._connect() as conn:
             rows = conn.execute(sql, (match_expr, limit)).fetchall()
         return [(_stored_chunk(row), round(-float(row[6]), 6)) for row in rows]
+
+    def prune_documents(self, keep_sources: set[str], *, under_prefix: str | None = None) -> int:
+        """Delete documents no longer eligible for indexing.
+
+        Considers existing sources that equal ``under_prefix`` or sit under it
+        as a directory (when given) and deletes any of those not present in
+        ``keep_sources`` -- along with their chunks, embeddings, and FTS rows
+        -- in a single transaction. Returns the number of documents pruned.
+        A sibling path that merely shares a string prefix (e.g. ``rag`` vs.
+        ``rag_priority1``) is not considered "under" it -- see
+        ``_is_under_prefix``.
+
+        The set difference is computed in Python (rather than a SQL
+        ``NOT IN``) to avoid SQLite's bound-parameter limit when there are
+        many existing sources.
+        """
+
+        with self._connect() as conn:
+            rows = conn.execute("SELECT source FROM rag_documents").fetchall()
+            all_sources = {str(row[0]) for row in rows}
+            existing_sources_under_prefix = (
+                {source for source in all_sources if _is_under_prefix(source, under_prefix)}
+                if under_prefix is not None
+                else all_sources
+            )
+            to_delete = existing_sources_under_prefix - keep_sources
+            if not to_delete:
+                return 0
+            for batch in _chunked(sorted(to_delete), 500):
+                placeholders = ",".join("?" for _ in batch)
+                conn.execute(
+                    f"DELETE FROM rag_documents WHERE source IN ({placeholders})", batch
+                )
+                conn.execute(
+                    f"DELETE FROM rag_chunks WHERE source IN ({placeholders})", batch
+                )
+                conn.execute(
+                    f"DELETE FROM rag_embeddings WHERE source IN ({placeholders})", batch
+                )
+                if self.fts_enabled:
+                    conn.execute(
+                        f"DELETE FROM rag_chunks_fts WHERE source IN ({placeholders})", batch
+                    )
+        return len(to_delete)
 
     def list_chunks(self, *, limit: int | None = None) -> list[StoredChunk]:
         """Return stored chunks in source/index order."""
@@ -348,6 +393,25 @@ def _stored_chunk(row: sqlite3.Row | tuple[object, ...]) -> StoredChunk:
         content_hash=str(row[4]),
         metadata=_metadata_from_json(str(row[5])),
     )
+
+
+def _chunked(items: list[str], size: int) -> Iterator[list[str]]:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _is_under_prefix(source: str, prefix: str) -> bool:
+    """Return whether ``source`` is ``prefix`` itself or a path beneath it.
+
+    Both ``source`` (``Document.source``, see ``rag/chunker.py``) and
+    ``prefix`` (``under_prefix``, see ``rag/indexer.py``) are ``str(Path(...))``
+    forms using the OS-native separator. A bare ``str.startswith(prefix)``
+    check would wrongly match sibling paths that merely share a string
+    prefix -- e.g. ``.../rag_priority1`` "starts with" ``.../rag`` -- so a
+    separator boundary (or exact equality) is required.
+    """
+
+    return source == prefix or source.startswith(prefix + os.sep)
 
 
 def _fts_quote(token: str) -> str:

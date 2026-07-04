@@ -54,8 +54,22 @@ def index_directory(
     max_chars: int = 800,
     overlap_chars: int = 120,
     embedder: Embedder | None = None,
+    content_only: bool = True,
+    prune: bool = True,
 ) -> dict[str, object]:
     """Recursively index supported local files into the RAG store.
+
+    When ``content_only`` is true (the default), files without YAML front
+    matter are treated as operational/tracking files (dashboards, action
+    queues, lineage maps) rather than real investment content and are
+    reported under ``skipped_files`` instead of being indexed. Pass
+    ``content_only=False`` to index every supported file regardless of front
+    matter.
+
+    When ``prune`` is true (the default), previously-indexed documents whose
+    source is under ``path`` but were not (re)indexed on this run are removed
+    from the store, so the store stays in sync with what is currently
+    eligible on disk.
 
     Returns a JSON-friendly summary. Unsupported files and files that cannot be
     decoded as UTF-8 are reported under ``skipped_files``.
@@ -80,6 +94,9 @@ def index_directory(
         except (OSError, UnicodeDecodeError):
             skipped_paths.append(file_path)
             continue
+        if content_only and not document.metadata:
+            skipped_paths.append(file_path)
+            continue
         chunks = chunk_text(
             source=document.source,
             text=document.text,
@@ -90,6 +107,10 @@ def index_directory(
         total_chunks += store.upsert_document(document, chunks)
         indexed_sources.append(document.source)
 
+    pruned_count = 0
+    if prune:
+        pruned_count = store.prune_documents(set(indexed_sources), under_prefix=str(root))
+
     return {
         "source_dir": str(root),
         "db_path": str(db_path),
@@ -97,4 +118,5 @@ def index_directory(
         "chunks_indexed": total_chunks,
         "indexed_sources": indexed_sources,
         "skipped_files": [str(file_path) for file_path in skipped_paths],
+        "documents_pruned": pruned_count,
     }

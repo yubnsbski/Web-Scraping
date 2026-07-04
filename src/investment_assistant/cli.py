@@ -479,7 +479,14 @@ def run_crawl(
         "results": results,
     }
     if index_after and saved_total:
-        output["index"] = run_rag_index_dir(path=str(base_dir), db_path=db_path)
+        # Crawled IR pages are saved with a plain "source_url: ..." header, not
+        # YAML front matter, so the default content-only filter (and its
+        # paired prune) would wrongly treat every crawled page as an
+        # operational file and delete them from the store. Index every file
+        # here and leave pruning to the dedicated maintenance path.
+        output["index"] = run_rag_index_dir(
+            path=str(base_dir), db_path=db_path, content_only=False, prune=False
+        )
     return output
 
 
@@ -613,6 +620,8 @@ def run_rag_index_dir(
     max_chars: int = 800,
     overlap_chars: int = 120,
     embeddings: str | None = None,
+    content_only: bool = True,
+    prune: bool = True,
 ) -> dict[str, object]:
     """Recursively index local text/Markdown files into the local RAG store."""
 
@@ -622,6 +631,8 @@ def run_rag_index_dir(
         max_chars=max_chars,
         overlap_chars=overlap_chars,
         embedder=_index_embedder(embeddings),
+        content_only=content_only,
+        prune=prune,
     )
 
 
@@ -1469,6 +1480,16 @@ def main(argv: list[str] | None = None) -> int:
     rag_index_dir_parser.add_argument("--max-chars", type=int, default=800)
     rag_index_dir_parser.add_argument("--overlap-chars", type=int, default=120)
     rag_index_dir_parser.add_argument("--embeddings", choices=["hashing", "gemini"])
+    rag_index_dir_parser.add_argument(
+        "--all-files",
+        action="store_true",
+        help="index all files regardless of front matter, not just recognized content",
+    )
+    rag_index_dir_parser.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="do not delete previously-indexed documents that are no longer eligible",
+    )
 
     market_rag_parser = subparsers.add_parser(
         "market-rag-build",
@@ -1799,6 +1820,8 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             max_chars=args.max_chars,
             overlap_chars=args.overlap_chars,
             embeddings=args.embeddings,
+            content_only=not args.all_files,
+            prune=not args.no_prune,
         )
     if command == "market-daily-refresh":
         if args.tickers:

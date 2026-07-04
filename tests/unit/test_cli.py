@@ -518,6 +518,7 @@ def test_cli_rag_index_dir_indexes_supported_files(tmp_path, capsys):
             "80",
             "--overlap-chars",
             "0",
+            "--all-files",
         ]
     )
     assert index_exit == 0
@@ -816,7 +817,9 @@ sources:
         encoding="utf-8",
     )
 
-    assert main(["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]) == 0
+    assert main(
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path), "--all-files"]
+    ) == 0
     capsys.readouterr()
 
     exit_code = main(
@@ -965,7 +968,9 @@ sources:
         encoding="utf-8",
     )
 
-    assert main(["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]) == 0
+    assert main(
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path), "--all-files"]
+    ) == 0
     capsys.readouterr()
 
     exit_code = main(
@@ -1020,7 +1025,7 @@ sources:
     )
 
     assert main(
-        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path), "--all-files"]
     ) == 0
     capsys.readouterr()
 
@@ -1079,7 +1084,7 @@ sources:
     )
 
     assert main(
-        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path), "--all-files"]
     ) == 0
     capsys.readouterr()
 
@@ -1127,7 +1132,7 @@ def test_run_orchestrate_answer_source_filter_limits_results(tmp_path, capsys):
     second_doc.write_text("beta company 配当 方針 unique-second", encoding="utf-8")
 
     assert main(
-        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path), "--all-files"]
     ) == 0
     capsys.readouterr()
 
@@ -1155,7 +1160,9 @@ def test_cli_rag_stats_reports_sources_and_keywords(tmp_path, capsys):
     memo = docs_dir / "memo.txt"
     memo.write_text("配当 方針 DOE 配当性向 有価証券報告書", encoding="utf-8")
 
-    assert main(["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path)]) == 0
+    assert main(
+        ["rag-index-dir", "--path", str(docs_dir), "--db-path", str(db_path), "--all-files"]
+    ) == 0
     capsys.readouterr()
 
     assert main(["rag-stats", "--db-path", str(db_path), "--keywords", "配当,DOE"]) == 0

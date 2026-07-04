@@ -42,7 +42,7 @@ def _index_doc(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     db = tmp_path / "rag.sqlite"
-    cli.run_rag_index_dir(path=str(tmp_path / "edinet"), db_path=str(db))
+    cli.run_rag_index_dir(path=str(tmp_path / "edinet"), db_path=str(db), content_only=False)
     return db
 
 
