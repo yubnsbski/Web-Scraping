@@ -4,7 +4,12 @@ from pathlib import Path
 
 from investment_assistant.rag.chunker import chunk_text, load_document
 from investment_assistant.rag.store import RagStore
-from investment_assistant.webapi.service import _sources_to_yaml, available_routes, handle_api
+from investment_assistant.webapi.service import (
+    _resolve_stock_forecast,
+    _sources_to_yaml,
+    available_routes,
+    handle_api,
+)
 
 SAMPLE_CSV = Path(__file__).resolve().parents[2] / "examples" / "sp500_monthly_sample.csv"
 SCORING_CSV = (
@@ -1347,3 +1352,74 @@ def test_financials_preview_route_handles_missing_csv(tmp_path: Path) -> None:
     assert payload["company_count"] == 0
     assert payload["rows"] == []
     assert payload["warnings"]
+
+
+_DAILY_BARS_HEADER = "ticker,date,open,high,low,close,volume\n"
+
+
+def _daily_bars_csv(tmp_path: Path, ticker: str = "7203") -> Path:
+    lines = [_DAILY_BARS_HEADER.rstrip("\n")]
+    for i in range(20):
+        close = 1000.0 + i * 10
+        lines.append(f"{ticker},2026-05-{i + 1:02d},{close},{close},{close},{close},1000")
+    path = tmp_path / "daily_bars.csv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_resolve_stock_forecast_returns_forecast_for_valid_ticker(tmp_path: Path) -> None:
+    bars = _daily_bars_csv(tmp_path, "7203")
+    result = _resolve_stock_forecast({"ticker": "7203", "daily_bars_csv": str(bars)}, "")
+    assert result is not None
+    assert result["ticker"] == "7203"
+    assert len(result["forecast"]) == 5  # default horizon
+
+
+def test_resolve_stock_forecast_returns_none_for_missing_csv(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist.csv"
+    result = _resolve_stock_forecast({"ticker": "7203", "daily_bars_csv": str(missing)}, "")
+    assert result is None
+
+
+def test_resolve_stock_forecast_returns_none_without_ticker(monkeypatch, tmp_path: Path) -> None:
+    from investment_assistant.portfolio import market_forecast
+
+    def fail_if_called(**kwargs: object) -> dict[str, object]:
+        raise AssertionError("forecast_ticker must not be called without a resolvable ticker")
+
+    monkeypatch.setattr(market_forecast, "forecast_ticker", fail_if_called)
+    result = _resolve_stock_forecast({"daily_bars_csv": str(tmp_path / "daily_bars.csv")}, "")
+    assert result is None
+
+
+def test_orchestrate_injects_forecast_evidence(tmp_path: Path, monkeypatch) -> None:
+    from investment_assistant.webapi import service
+
+    db = tmp_path / "rag.sqlite"
+    _index_doc(db, tmp_path)
+    bars = _daily_bars_csv(tmp_path, "7203")
+
+    captured: dict[str, object] = {}
+
+    def fake_run_orchestrate_answer(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"answer": "stub"}
+
+    monkeypatch.setattr(service.cli, "run_orchestrate_answer", fake_run_orchestrate_answer)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/orchestrate",
+        {
+            "query": "分散投資とは",
+            "db_path": str(db),
+            "ticker": "7203",
+            "daily_bars_csv": str(bars),
+        },
+    )
+
+    assert status == 200
+    assert payload["stock_forecast"] is not None
+    assert payload["stock_forecast"]["ticker"] == "7203"
+    assert "期待リターン" in captured["query"]
+    assert "統計推定・非助言" in captured["query"]

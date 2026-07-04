@@ -1,4 +1,4 @@
-"""Framework-agnostic JSON API over the existing CLI run_* functions."""
+﻿"""Framework-agnostic JSON API over the existing CLI run_* functions."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import re
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +25,12 @@ from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
 from investment_assistant.webapi import data_status as data_status_api
 from investment_assistant.webapi import edinet as edinet_api
 from investment_assistant.webapi import investments as investment_api
+from investment_assistant.webapi import jpx as jpx_api
 from investment_assistant.webapi import market as market_api
 from investment_assistant.webapi import portfolio as portfolio_api
 from investment_assistant.webapi import reports as report_api
+from investment_assistant.webapi import sprint_api
+from investment_assistant.webapi import stock_analysis as stock_analysis_api
 from investment_assistant.webapi.errors import ApiError
 from investment_assistant.webapi.jobs import JOBS
 
@@ -34,12 +38,13 @@ JsonDict = dict[str, Any]
 Handler = Callable[[JsonDict], JsonDict]
 _REAL_API_ENV = "INVESTMENT_ASSISTANT_WEB_REAL_API"
 _REAL_API_RUNTIME_ENABLED = False
+_DEFAULT_DAILY_BARS_CSV = "local_docs/market/daily_bars.csv"
 
 
 def handle_api(method: str, path: str, body: JsonDict | None = None) -> tuple[int, JsonDict]:
     handler = _ROUTES.get((method.upper(), path.rstrip("/") or "/"))
     if handler is None:
-        return 404, {"error": f"no such endpoint: {method} {path}"}
+        return 404, _unknown_endpoint(method=method, path=path)
     try:
         return 200, handler(body or {})
     except ApiError as exc:
@@ -52,7 +57,258 @@ def handle_api(method: str, path: str, body: JsonDict | None = None) -> tuple[in
 
 
 def _health(_: JsonDict) -> JsonDict:
-    return {"status": "ok", "service": "investment-assistant", "auto_trading": False}
+    return {
+        "status": "ok",
+        "service": "investment-assistant",
+        "route_count": len(_ROUTES),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+
+def _system_diagnostics(body: JsonDict) -> JsonDict:
+    routes = available_routes()
+    payload: JsonDict = {
+        "status": "ok",
+        "service": "investment-assistant",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "frontend": _frontend_asset_summary(),
+        "market_dashboard": _market_dashboard_status({}),
+        "routes": routes,
+        "route_count": len(routes),
+        "route_groups": _route_groups(routes),
+        "critical_routes": _critical_route_status(),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+    if _as_bool(body.get("include_data_status"), False):
+        try:
+            payload["data_status"] = data_status_api.data_status({})
+        except Exception as exc:  # pragma: no cover - defensive diagnostics
+            payload["data_status_error"] = f"{type(exc).__name__}: {exc}"
+    return payload
+
+
+def _frontend_asset_summary() -> JsonDict:
+    dist = Path(__file__).resolve().parents[3] / "web" / "dist"
+    index = dist / "index.html"
+    assets: list[str] = []
+    if index.exists():
+        html = index.read_text(encoding="utf-8", errors="replace")
+        assets = sorted(set(re.findall(r'["\'](/assets/[^"\']+)["\']', html)))
+    return {
+        "dist_path": str(dist),
+        "dist_exists": dist.exists(),
+        "index_exists": index.exists(),
+        "assets": assets,
+    }
+
+
+def _market_dashboard_root() -> Path:
+    return Path(__file__).resolve().parents[3] / "web" / "dist" / "market-dashboard"
+
+
+def _read_dashboard_json(root: Path, filename: str, warnings: list[str]) -> JsonDict:
+    import json
+
+    path = root / filename
+    if not path.is_file():
+        warnings.append(f"missing {filename}")
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        warnings.append(f"invalid {filename}: {exc}")
+        return {}
+    if not isinstance(payload, dict):
+        warnings.append(f"invalid {filename}: root is not object")
+        return {}
+    return payload
+
+
+def _status_is_ok(value: Any) -> bool:
+    return str(value or "").lower() in {"ok", "pass", "ready", "success"}
+
+
+def _dashboard_list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _html_content_status(root: Path, filenames: list[str], warnings: list[str]) -> JsonDict:
+    markers = ("\u7e5d", "\ufffd")
+    html_status: JsonDict = {}
+    for filename in sorted(set(filenames)):
+        path = root / filename
+        exists = path.is_file()
+        marker_hits: list[str] = []
+        if exists:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            marker_hits = [marker for marker in markers if marker in text]
+            if marker_hits:
+                warnings.append(f"html content mojibake: {filename}")
+        html_status[filename] = {
+            "exists": exists,
+            "mojibake": bool(marker_hits),
+            "content_ok": exists and not marker_hits,
+        }
+    return html_status
+
+
+def _entry_link_status(root: Path, cards: list[Any], warnings: list[str]) -> JsonDict:
+    link_status: JsonDict = {}
+    for index, card in enumerate(cards, start=1):
+        if not isinstance(card, dict):
+            continue
+        raw_link = card.get("link")
+        if not isinstance(raw_link, str) or not raw_link:
+            continue
+        if raw_link.startswith(("/", "http://", "https://", "#")):
+            link_status[raw_link] = {"kind": "external_or_absolute", "exists": True}
+            continue
+        target = root / raw_link
+        exists = target.is_file()
+        link_status[raw_link] = {"kind": "local_file", "exists": exists}
+        if not exists:
+            title = card.get("title") or f"card {index}"
+            warnings.append(f"entry link missing: {title} -> {raw_link}")
+    return link_status
+
+
+def _market_dashboard_status(_: JsonDict) -> JsonDict:
+    root = _market_dashboard_root()
+    warnings: list[str] = []
+    entry = _read_dashboard_json(root, "market_dashboard_entry.json", warnings)
+    health = _read_dashboard_json(root, "market_dashboard_health_check.json", warnings)
+    api_contract = _read_dashboard_json(
+        root, "frontend_backend_api_contract_audit.json", warnings
+    )
+    workflow = _read_dashboard_json(root, "yield_refetch_workflow_status.json", warnings)
+
+    cards = entry.get("cards") if isinstance(entry.get("cards"), list) else []
+    health_summary = health.get("summary") if isinstance(health.get("summary"), dict) else {}
+    expected_entry_cards = health_summary.get("entry_cards")
+    if isinstance(expected_entry_cards, int) and expected_entry_cards != len(cards):
+        warnings.append(
+            f"entry card count mismatch: entry={len(cards)} health={expected_entry_cards}"
+        )
+    key_files = [
+        "index.html",
+        "market_dashboard_entry.html",
+        "market_dashboard_entry.json",
+        "market_dashboard_health_check.html",
+        "market_dashboard_health_check.json",
+        "frontend_backend_api_contract_audit.html",
+        "frontend_backend_api_contract_audit.json",
+        "yield_refetch_workflow_status.html",
+        "yield_refetch_workflow_status.json",
+    ]
+    static_files = {filename: (root / filename).is_file() for filename in key_files}
+    entry_link_status = _entry_link_status(root, cards, warnings)
+    html_files = [filename for filename in key_files if filename.endswith(".html")]
+    for link, link_status in entry_link_status.items():
+        if link_status.get("kind") == "local_file" and link.lower().endswith(".html"):
+            html_files.append(link)
+    html_content_status = _html_content_status(root, html_files, warnings)
+    required_ok = all(
+        [
+            _status_is_ok(entry.get("status")),
+            _status_is_ok(health.get("status")),
+            _status_is_ok(api_contract.get("status")),
+            static_files["index.html"],
+            static_files["market_dashboard_entry.html"],
+        ]
+    )
+    status = "pass" if required_ok and not warnings else "needs_attention"
+    workflow_steps = workflow.get("steps")
+    return {
+        "status": status,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "dashboard_root": str(root),
+        "entry_url": "/market-dashboard/",
+        "entry": {
+            "status": entry.get("status"),
+            "title": entry.get("title"),
+            "updated_at": entry.get("updated_at"),
+            "card_count": len(cards),
+            "cards": cards[:20],
+            "data_status_visible": bool(entry.get("data_status_visible")),
+            "data_api": entry.get("data_api"),
+        },
+        "health": {
+            "status": health.get("status"),
+            "summary": health_summary,
+        },
+        "api_contract": {
+            "status": api_contract.get("status"),
+            "summary": api_contract.get("summary", {}),
+        },
+        "workflow": {
+            "status": workflow.get("status"),
+            "current_coverage_pct": workflow.get("current_coverage_pct"),
+            "step_count": _dashboard_list_count(workflow_steps),
+        },
+        "static_files": static_files,
+        "entry_link_status": entry_link_status,
+        "html_content_status": html_content_status,
+        "warnings": warnings,
+        "write_to_current_yields": False,
+        "external_fetch_executed": False,
+        "auto_trading": False,
+        "call_real_api": False,
+    }
+
+def _critical_route_status() -> JsonDict:
+    route_set = set(available_routes())
+    critical = [
+        "GET /api/data/status",
+        "POST /api/data/status",
+        "GET /api/data/quality",
+        "POST /api/data/quality",
+        "GET /api/market-dashboard/status",
+        "POST /api/market-dashboard/status",
+        "POST /api/market/refresh",
+        "POST /api/market/rag/build",
+        "POST /api/market/financials",
+        "POST /api/market/bars",
+        "POST /api/market/forecast/screen",
+        "POST /api/financials/preview",
+        "POST /api/edinet/status",
+        "POST /api/rag/search",
+        "POST /api/orchestrate",
+    ]
+    return {route: route in route_set for route in critical}
+
+
+def _route_groups(routes: list[str]) -> JsonDict:
+    groups: dict[str, list[str]] = {}
+    for route in routes:
+        _, raw_path = route.split(" ", 1)
+        parts = [part for part in raw_path.split("/") if part]
+        key = parts[1] if len(parts) > 1 and parts[0] == "api" else "other"
+        groups.setdefault(key, []).append(route)
+    return {key: sorted(value) for key, value in sorted(groups.items())}
+
+
+def _unknown_endpoint(method: str, path: str) -> JsonDict:
+    normalized = f"{method.upper()} {path.rstrip('/') or '/'}"
+    routes = available_routes()
+    closest = get_close_matches(normalized, routes, n=8, cutoff=0.45)
+    if not closest:
+        path_only = path.rstrip("/") or "/"
+        closest = [route for route in routes if path_only in route][:8]
+    return {
+        "error": f"no such endpoint: {method} {path}",
+        "kind": "endpoint_not_found",
+        "requested": {"method": method.upper(), "path": path},
+        "hint": (
+            "フロント側のコードが古い、またはバックエンド側のルートが古い可能性があります。"
+            "/api/system/diagnostics で利用可能なAPIと市場ダッシュボード状態を確認してください。"
+        ),        "closest_routes": closest,
+        "available_routes": routes,
+        "route_count": len(routes),
+        "auto_trading": False,
+        "call_real_api": False,
+    }
 
 
 def _budget(_: JsonDict) -> JsonDict:
@@ -145,6 +401,366 @@ def _rag_answer(body: JsonDict) -> JsonDict:
     return result
 
 
+def _chat_simulate(body: JsonDict) -> JsonDict:
+    """Chat-triggered portfolio simulation with optional Yahoo Finance DPS overrides.
+
+    Accepts:
+      query                  : str  – natural-language question (for context only)
+      holdings               : list – [{ticker, name, price, dividend_per_share?, ...}]
+      budget                 : float – total budget in JPY (use when splitting by weight)
+      target_annual_dividend : float – target gross annual dividend (triggers reverse mode)
+      dividend_overrides     : dict  – {ticker: dps_float} appended to each holding
+      auto_weight            : str   – equal|safety|amount|shares (default equal)
+      optimization           : str   – none|cash_min|dividend_max|balanced
+      dividend_basis         : str   – conservative|latest
+      net_target             : bool  – interpret target as after-tax
+    """
+    import re
+    from investment_assistant.portfolio.simulator import (
+        plan_for_target_dividend,
+        simulate_portfolio,
+    )
+
+    query = _require_str(body, "query")
+    raw = body.get("holdings")
+    holdings: list[JsonDict] = [h for h in raw if isinstance(h, dict)] if isinstance(raw, list) else []
+
+    # Apply per-ticker dividend overrides (e.g. from Yahoo Finance)
+    overrides: dict[str, float] = {}
+    raw_ov = body.get("dividend_overrides")
+    if isinstance(raw_ov, dict):
+        for k, v in raw_ov.items():
+            f = _as_float(v, -1.0)
+            if f >= 0:
+                overrides[str(k)] = f
+    if overrides:
+        holdings = [
+            {**h, "dividend_per_share": overrides[str(h.get("ticker", ""))]}
+            if str(h.get("ticker", "")) in overrides
+            else h
+            for h in holdings
+        ]
+
+    common: JsonDict = {
+        "years": _as_int(body.get("years"), 10),
+        "reinvest": _as_bool(body.get("reinvest"), True),
+        "growth_rate": _as_float(body.get("growth_rate"), 0.0),
+        "auto_weight": str(body.get("auto_weight") or "equal"),
+        "optimization": str(body.get("optimization") or "none"),
+        "dividend_basis": str(body.get("dividend_basis") or "latest"),
+        "financials_csv": str(body.get("financials_csv") or DEFAULT_FINANCIALS_CSV),
+    }
+
+    target = _as_float(body.get("target_annual_dividend"), 0.0)
+    budget = _as_float(body.get("budget"), 0.0)
+
+    if not holdings:
+        return {"error": "holdings が空です。銘柄リストを渡してください。", "available": False}
+
+    if target > 0:
+        result = plan_for_target_dividend(
+            target_annual_dividend=target,
+            holdings=holdings,
+            net_target=_as_bool(body.get("net_target"), False),
+            **common,
+        )
+    elif budget > 0:
+        result = simulate_portfolio(budget=budget, holdings=holdings, **common)
+    else:
+        return {"error": "budget または target_annual_dividend を指定してください。", "available": False}
+
+    # Build markdown answer for the chat panel
+    result["answer"] = _sim_to_markdown(query, result, target=target)
+    result["text"] = result["answer"]
+    return result
+
+
+def _sim_to_markdown(query: str, result: dict, *, target: float = 0.0) -> str:
+    """Format simulator output as Japanese markdown for the chat response."""
+    if not result.get("available"):
+        hint = result.get("hint", "シミュレーション結果が取得できませんでした。")
+        return f"**シミュレーション失敗**: {hint}"
+
+    summary = result.get("summary", {})
+    allocs = result.get("allocations", [])
+    invested = int(summary.get("invested") or 0)
+    budget_val = int(summary.get("budget") or 0)
+    annual = int(summary.get("annual_dividend") or 0)
+    annual_net = int(summary.get("annual_dividend_net") or 0)
+    yield_pct = float(summary.get("portfolio_yield") or 0) * 100
+    basis = summary.get("dividend_basis", "latest")
+    basis_label = "保守的試算（ボリンジャー下限）" if basis == "conservative" else "直近配当額"
+
+    lines = [
+        f"## ポートフォリオシミュレーション",
+        f"",
+        f"**投資総額**: {invested:,}円（予算 {budget_val:,}円）",
+        f"**年間配当（税引前）**: {annual:,}円（{basis_label}）",
+        f"**年間配当（税引後概算）**: {annual_net:,}円",
+        f"**ポートフォリオ利回り**: {yield_pct:.2f}%",
+        f"",
+        f"| 銘柄 | 株数 | 投資額 | 年間配当 | 利回り | 安全スコア |",
+        f"|------|------|--------|---------|--------|-----------|",
+    ]
+    for a in allocs:
+        name = a.get("name", "")
+        ticker = a.get("ticker", "")
+        shares = int(a.get("shares") or 0)
+        inv = int(a.get("invested") or 0)
+        div = int(a.get("annual_dividend") or 0)
+        yld = float(a.get("yield") or 0) * 100
+        safety = float(a.get("safety") or 0)
+        lines.append(f"| {name}({ticker}) | {shares:,}株 | {inv:,}円 | {div:,}円 | {yld:.2f}% | {safety:.2f} |")
+
+    if "target" in result:
+        t = result["target"]
+        tgt = int(t.get("target_annual_dividend") or 0)
+        achieved = int(t.get("achieved_annual_dividend") or 0)
+        req_budget = int(t.get("required_budget") or 0)
+        reachable = bool(t.get("reachable"))
+        status = "✅ 達成" if reachable else "❌ 未達（銘柄追加または目標引き下げを検討）"
+        lines.extend([
+            f"",
+            f"**目標配当**: {tgt:,}円 → **{status}**",
+            f"**達成配当**: {achieved:,}円 / 必要予算: {req_budget:,}円",
+        ])
+    elif target > 0:
+        status = "✅ 達成" if annual >= target else f"❌ 未達（{annual:,}円 / 目標{int(target):,}円）"
+        lines.extend(["", f"**目標配当 {int(target):,}円に対して**: {status}"])
+
+    conc = summary.get("concentration", {})
+    hhi = float(conc.get("hhi") or 0)
+    eff = float(conc.get("effective_names") or 0)
+    lines.extend([
+        f"",
+        f"**集中度(HHI)**: {hhi:.3f}　**実効銘柄数**: {eff:.1f}",
+        f"",
+        f"> {result.get('disclaimer', '')}",
+    ])
+    return "\n".join(lines)
+
+
+_SIMULATIONS_PATH = Path(__file__).resolve().parents[3] / "local_docs" / "simulations" / "saved.json"
+
+
+def _save_simulation(body: JsonDict) -> JsonDict:
+    """保存: シミュレーション結果をJSONファイルに追記する。
+
+    Request:  { "name": str, "query": str, "result": {...} }
+    Response: { "saved": true, "id": str, "name": str, "total": int }
+    """
+    import json
+
+    name = str(body.get("name") or "").strip()
+    if not name:
+        name = f"simulation-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+    result = body.get("result")
+    if not isinstance(result, dict):
+        raise ApiError("result is required and must be an object")
+
+    _SIMULATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: list[JsonDict] = []
+    if _SIMULATIONS_PATH.exists():
+        try:
+            raw = json.loads(_SIMULATIONS_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                existing = raw
+        except Exception:
+            existing = []
+
+    record: JsonDict = {
+        "id": datetime.now(UTC).strftime("%Y%m%d%H%M%S%f"),
+        "name": name,
+        "saved_at": datetime.now(UTC).isoformat(),
+        "query": str(body.get("query") or ""),
+        "result": result,
+    }
+    existing.append(record)
+    _SIMULATIONS_PATH.write_text(
+        json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return {"saved": True, "id": record["id"], "name": name, "total": len(existing)}
+
+
+def _list_simulations(_: JsonDict) -> JsonDict:
+    """保存済みシミュレーション一覧を返す（新しい順）。"""
+    import json
+
+    if not _SIMULATIONS_PATH.exists():
+        return {"simulations": [], "total": 0}
+    try:
+        raw = json.loads(_SIMULATIONS_PATH.read_text(encoding="utf-8"))
+        sims: list[JsonDict] = list(reversed(raw)) if isinstance(raw, list) else []
+    except Exception as exc:
+        return {"simulations": [], "total": 0, "error": f"{type(exc).__name__}: {exc}"}
+    return {"simulations": sims, "total": len(sims)}
+
+
+def _delete_simulation(body: JsonDict) -> JsonDict:
+    """指定IDのシミュレーションを削除する。
+
+    Request:  { "id": str }
+    Response: { "deleted": true, "id": str, "total": int }
+    """
+    import json
+
+    sim_id = _require_str(body, "id")
+    if not _SIMULATIONS_PATH.exists():
+        raise ApiError(f"simulation not found: {sim_id}")
+    try:
+        raw = json.loads(_SIMULATIONS_PATH.read_text(encoding="utf-8"))
+        existing: list[JsonDict] = raw if isinstance(raw, list) else []
+    except Exception as exc:
+        raise ApiError(f"failed to read simulations: {exc}") from exc
+
+    before = len(existing)
+    existing = [s for s in existing if str(s.get("id", "")) != sim_id]
+    if len(existing) == before:
+        raise ApiError(f"simulation not found: {sim_id}")
+
+    _SIMULATIONS_PATH.write_text(
+        json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return {"deleted": True, "id": sim_id, "total": len(existing)}
+
+
+def _compute_plans(body: JsonDict) -> JsonDict:
+    """複数プランの配当ポートフォリオを一括計算する。
+
+    Request:
+      plans: [{ id: str, label: str, stocks: [{ticker, name, price, dps}] }]
+      target_annual_dividend: float  (いずれか必須)
+      budget: float
+    Response:
+      plans: { id: { label, allocations, summary } }
+      plan_comparison: [{ plan, label, invested, annual_dividend, yield }]
+    """
+    from investment_assistant.financials.evidence import DEFAULT_FINANCIALS_CSV
+    from investment_assistant.portfolio.simulator import (
+        plan_for_target_dividend,
+        simulate_portfolio,
+    )
+
+    raw_plans = body.get("plans")
+    if not isinstance(raw_plans, list) or not raw_plans:
+        raise ApiError("plans は必須です（例: [{id:'A', label:'...', stocks:[...]}]）")
+
+    target = _as_float(body.get("target_annual_dividend"), 0.0)
+    budget = _as_float(body.get("budget"), 0.0)
+    if target <= 0 and budget <= 0:
+        raise ApiError("target_annual_dividend または budget を指定してください")
+
+    common: JsonDict = {
+        "years": _as_int(body.get("years"), 10),
+        "reinvest": _as_bool(body.get("reinvest"), True),
+        "growth_rate": 0.0,
+        "auto_weight": "equal",
+        "optimization": "none",
+        "dividend_basis": "latest",
+        "financials_csv": DEFAULT_FINANCIALS_CSV,
+    }
+
+    out_plans: JsonDict = {}
+    comparison: list[JsonDict] = []
+
+    for p in raw_plans:
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id") or "").strip()
+        label = str(p.get("label") or pid)
+        stocks = p.get("stocks")
+        if not isinstance(stocks, list) or not stocks:
+            out_plans[pid] = {"label": label, "available": False, "error": "銘柄が空です"}
+            continue
+
+        holdings: list[JsonDict] = []
+        for s in stocks:
+            if not isinstance(s, dict):
+                continue
+            ticker = str(s.get("ticker") or "").strip()
+            name = str(s.get("name") or ticker)
+            price = _as_float(s.get("price"), 0.0)
+            dps = _as_float(s.get("dps"), 0.0)
+            if not ticker or price <= 0 or dps <= 0:
+                continue
+            holdings.append({
+                "ticker": ticker,
+                "name": name,
+                "price": price,
+                "dividend_per_share": dps,
+            })
+
+        if not holdings:
+            out_plans[pid] = {"label": label, "available": False, "error": "有効な銘柄がありません（価格・DPSが必須）"}
+            continue
+
+        try:
+            if target > 0:
+                result = plan_for_target_dividend(
+                    target_annual_dividend=target, holdings=holdings, **common
+                )
+            else:
+                result = simulate_portfolio(budget=budget, holdings=holdings, **common)
+
+            summary = result.get("summary", {})
+            out_plans[pid] = {
+                "label": label,
+                "allocations": result.get("allocations", []),
+                "summary": summary,
+                "available": bool(result.get("available", False)),
+            }
+            comparison.append({
+                "plan": pid,
+                "label": label,
+                "invested": summary.get("invested", 0),
+                "annual_dividend": summary.get("annual_dividend", 0),
+                "yield": summary.get("portfolio_yield", 0),
+            })
+        except Exception as exc:
+            out_plans[pid] = {"label": label, "available": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    return {
+        "plans": out_plans,
+        "plan_comparison": comparison,
+        "available": bool(out_plans),
+    }
+
+
+def _yahoo_dps(body: JsonDict) -> JsonDict:
+    """Yahoo Finance 非公式APIから1株配当(DPS)をバッチ取得する。
+
+    Request:  { "tickers": ["7267", "2914", ...] }
+    Response: { "dps": {"7267": 70.0, ...}, "sources": {...}, "notes": {...} }
+    """
+    from investment_assistant.portfolio.yahoo_financials import fetch_yahoo_financials
+
+    raw = body.get("tickers")
+    tickers: list[str] = (
+        [str(t).strip() for t in raw if str(t).strip()] if isinstance(raw, list) else []
+    )
+    if not tickers:
+        return {"error": "tickers is required", "dps": {}}
+
+    result = fetch_yahoo_financials(tickers)
+    financials: dict[str, dict[str, object]] = result.get("financials", {})  # type: ignore[assignment]
+
+    dps_map: dict[str, float] = {}
+    for ticker, metrics in financials.items():
+        if isinstance(metrics, dict):
+            v = metrics.get("dps")
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                dps_map[ticker] = float(v)
+
+    return {
+        "dps": dps_map,
+        "sources": result.get("sources", {}),
+        "notes": result.get("notes", {}),
+        "matched": len(dps_map),
+        "total": len(tickers),
+    }
+
+
 def _resolve_stock_score(
     body: JsonDict, target_source: str, financials_csv: str
 ) -> dict[str, object] | None:
@@ -159,6 +775,26 @@ def _resolve_stock_score(
     if row is not None:
         row["strategy_label"] = STRATEGY_LABELS.get(strategy, strategy)
     return row
+
+
+def _resolve_stock_forecast(body: JsonDict, target_source: str) -> dict[str, object] | None:
+    from investment_assistant.financials.evidence import ticker_from_source
+    from investment_assistant.portfolio.market_forecast import forecast_ticker
+
+    ticker = str(body.get("ticker") or "").strip() or ticker_from_source(target_source or None)
+    if not ticker:
+        return None
+    daily_bars_csv = str(body.get("daily_bars_csv") or _DEFAULT_DAILY_BARS_CSV)
+    try:
+        return forecast_ticker(
+            daily_bars_csv=daily_bars_csv,
+            ticker=ticker,
+            horizon=5,
+            include_ml=False,
+            evaluate=True,
+        )
+    except (ValueError, FileNotFoundError, OSError):
+        return None
 
 
 def _orchestrate(body: JsonDict) -> JsonDict:
@@ -193,16 +829,35 @@ def _orchestrate(body: JsonDict) -> JsonDict:
     )
     # Inject the dividend-quality score for the resolved ticker (Chat <- Score).
     stock_score = _resolve_stock_score(body, target_source, financials_csv)
-    if stock_score is not None and financial_evidence:
-        financial_evidence += (
+    # Inject a statistical price forecast for the resolved ticker (Chat <- Forecast).
+    stock_forecast = _resolve_stock_forecast(body, target_source)
+    evidence_text = financial_evidence or ""
+    if stock_score is not None and evidence_text:
+        evidence_text += (
             f"\n配当品質スコア: {stock_score['total_score']} / 1.0"
             f"（戦略: {stock_score.get('strategy_label', 'バランス')}）"
         )
+    if stock_forecast is not None:
+        forecast_values = stock_forecast.get("forecast")
+        last_close = stock_forecast.get("last_close")
+        if (
+            isinstance(forecast_values, list)
+            and forecast_values
+            and isinstance(last_close, int | float)
+        ):
+            fc_close = float(forecast_values[-1])
+            er = (fc_close / float(last_close) - 1.0) * 100.0
+            evidence_text += (
+                f"\n株価予測(統計推定・非助言): 期待リターン {er:+.2f}%"
+                f"（{stock_forecast.get('horizon')}営業日、"
+                f"直近終値 {float(last_close):.0f}円→予測 {fc_close:.0f}円）。"
+                "売買判断ではありません。"
+            )
     evidence_block = (
         "\n\n"
-        + financial_evidence
-        + "\n上記の減配履歴・財務トレンド・スコアを根拠として明示的に反映してください。"
-        if financial_evidence
+        + evidence_text
+        + "\n上記の減配履歴・財務トレンド・スコア・予測を根拠として明示的に反映してください。"
+        if evidence_text
         else ""
     )
 
@@ -228,6 +883,7 @@ def _orchestrate(body: JsonDict) -> JsonDict:
     result["target_source"] = target_source or None
     result["financial_evidence"] = financial_evidence
     result["stock_score"] = stock_score
+    result["stock_forecast"] = stock_forecast
 
     result["orchestration"] = {
         "drafter": "AI 1/2/3",
@@ -888,8 +1544,37 @@ def _yaml_scalar(value: object) -> str:
     return f'"{text}"'
 
 
+def _dev_build(_: JsonDict) -> JsonDict:
+    """開発用: フロントエンドをビルドする（npm run build）。"""
+    import subprocess
+    import sys
+    web_dir = Path(__file__).resolve().parents[3] / "web"
+    # Windows では cmd /c 経由で npm.cmd を呼ぶ
+    if sys.platform == "win32":
+        cmd = ["cmd", "/c", "npm", "run", "build"]
+    else:
+        cmd = ["npm", "run", "build"]
+    result = subprocess.run(
+        cmd,
+        cwd=str(web_dir),
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    return {
+        "returncode": result.returncode,
+        "stdout": result.stdout[-2000:] if result.stdout else "",
+        "stderr": result.stderr[-2000:] if result.stderr else "",
+        "ok": result.returncode == 0,
+    }
+
+
 _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/health"): _health,
+    ("GET", "/api/system/diagnostics"): _system_diagnostics,
+    ("GET", "/api/market-dashboard/status"): _market_dashboard_status,
+    ("POST", "/api/market-dashboard/status"): _market_dashboard_status,
+    ("POST", "/api/system/diagnostics"): _system_diagnostics,
     ("GET", "/api/budget"): _budget,
     ("GET", "/api/runtime/real-api"): _runtime_real_api_status,
     ("POST", "/api/runtime/real-api"): _runtime_real_api_set,
@@ -897,6 +1582,14 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/rag/search"): _rag_search,
     ("POST", "/api/rag/answer-context"): _rag_answer_context,
     ("POST", "/api/rag/answer"): _rag_answer,
+    ("POST", "/api/chat/simulate"): _chat_simulate,
+    ("POST", "/api/yahoo/dps"): _yahoo_dps,
+    ("POST", "/api/simulations/save"): _save_simulation,
+    ("POST", "/api/simulations/delete"): _delete_simulation,
+    ("GET", "/api/simulations"): _list_simulations,
+    ("POST", "/api/simulations"): _list_simulations,
+    ("POST", "/api/simulations/compute-plans"): _compute_plans,
+    ("POST", "/api/dev/build"): _dev_build,
     ("POST", "/api/orchestrate"): _orchestrate,
     ("POST", "/api/rag/index-dir"): _rag_index_dir,
     ("POST", "/api/manual-doc/save"): _manual_doc_save,
@@ -923,7 +1616,10 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/market/gaps"): market_api.market_gaps,
     ("POST", "/api/market/backfill"): market_api.market_backfill,
     ("POST", "/api/market/refresh"): market_api.market_refresh,
+    ("GET", "/api/data/status"): data_status_api.data_status,
     ("POST", "/api/data/status"): data_status_api.data_status,
+    ("GET", "/api/data/quality"): data_status_api.data_quality_profile,
+    ("POST", "/api/data/quality"): data_status_api.data_quality_profile,
     ("POST", "/api/financials/preview"): data_status_api.financials_preview,
     ("POST", "/api/providers/policy"): _provider_policy_ledger,
     ("POST", "/api/portfolio/performance"): portfolio_api.portfolio_performance,
@@ -978,8 +1674,29 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/knowledge/diff"): _knowledge_diff,
     ("POST", "/api/feedback"): _feedback,
     ("POST", "/api/feedback/stats"): _feedback_stats,
+    # Investment AI — data pipeline + scoring + LLM analysis
+    ("POST", "/api/stocks/collect"): stock_analysis_api.stocks_collect,
+    ("POST", "/api/stocks/import"): stock_analysis_api.stocks_import,
+    ("POST", "/api/stocks/score"): stock_analysis_api.stocks_score,
+    ("POST", "/api/stocks/analyze"): stock_analysis_api.stocks_analyze,
+    ("POST", "/api/stocks/status"): stock_analysis_api.stocks_status,
+    # JPX NeuroFinance — データ状態・ML結果取得・パイプライン実行
+    ("GET",  "/api/jpx/status"):  jpx_api.jpx_status,
+    ("POST", "/api/jpx/status"):  jpx_api.jpx_status,
+    ("POST", "/api/jpx/results"): jpx_api.jpx_results,
+    ("POST", "/api/jpx/run"):     jpx_api.jpx_run,
+    # Flick（入力系）— 差分収集・陳腐化チェック
+    ("POST", "/api/flick/update"): sprint_api.flick_update,
+    ("POST", "/api/flick/status"): sprint_api.flick_status,
+    ("POST", "/api/flick/append"): sprint_api.flick_append,
+    ("POST", "/api/flick/score-all"): sprint_api.flick_score_all,
+    # Sprint（出力系）— キャッシュからの即時応答
+    ("POST", "/api/sprint/rank"): sprint_api.sprint_rank,
+    ("POST", "/api/sprint/status"): sprint_api.sprint_status,
 }
 
 
 def available_routes() -> list[str]:
     return sorted(f"{method} {path}" for method, path in _ROUTES)
+
+

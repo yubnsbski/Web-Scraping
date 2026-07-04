@@ -21,6 +21,8 @@ const QUICK_QUERY_PRESETS = [
   "株主還元 自社株買い",
   "NISA 枠",
   "集中リスク",
+  "株価 予測 上昇率",
+  "予測 期待リターン 上位",
 ];
 
 function parseTickers(text: string): string[] {
@@ -2446,7 +2448,12 @@ function ForecastScreenPanel(props: { onOpenDetail: (code: string) => void }) {
         </button>
       </ActionRow>
       <Status loading={screen.loading} error={screen.error} />
-      {screen.data && (
+      {screen.data && results.length === 0 && (
+        <p className="hint">
+          条件に合う銘柄がありません。OHLCV取得数を増やすか、妥当性上限(±%)を緩めてください。
+        </p>
+      )}
+      {screen.data && results.length > 0 && (
         <div className="detail-section">
           <p className="hint">
             {String(screen.data.ranked_count ?? results.length)} 件（期待リターン降順 /
