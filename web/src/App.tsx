@@ -50,16 +50,19 @@ const TABS: Array<{
   group: "main" | "more";
   hidden?: boolean;
 }> = [
-  { id: "dashboard", label: "全体", short: "全体", group: "main" },
-  { id: "data", label: "データ更新", short: "更新", group: "main" },
+  // Sprint-2 nav reorg: the AI advisor is the front door. Primary (main)
+  // group is the 4-step "just ask" workflow; everything else moves to the
+  // 詳細機能 (advanced) group below.
+  { id: "chat", label: "AIアドバイザー", short: "AI", group: "main" },
   { id: "holdings", label: "保有分析", short: "保有", group: "main" },
   { id: "screen", label: "候補抽出", short: "候補", group: "main" },
-  { id: "report", label: "レポート", short: "報告", group: "main" },
+  { id: "data", label: "データ更新", short: "更新", group: "main" },
+  { id: "dashboard", label: "全体", short: "全体", group: "more" },
+  { id: "report", label: "レポート", short: "報告", group: "more" },
   { id: "watch", label: "ウォッチ", short: "監視", group: "more" },
   { id: "detail", label: "詳細", short: "詳細", group: "more" },
   { id: "forecast", label: "予測スクリーニング", short: "予測", group: "more" },
   { id: "rag", label: "RAG検索", short: "RAG", group: "more" },
-  { id: "chat", label: "AI確認", short: "AI", group: "more" },
   { id: "plans", label: "プラン設計", short: "設計", group: "more" },
   // aistock (StockAiPanel, /api/stocks/*) intentionally hidden — see
   // SHOW_ADVANCED_TABS above. Component and client code stay intact.
@@ -73,7 +76,7 @@ const MORE_TABS = VISIBLE_TABS.filter((item) => item.group === "more");
 export function App() {
   const [tab, setTab] = useState<TabId>(() => {
     const saved = localStorage.getItem("ia.tab");
-    return VISIBLE_TABS.some((item) => item.id === saved) ? (saved as TabId) : "dashboard";
+    return VISIBLE_TABS.some((item) => item.id === saved) ? (saved as TabId) : "chat";
   });
   useEffect(() => {
     localStorage.setItem("ia.tab", tab);
@@ -136,7 +139,7 @@ export function App() {
             </button>
           ))}
           <details className="nav-more">
-            <summary>その他</summary>
+            <summary>詳細機能</summary>
             <div className="nav-more-list">
               {MORE_TABS.map((item) => (
                 <button
@@ -293,16 +296,31 @@ export function App() {
           />
         )}
         {tab === "chat" && (
-          <ChatPanel
-            draft={chatDraft}
-            onDraftChange={setChatDraft}
-            holdingsCsv={holdingsCsv}
-            onSearchAgain={(draft) => {
-              setRagDraft(draft);
-              setTab("rag");
-            }}
-            onOpenData={() => setTab("data")}
-          />
+          <>
+            <details className="advisor-workflow">
+              <summary>今週のワークフロー（データ更新→保有分析→候補抽出→レポート）</summary>
+              <OneClickPanel
+                holdingsCsv={holdingsCsv}
+                financialsPath={financialsPath}
+                watchTickers={watchTickers}
+                onMarket={setMarketSnapshot}
+                onAnalysis={setAnalysis}
+                onCandidates={setCandidates}
+                onReport={setReport}
+                onMove={setTab}
+              />
+            </details>
+            <ChatPanel
+              draft={chatDraft}
+              onDraftChange={setChatDraft}
+              holdingsCsv={holdingsCsv}
+              onSearchAgain={(draft) => {
+                setRagDraft(draft);
+                setTab("rag");
+              }}
+              onOpenData={() => setTab("data")}
+            />
+          </>
         )}
         {tab === "plans" && <PlanBuilderPanel />}
         {tab === "aistock" && <StockAiPanel />}
@@ -2976,6 +2994,33 @@ function ChatPanel(props: {
   const [saveName, setSaveName] = useState("");
   const isSimResult = state.data !== null;
 
+  // --- Real-AI mode toggle (Sprint 2) ---
+  // OFF (default): offline pseudo-answer, no Gemini budget spent.
+  // ON: orchestrate / rag-answer requests ask the backend to call Gemini
+  // for real, and we show a compact remaining-daily-calls meter.
+  const [realAi, setRealAi] = useState<boolean>(
+    () => localStorage.getItem("ia.realAi") === "1",
+  );
+  useEffect(() => {
+    localStorage.setItem("ia.realAi", realAi ? "1" : "0");
+  }, [realAi]);
+  const [budgetInfo, setBudgetInfo] = useState<Json | null>(null);
+  const refreshBudget = async () => {
+    try {
+      const res = await api<Json>("/api/budget");
+      setBudgetInfo(res);
+    } catch (_e) {
+      // Budget fetch is best-effort UI sugar; hide the meter, don't crash.
+      setBudgetInfo(null);
+    }
+  };
+  useEffect(() => {
+    if (realAi) void refreshBudget();
+    else setBudgetInfo(null);
+    // Only re-fetch when the toggle flips, per spec (event-driven, no polling).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realAi]);
+
   const loadSavedSims = async () => {
     try {
       const res = await api<Json>("/api/simulations");
@@ -3114,24 +3159,34 @@ function ChatPanel(props: {
     if (isSimQuery(query) && (props.holdingsCsv ?? "").includes("ticker_or_fund_code")) {
       return askSimulate();
     }
-    return state.run(() =>
-      api<Json>("/api/rag/answer", {
-        query,
-        db_path: dbPath,
-        limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-        call_real_api: false,
-      }),
-    );
+    return state
+      .run(() =>
+        api<Json>("/api/rag/answer", {
+          query,
+          db_path: dbPath,
+          limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+          call_real_api: realAi,
+        }),
+      )
+      .then((result) => {
+        if (realAi) void refreshBudget();
+        return result;
+      });
   };
   const askDetailed = () =>
-    state.run(() =>
-      api<Json>("/api/orchestrate", {
-        query,
-        db_path: dbPath,
-        limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-        call_real_api: false,
-      }),
-    );
+    state
+      .run(() =>
+        api<Json>("/api/orchestrate", {
+          query,
+          db_path: dbPath,
+          limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+          call_real_api: realAi,
+        }),
+      )
+      .then((result) => {
+        if (realAi) void refreshBudget();
+        return result;
+      });
   const askWith = (q: string) => {
     updateQuery(q);
     if (isSimQuery(q) && (props.holdingsCsv ?? "").includes("ticker_or_fund_code")) {
@@ -3161,20 +3216,36 @@ function ChatPanel(props: {
         });
       });
     }
-    return state.run(() =>
-      api<Json>("/api/rag/answer", {
-        query: q,
-        db_path: dbPath,
-        limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-        call_real_api: false,
-      }),
-    );
+    return state
+      .run(() =>
+        api<Json>("/api/rag/answer", {
+          query: q,
+          db_path: dbPath,
+          limit: Number(limit) || DEFAULT_CHAT_LIMIT,
+          call_real_api: realAi,
+        }),
+      )
+      .then((result) => {
+        if (realAi) void refreshBudget();
+        return result;
+      });
   };
   const hasHoldings = (props.holdingsCsv ?? "").includes("ticker_or_fund_code") &&
     holdingsCsvToSimHoldings(props.holdingsCsv ?? "").length > 0;
   return (
     <section className="screen">
-      <ScreenTitle title="AI確認" body="RAGの根拠確認 + 保有分析の銘柄でポートフォリオシミュレーションができます。" />
+      <ScreenTitle title="AIアドバイザー" body="RAGの根拠確認 + 保有分析の銘柄でポートフォリオシミュレーションができます。" />
+      <div className="advisor-realai-row">
+        <Check label="本物のAI (Gemini)" checked={realAi} onChange={setRealAi} />
+        {realAi && budgetInfo && (
+          <span className={budgetInfo.warning ? "badge warn" : "badge ready"}>
+            残り本日 {String(budgetInfo.daily_remaining)}/{String(budgetInfo.hard_daily_limit)}
+          </span>
+        )}
+      </div>
+      {!realAi && (
+        <p className="hint">オフライン簡易応答モード（本物のAIをオンにするとGemini APIで回答します）</p>
+      )}
       <div className="form-grid tight">
         <Field label="RAG DB">
           <input value={dbPath} onChange={(event) => updateDbPath(event.target.value)} />

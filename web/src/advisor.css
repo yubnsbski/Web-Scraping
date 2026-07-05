@@ -1,0 +1,45 @@
+/* Sprint 2: AI advisor landing view.
+   New file (styles.css is a parallel work stream — do not merge into it).
+   Keeps the "今週のワークフロー" strip visually secondary to the chat box on
+   the chat tab: it reuses the existing .oneclick panel styling but is
+   collapsed by default via <details>/<summary>. */
+
+.advisor-workflow {
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.advisor-workflow > summary {
+  min-height: 40px;
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 800;
+  list-style: none;
+}
+
+.advisor-workflow > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advisor-workflow > summary::before {
+  content: "▸ ";
+}
+
+.advisor-workflow[open] > summary::before {
+  content: "▾ ";
+}
+
+.advisor-workflow .oneclick {
+  margin: 0 12px 12px;
+}
+
+.advisor-realai-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
