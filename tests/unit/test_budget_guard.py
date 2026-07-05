@@ -67,3 +67,49 @@ def test_cache_hits_do_not_count_against_budget(tmp_path):
     guard.record_call("rag_answer", "gemini", "hash", cache_hit=True, at=now)
 
     assert guard.check("rag_answer", at=now).allowed is True
+
+
+def test_cooldown_blocks_check_with_cooldown_reason(tmp_path):
+    guard = BudgetGuard(
+        tmp_path / "usage.sqlite",
+        BudgetConfig(daily_request_limit=100, monthly_request_limit=1000),
+    )
+    now = datetime(2026, 6, 3, 12, tzinfo=UTC)
+
+    assert guard.in_cooldown(at=now) is False
+
+    guard.record_cooldown(30, at=now)
+
+    assert guard.in_cooldown(at=now) is True
+    decision = guard.check("rag_answer", at=now)
+    assert decision.allowed is False
+    assert decision.reason == "cooldown"
+
+
+def test_cooldown_expires_after_configured_minutes(tmp_path):
+    guard = BudgetGuard(
+        tmp_path / "usage.sqlite",
+        BudgetConfig(daily_request_limit=100, monthly_request_limit=1000),
+    )
+    now = datetime(2026, 6, 3, 12, tzinfo=UTC)
+    guard.record_cooldown(30, at=now)
+
+    still_cooling = now.replace(minute=29)
+    after_cooldown = now.replace(hour=13, minute=1)
+
+    assert guard.in_cooldown(at=still_cooling) is True
+    assert guard.in_cooldown(at=after_cooldown) is False
+    assert guard.check("rag_answer", at=after_cooldown).allowed is True
+
+
+def test_record_cooldown_overwrites_previous_cooldown(tmp_path):
+    guard = BudgetGuard(
+        tmp_path / "usage.sqlite",
+        BudgetConfig(daily_request_limit=100, monthly_request_limit=1000),
+    )
+    now = datetime(2026, 6, 3, 12, tzinfo=UTC)
+    guard.record_cooldown(30, at=now)
+    guard.record_cooldown(5, at=now)
+
+    just_past_five = now.replace(minute=6)
+    assert guard.in_cooldown(at=just_past_five) is False

@@ -36,6 +36,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: exercises a real subprocess/network call; excluded from the default run",
+]
 
 [tool.ruff]
 line-length = 100

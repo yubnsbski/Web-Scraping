@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from investment_assistant.llm.budget_guard import BudgetGuard
 from investment_assistant.llm.cache import LlmCache
@@ -32,8 +33,20 @@ class LlmResponse:
     skipped: bool = False
 
 
+class LlmServiceProtocol(Protocol):
+    """Structural type shared by ``LlmService`` and ``ChainLlmService``.
+
+    Orchestration roles depend on this instead of the concrete ``LlmService``
+    class so a role can be backed by a single guarded provider or a chain of
+    them (see ``llm.chain.ChainLlmService``) without changing call sites.
+    """
+
+    def generate(self, *, task_type: str, prompt: str, priority: str = "normal") -> LlmResponse:
+        """Generate text for ``task_type``/``prompt``."""
+
+
 class LlmService:
-    """Single approved entry point for Gemini-backed text generation."""
+    """Single approved entry point for guarded (cache/budget/fallback) text generation."""
 
     def __init__(
         self,
@@ -44,6 +57,9 @@ class LlmService:
         budget_guard: BudgetGuard,
         fallback: FallbackConfig | None = None,
         enforce_budget: bool = True,
+        provider: str = "gemini",
+        cooldown_minutes: int | None = None,
+        count_failed_attempts: bool = False,
     ) -> None:
         self.model = model
         self.client = client
@@ -55,6 +71,19 @@ class LlmService:
         # counted — otherwise the offline pseudo-AI stops producing output once
         # the daily count is reached.
         self.enforce_budget = enforce_budget
+        # Label surfaced on successful responses (``response.source``). Defaults
+        # to "gemini" to keep existing callers/tests (which assert that literal
+        # string) unchanged; other providers (e.g. "codex_cli") pass their own.
+        self.provider = provider
+        # When set, a client error classified as "rate_limit" (via a ``reason``
+        # attribute on the raised exception -- see CodexUnavailableError) puts
+        # this service's budget guard into cooldown for this many minutes so
+        # subsequent calls are skipped without spawning/calling the client.
+        self.cooldown_minutes = cooldown_minutes
+        # When true, a failed client call is recorded against the daily/monthly
+        # budget too (not just successes/cache hits). Off by default so the
+        # existing Gemini budget semantics are unchanged.
+        self.count_failed_attempts = count_failed_attempts
 
     def generate(self, *, task_type: str, prompt: str, priority: str = "normal") -> LlmResponse:
         """Generate text through cache, budget guard, and fallback controls."""
@@ -87,13 +116,19 @@ class LlmService:
         try:
             text = self.client.generate(prompt, model=self.model)
         except Exception as exc:  # noqa: BLE001
+            reason = getattr(exc, "reason", None)
             _logger.warning(
-                "llm call failed task=%s model=%s error=%s; using fallback",
+                "llm call failed task=%s model=%s error=%s reason=%s; using fallback",
                 task_type,
                 self.model,
                 type(exc).__name__,
+                reason,
             )
-            return self._fallback_response("error", prompt, cache_key)
+            if self.enforce_budget and self.count_failed_attempts:
+                self.budget_guard.record_call(task_type, self.model, cache_key, cache_hit=False)
+            if self.cooldown_minutes and reason == "rate_limit":
+                self.budget_guard.record_cooldown(self.cooldown_minutes)
+            return self._fallback_response(reason or "error", prompt, cache_key)
 
         self.cache.set(cache_key, text)
         if self.enforce_budget:
@@ -101,7 +136,7 @@ class LlmService:
         _logger.info(
             "llm call ok task=%s model=%s warning=%s", task_type, self.model, warning
         )
-        return LlmResponse(text, "gemini", cache_key, warning=warning)
+        return LlmResponse(text, self.provider, cache_key, warning=warning)
 
     def _fallback_response(self, reason: str, prompt: str, cache_key: str) -> LlmResponse:
         if reason == "daily_limit_reached":
@@ -129,11 +164,6 @@ class LlmService:
             return ""
 
         normalized = " ".join(prompt.split())
-        if len(normalized) <= max_chars:
-            return normalized
-        return f"{normalized[: max_chars - 1]}…"
-
-
         if len(normalized) <= max_chars:
             return normalized
         return f"{normalized[: max_chars - 1]}…"

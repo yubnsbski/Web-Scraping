@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from investment_assistant.llm.service import LlmResponse, LlmService
+from investment_assistant.llm.service import LlmResponse, LlmServiceProtocol
 from investment_assistant.observability import get_logger
 from investment_assistant.orchestration.prompts import (
     DISCLAIMER,
@@ -113,9 +113,9 @@ class MultiModelOrchestrator:
     def __init__(
         self,
         *,
-        drafter: LlmService,
-        critic: LlmService,
-        synthesizer: LlmService,
+        drafter: LlmServiceProtocol,
+        critic: LlmServiceProtocol,
+        synthesizer: LlmServiceProtocol,
         config: OrchestrationConfig | None = None,
     ) -> None:
         self.drafter = drafter

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -51,6 +51,9 @@ class BudgetGuard:
         daily_count = self.count_daily(now)
         monthly_count = self.count_monthly(now)
 
+        if self.in_cooldown(at=now):
+            return BudgetDecision(False, "cooldown", daily_count, monthly_count)
+
         if daily_count >= self._hard_daily_limit():
             return BudgetDecision(False, "daily_limit_reached", daily_count, monthly_count)
         if monthly_count >= self._hard_monthly_limit():
@@ -87,6 +90,43 @@ class BudgetGuard:
                 """,
                 (now.isoformat(), task_type, model, int(cache_hit), request_hash),
             )
+
+    def record_cooldown(self, minutes: int, *, at: datetime | None = None) -> None:
+        """Put this guard's provider into cooldown for ``minutes`` minutes.
+
+        Used after a rate-limit error so the service skips the provider without
+        spawning another process/request until the cooldown expires. A single
+        row (id=1) tracks the cooldown horizon; a new call simply overwrites it.
+        """
+
+        now = at or datetime.now(UTC)
+        until = now + timedelta(minutes=minutes)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO llm_cooldown (id, until_at) VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET until_at = excluded.until_at
+                """,
+                (until.isoformat(),),
+            )
+
+    def cooldown_until(self) -> datetime | None:
+        """Return the cooldown horizon, if any is recorded."""
+
+        with self._connect() as conn:
+            row = conn.execute("SELECT until_at FROM llm_cooldown WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        return datetime.fromisoformat(str(row[0]))
+
+    def in_cooldown(self, *, at: datetime | None = None) -> bool:
+        """Return whether this guard's provider is currently in cooldown."""
+
+        until = self.cooldown_until()
+        if until is None:
+            return False
+        now = at or datetime.now(UTC)
+        return now < until
 
     def count_daily(self, at: datetime | None = None) -> int:
         """Count non-cached calls for the UTC date containing ``at``."""
@@ -137,6 +177,14 @@ class BudgetGuard:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_gemini_usage_called_at ON gemini_usage(called_at)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS llm_cooldown (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    until_at TEXT NOT NULL
+                )
+                """
             )
 
     def _connect(self) -> sqlite3.Connection:

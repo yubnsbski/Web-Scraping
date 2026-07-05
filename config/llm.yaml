@@ -1,0 +1,24 @@
+providers:
+  codex_cli:
+    # opt-in; see AGENTS.md "Codexプロバイダ (codex_cli) ルール" for the ToS/
+    # compliance note before flipping this to true. Owner-only decision.
+    enabled: false
+    exe: codex
+    # empty = use the codex CLI's own default model
+    model: ""
+    timeout_s: 180
+    usage_db_path: data/runtime/codex_usage.sqlite
+    # owner-approved self-cap, counted against attempts (not just successes)
+    daily_request_limit: 10
+    hard_stop_threshold_ratio: 1.0
+    cooldown_minutes: 30
+# NOTE: this repo's config loader does not support flow-style lists ([a, b]).
+# Always use block-list syntax ("- item" lines) below, or loading fails loudly.
+roles:
+  critic:
+    - codex_cli
+    - gemini
+  drafter:
+    - gemini
+  synthesizer:
+    - gemini
