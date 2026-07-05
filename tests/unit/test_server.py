@@ -1,4 +1,4 @@
-"""Tests for web scraping and ensemble forecasting features."""
+﻿"""Tests for web scraping and ensemble forecasting features."""
 
 import json
 from urllib.error import URLError
@@ -200,3 +200,20 @@ class TestUIIntegration:
                 assert "fetch" in content or "sendMessage" in content
         except URLError:
             pytest.skip("Server not running")
+
+
+def test_static_directory_index_resolves(tmp_path, monkeypatch):
+    """Directory static paths should serve their own index.html before SPA fallback."""
+    from investment_assistant.webapi import server
+
+    dist = tmp_path / "dist"
+    dashboard = dist / "market-dashboard"
+    dashboard.mkdir(parents=True)
+    (dist / "index.html").write_text("spa", encoding="utf-8")
+    (dashboard / "index.html").write_text("dashboard", encoding="utf-8")
+
+    monkeypatch.setattr(server, "FRONTEND_DIST", dist)
+
+    assert server._resolve_static_target("/market-dashboard/") == dashboard / "index.html"
+    assert server._resolve_static_target("/market-dashboard") == dashboard / "index.html"
+

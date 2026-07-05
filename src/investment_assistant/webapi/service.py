@@ -126,6 +126,12 @@ def _read_dashboard_json(root: Path, filename: str, warnings: list[str]) -> Json
     return payload
 
 
+def _read_optional_dashboard_json(root: Path, filename: str, warnings: list[str]) -> JsonDict:
+    if not (root / filename).is_file():
+        return {}
+    return _read_dashboard_json(root, filename, warnings)
+
+
 def _status_is_ok(value: Any) -> bool:
     return str(value or "").lower() in {"ok", "pass", "ready", "success"}
 
@@ -174,6 +180,14 @@ def _entry_link_status(root: Path, cards: list[Any], warnings: list[str]) -> Jso
     return link_status
 
 
+def _entry_html_has_link(root: Path, link: str) -> bool:
+    path = root / "market_dashboard_entry.html"
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return f'href="{link}"' in text or f"href='{link}'" in text or link in text
+
+
 def _market_dashboard_status(_: JsonDict) -> JsonDict:
     root = _market_dashboard_root()
     warnings: list[str] = []
@@ -183,8 +197,54 @@ def _market_dashboard_status(_: JsonDict) -> JsonDict:
         root, "frontend_backend_api_contract_audit.json", warnings
     )
     workflow = _read_dashboard_json(root, "yield_refetch_workflow_status.json", warnings)
+    control_report = _read_optional_dashboard_json(
+        root, "data_quality_control_report.json", warnings
+    )
+    lineage = _read_optional_dashboard_json(root, "lineage.json", warnings)
+    readiness_backlog = _read_optional_dashboard_json(
+        root,
+        "daily_bars_backfill_batch001_slice001_readiness_backlog.json",
+        warnings,
+    )
+    local_evidence = _read_optional_dashboard_json(
+        root,
+        "daily_bars_backfill_batch001_slice001_local_evidence.json",
+        warnings,
+    )
+    review_gate = _read_optional_dashboard_json(
+        root,
+        "daily_bars_backfill_batch001_slice001_review_gate.json",
+        warnings,
+    )
 
     cards = entry.get("cards") if isinstance(entry.get("cards"), list) else []
+    readiness_backlog_link = (
+        "daily_bars_backfill_batch001_slice001_readiness_backlog.html"
+    )
+    local_evidence_link = "daily_bars_backfill_batch001_slice001_local_evidence.html"
+    review_gate_link = "daily_bars_backfill_batch001_slice001_review_gate.html"
+    control_report_visible = any(
+        isinstance(card, dict)
+        and card.get("link") == "data_quality_control_report.html"
+        for card in cards
+    )
+    lineage_visible = _entry_html_has_link(root, "lineage.html") or any(
+        isinstance(card, dict) and card.get("link") == "lineage.html" for card in cards
+    )
+    readiness_backlog_visible = _entry_html_has_link(
+        root, readiness_backlog_link
+    ) or any(
+        isinstance(card, dict) and card.get("link") == readiness_backlog_link
+        for card in cards
+    )
+    local_evidence_visible = _entry_html_has_link(root, local_evidence_link) or any(
+        isinstance(card, dict) and card.get("link") == local_evidence_link
+        for card in cards
+    )
+    review_gate_visible = _entry_html_has_link(root, review_gate_link) or any(
+        isinstance(card, dict) and card.get("link") == review_gate_link
+        for card in cards
+    )
     health_summary = health.get("summary") if isinstance(health.get("summary"), dict) else {}
     expected_entry_cards = health_summary.get("entry_cards")
     if isinstance(expected_entry_cards, int) and expected_entry_cards != len(cards):
@@ -202,6 +262,44 @@ def _market_dashboard_status(_: JsonDict) -> JsonDict:
         "yield_refetch_workflow_status.html",
         "yield_refetch_workflow_status.json",
     ]
+    if control_report or (root / "data_quality_control_report.html").is_file():
+        key_files.extend(
+            [
+                "data_quality_control_report.html",
+                "data_quality_control_report.json",
+            ]
+        )
+    if lineage or (root / "lineage.html").is_file():
+        key_files.extend(["lineage.html", "lineage.json"])
+    if readiness_backlog or (root / readiness_backlog_link).is_file():
+        key_files.extend(
+            [
+                readiness_backlog_link,
+                "daily_bars_backfill_batch001_slice001_readiness_backlog.json",
+                "daily_bars_backfill_batch001_slice001_readiness_backlog.csv",
+                "daily_bars_backfill_batch001_slice001_readiness_backlog_field_summary.csv",
+            ]
+        )
+    if local_evidence or (root / local_evidence_link).is_file():
+        key_files.extend(
+            [
+                local_evidence_link,
+                "daily_bars_backfill_batch001_slice001_local_evidence.json",
+                "daily_bars_backfill_batch001_slice001_local_evidence.csv",
+                "daily_bars_backfill_batch001_slice001_local_evidence_field_matrix.csv",
+                "daily_bars_backfill_batch001_slice001_local_evidence_review_queue.csv",
+            ]
+        )
+    if review_gate or (root / review_gate_link).is_file():
+        key_files.extend(
+            [
+                review_gate_link,
+                "daily_bars_backfill_batch001_slice001_review_gate.json",
+                "daily_bars_backfill_batch001_slice001_review_gate.csv",
+                "daily_bars_backfill_batch001_slice001_review_gate_validation.csv",
+                "daily_bars_backfill_batch001_slice001_review_gate_field_summary.csv",
+            ]
+        )
     static_files = {filename: (root / filename).is_file() for filename in key_files}
     entry_link_status = _entry_link_status(root, cards, warnings)
     html_files = [filename for filename in key_files if filename.endswith(".html")]
@@ -232,6 +330,11 @@ def _market_dashboard_status(_: JsonDict) -> JsonDict:
             "card_count": len(cards),
             "cards": cards[:20],
             "data_status_visible": bool(entry.get("data_status_visible")),
+            "data_quality_control_visible": control_report_visible,
+            "lineage_visible": lineage_visible,
+            "readiness_backlog_visible": readiness_backlog_visible,
+            "local_evidence_visible": local_evidence_visible,
+            "review_gate_visible": review_gate_visible,
             "data_api": entry.get("data_api"),
         },
         "health": {
@@ -246,6 +349,38 @@ def _market_dashboard_status(_: JsonDict) -> JsonDict:
             "status": workflow.get("status"),
             "current_coverage_pct": workflow.get("current_coverage_pct"),
             "step_count": _dashboard_list_count(workflow_steps),
+        },
+        "control_report": {
+            "status": control_report.get("status"),
+            "summary": control_report.get("summary", {}),
+            "visible_from_entry": control_report_visible,
+            "link": "data_quality_control_report.html"
+            if control_report_visible
+            else None,
+        },
+        "lineage": {
+            "status": lineage.get("status"),
+            "summary": lineage.get("summary", {}),
+            "visible_from_entry": lineage_visible,
+            "link": "lineage.html" if lineage_visible else None,
+        },
+        "readiness_backlog": {
+            "status": readiness_backlog.get("status"),
+            "summary": readiness_backlog.get("summary", {}),
+            "visible_from_entry": readiness_backlog_visible,
+            "link": readiness_backlog_link if readiness_backlog_visible else None,
+        },
+        "local_evidence": {
+            "status": local_evidence.get("status"),
+            "summary": local_evidence.get("summary", {}),
+            "visible_from_entry": local_evidence_visible,
+            "link": local_evidence_link if local_evidence_visible else None,
+        },
+        "review_gate": {
+            "status": review_gate.get("status"),
+            "summary": review_gate.get("summary", {}),
+            "visible_from_entry": review_gate_visible,
+            "link": review_gate_link if review_gate_visible else None,
         },
         "static_files": static_files,
         "entry_link_status": entry_link_status,

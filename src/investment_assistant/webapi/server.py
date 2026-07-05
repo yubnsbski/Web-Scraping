@@ -1,4 +1,4 @@
-"""Standard-library HTTP adapter serving the JSON API and the built frontend."""
+﻿"""Standard-library HTTP adapter serving the JSON API and the built frontend."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ _logger = get_logger("webapi.server")
 # Built frontend assets (created by `npm run build` in web/). Optional.
 FRONTEND_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
+# JPX NeuroFinance dashboard — single hardcoded path, never derived from user input.
+_JPX_DASHBOARD = Path(__file__).resolve().parents[3] / "JPX_NeuroFinance_Dashboard.html"
+
 _MAX_BODY_BYTES = 2 * 1024 * 1024
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -25,6 +28,23 @@ _CONTENT_TYPES = {
 }
 
 
+def _resolve_static_target(request_path: str) -> Path:
+    """Resolve a frontend static path, including directory index files."""
+    rel = request_path.split("?", 1)[0].lstrip("/") or "index.html"
+    frontend_root = FRONTEND_DIST.resolve()
+    target = (frontend_root / rel).resolve()
+    if frontend_root not in target.parents and target != frontend_root:
+        return frontend_root / "index.html"
+    if target.is_dir():
+        directory_index = target / "index.html"
+        if directory_index.is_file():
+            return directory_index
+        return frontend_root / "index.html"
+    if not target.is_file():
+        return frontend_root / "index.html"
+    return target
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "investment-assistant-webapi/0.1"
 
@@ -34,8 +54,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802 - required name
-        if self.path.split("?", 1)[0].startswith("/api/"):
+        clean_path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if clean_path.startswith("/api/"):
             self._handle_api("GET")
+            return
+        if clean_path in ("/jpx", "/jpx/"):
+            self._serve_jpx_dashboard()
             return
         self._serve_static()
 
@@ -66,6 +90,30 @@ class _Handler(BaseHTTPRequestHandler):
             return _INVALID
         return parsed if isinstance(parsed, dict) else _INVALID
 
+    def _serve_jpx_dashboard(self) -> None:
+        """Serve the pre-built JPX NeuroFinance HTML dashboard.
+
+        Path is hardcoded — never derived from user input — so there is
+        no path-traversal risk.
+        """
+        if not _JPX_DASHBOARD.is_file():
+            self._send_json(
+                404,
+                {
+                    "error": "JPX_NeuroFinance_Dashboard.html が見つかりません",
+                    "hint": "POST /api/jpx/run でパイプラインを実行してください",
+                },
+            )
+            return
+        data = _JPX_DASHBOARD.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        # Scope the dashboard to same-origin only (no CORS needed for direct browser access)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _serve_static(self) -> None:
         if not FRONTEND_DIST.is_dir():
             self._send_json(
@@ -76,13 +124,7 @@ class _Handler(BaseHTTPRequestHandler):
                 },
             )
             return
-        rel = self.path.split("?", 1)[0].lstrip("/") or "index.html"
-        target = (FRONTEND_DIST / rel).resolve()
-        # Confine to the dist directory; fall back to index.html for SPA routes.
-        if FRONTEND_DIST not in target.parents and target != FRONTEND_DIST:
-            target = FRONTEND_DIST / "index.html"
-        if not target.is_file():
-            target = FRONTEND_DIST / "index.html"
+        target = _resolve_static_target(self.path)
         if not target.is_file():
             self._send_json(404, {"error": "not found"})
             return

@@ -44,3 +44,18 @@ backend/
 web/node_modules/
 web/dist/
 web/.vite/
+
+# --- generated artifacts from the JPX data pipeline (regenerable; AGENTS.md: no data artifacts) ---
+*_log.txt
+jpx_err.txt
+copy_log.txt
+pipeline_log.txt
+viz_gen_log.txt
+jpx_data.json
+jpx_ml_results.json
+jpx_ml_v2_results.json
+jpx_ml_v3_results.json
+collect_cache_v2.json
+extra_features_cache*.json
+JPX_NeuroFinance_Dashboard.html
+web/public/market-dashboard/
