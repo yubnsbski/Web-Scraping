@@ -37,11 +37,18 @@ const SAMPLE_HOLDINGS_CSV =
 const SAMPLE_FUNDS_CSV =
   "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score";
 
+// Advanced tabs are hidden from the visible navigation for now (their
+// backing API paths are quota-heavy / LLM-per-stock). They return as part of
+// the Sprint-2 nav reorg; flip this to true to re-enable them locally with
+// no other code changes.
+const SHOW_ADVANCED_TABS = false;
+
 const TABS: Array<{
   id: TabId;
   label: string;
   short: string;
   group: "main" | "more";
+  hidden?: boolean;
 }> = [
   { id: "dashboard", label: "全体", short: "全体", group: "main" },
   { id: "data", label: "データ更新", short: "更新", group: "main" },
@@ -54,16 +61,19 @@ const TABS: Array<{
   { id: "rag", label: "RAG検索", short: "RAG", group: "more" },
   { id: "chat", label: "AI確認", short: "AI", group: "more" },
   { id: "plans", label: "プラン設計", short: "設計", group: "more" },
-  { id: "aistock", label: "AI銘柄分析", short: "AI分析", group: "more" },
+  // aistock (StockAiPanel, /api/stocks/*) intentionally hidden — see
+  // SHOW_ADVANCED_TABS above. Component and client code stay intact.
+  { id: "aistock", label: "AI銘柄分析", short: "AI分析", group: "more", hidden: true },
 ];
 
-const MAIN_TABS = TABS.filter((item) => item.group === "main");
-const MORE_TABS = TABS.filter((item) => item.group === "more");
+const VISIBLE_TABS = TABS.filter((item) => SHOW_ADVANCED_TABS || !item.hidden);
+const MAIN_TABS = VISIBLE_TABS.filter((item) => item.group === "main");
+const MORE_TABS = VISIBLE_TABS.filter((item) => item.group === "more");
 
 export function App() {
   const [tab, setTab] = useState<TabId>(() => {
     const saved = localStorage.getItem("ia.tab");
-    return TABS.some((item) => item.id === saved) ? (saved as TabId) : "dashboard";
+    return VISIBLE_TABS.some((item) => item.id === saved) ? (saved as TabId) : "dashboard";
   });
   useEffect(() => {
     localStorage.setItem("ia.tab", tab);
