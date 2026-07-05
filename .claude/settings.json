@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source .venv/Scripts/activate)",
+      "Bash(ruff check *)",
+      "Bash(mypy src*)"
+    ]
+  }
+}
