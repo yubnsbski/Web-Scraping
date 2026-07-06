@@ -95,15 +95,13 @@ def test_advanced_group_holds_the_demoted_tabs() -> None:
 
 
 def test_chat_is_the_default_landing_tab() -> None:
-    """Default tab is now chat (AI advisor), both for the initial state and
-    the localStorage fallback.
+    """Every load lands on the chat (AI advisor) tab — AI-first product
+    direction; the remembered ia.tab no longer overrides the landing tab.
     """
     source = _read_app_tsx()
-    assert re.search(
-        r'return VISIBLE_TABS\.some\(\(item\) => item\.id === saved\)'
-        r' \? \(saved as TabId\) : "chat"',
-        source,
-    ), "default/fallback tab must be \"chat\" (AI advisor front door)"
+    assert re.search(r'useState<TabId>\("chat"\)', source), (
+        'startup tab must be hardcoded to "chat" (AI-first landing)'
+    )
 
 
 def test_aistock_tab_is_hidden_from_navigation() -> None:
