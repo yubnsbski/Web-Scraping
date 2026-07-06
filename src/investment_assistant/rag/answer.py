@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from investment_assistant.llm.service import LlmResponse, LlmService
 from investment_assistant.rag.search import (
+    DEFAULT_HYBRID_ALPHA,
     build_answer_context,
     evidence_highlights,
+    hybrid_search,
     search_chunks,
     search_result_to_dict,
 )
@@ -75,10 +77,33 @@ def generate_rag_answer(
     service: LlmService,
     query: str,
     limit: int = 5,
+    retrieval_query: str | None = None,
+    hybrid: bool = False,
+    alpha: float = DEFAULT_HYBRID_ALPHA,
 ) -> dict[str, object]:
-    """Search local RAG chunks and generate an answer through ``LlmService``."""
+    """Search local RAG chunks and generate an answer through ``LlmService``.
 
-    results = search_chunks(store, query=query, limit=limit)
+    ``retrieval_query`` (when given) is used for search instead of ``query``,
+    so a history-aware retrieval string (e.g. carrying a ticker mentioned in
+    an earlier chat turn) can steer search without changing the question the
+    LLM sees. The prompt always uses ``query``.
+    """
+
+    search_text = retrieval_query or query
+    # Hybrid queries must be embedded in the same space the corpus was indexed
+    # with, so the store's embedder (resolved by the caller from DB meta) is
+    # passed through instead of letting hybrid_search default to hashing.
+    results = (
+        hybrid_search(
+            store,
+            query=search_text,
+            limit=limit,
+            alpha=alpha,
+            embedder=store.embedder,
+        )
+        if hybrid
+        else search_chunks(store, query=search_text, limit=limit)
+    )
     context = build_answer_context(results)
     if not results:
         return {

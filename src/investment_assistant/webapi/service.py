@@ -22,6 +22,7 @@ from investment_assistant.financials.evidence import (
 )
 from investment_assistant.llm.factory import DEFAULT_GEMINI_CONFIG_PATH
 from investment_assistant.rag.store import DEFAULT_RAG_DB_PATH
+from investment_assistant.webapi import chat as chat_api
 from investment_assistant.webapi import data_status as data_status_api
 from investment_assistant.webapi import edinet as edinet_api
 from investment_assistant.webapi import investments as investment_api
@@ -1717,6 +1718,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/rag/search"): _rag_search,
     ("POST", "/api/rag/answer-context"): _rag_answer_context,
     ("POST", "/api/rag/answer"): _rag_answer,
+    ("POST", "/api/chat/turn"): chat_api.chat_turn,
     ("POST", "/api/chat/simulate"): _chat_simulate,
     ("POST", "/api/yahoo/dps"): _yahoo_dps,
     ("POST", "/api/simulations/save"): _save_simulation,

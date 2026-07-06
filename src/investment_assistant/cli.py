@@ -944,18 +944,32 @@ def run_rag_answer(
     limit: int = 5,
     call_real_api: bool = False,
     client: TextGenerationClient | None = None,
+    retrieval_query: str | None = None,
+    hybrid: bool = False,
+    alpha: float = 0.5,
 ) -> dict[str, object]:
-    """Generate a citation-aware answer through the guarded LLM service path."""
+    """Generate a citation-aware answer through the guarded LLM service path.
+
+    ``retrieval_query`` (when given) is used for RAG search instead of
+    ``query``; the LLM prompt always uses ``query``. See
+    :func:`investment_assistant.rag.answer.generate_rag_answer`.
+    """
 
     chosen_client = (
         client if client is not None else (None if call_real_api else LocalRagAnswerClient())
     )
     service = build_llm_service(config_path, client=chosen_client)
+    # Embed hybrid queries in the same space the corpus was indexed with
+    # (gemini vs hashing), read from DB meta so old hashing DBs keep working.
+    embedder = resolve_embedder(read_stored_embedder_name(db_path))
     result = generate_rag_answer(
-        store=RagStore(db_path),
+        store=RagStore(db_path, embedder=embedder),
         service=service,
         query=query,
         limit=limit,
+        retrieval_query=retrieval_query,
+        hybrid=hybrid,
+        alpha=alpha,
     )
     result["call_real_api"] = call_real_api
     return result
