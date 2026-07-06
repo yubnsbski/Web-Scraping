@@ -45,6 +45,19 @@ def _resolve_static_target(request_path: str) -> Path:
     return target
 
 
+def _cache_control_for(request_path: str) -> str:
+    """Cache policy for static responses.
+
+    Vite emits content-hashed filenames under assets/ (safe to cache
+    forever); everything else -- index.html above all -- must revalidate so
+    phones/Tailscale clients pick up new builds without a manual cache purge.
+    """
+    path = request_path.split("?", 1)[0]
+    if "/assets/" in path:
+        return "public, max-age=31536000, immutable"
+    return "no-cache"
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "investment-assistant-webapi/0.1"
 
@@ -133,6 +146,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", _cache_control_for(self.path))
         self._cors()
         self.end_headers()
         self.wfile.write(data)

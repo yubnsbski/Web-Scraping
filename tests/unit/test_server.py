@@ -217,3 +217,16 @@ def test_static_directory_index_resolves(tmp_path, monkeypatch):
     assert server._resolve_static_target("/market-dashboard/") == dashboard / "index.html"
     assert server._resolve_static_target("/market-dashboard") == dashboard / "index.html"
 
+
+
+def test_cache_control_policy_for_static_paths():
+    """index.html must revalidate; hashed assets may cache forever."""
+    from investment_assistant.webapi import server
+
+    assert server._cache_control_for("/") == "no-cache"
+    assert server._cache_control_for("/index.html") == "no-cache"
+    assert server._cache_control_for("/index.html?v=2") == "no-cache"
+    assert (
+        server._cache_control_for("/assets/index-DhXsJDnr.js")
+        == "public, max-age=31536000, immutable"
+    )
