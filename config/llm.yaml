@@ -2,7 +2,7 @@ providers:
   codex_cli:
     # opt-in; see AGENTS.md "Codexプロバイダ (codex_cli) ルール" for the ToS/
     # compliance note before flipping this to true. Owner-only decision.
-    enabled: false
+    enabled: true
     exe: codex
     # empty = use the codex CLI's own default model
     model: ""

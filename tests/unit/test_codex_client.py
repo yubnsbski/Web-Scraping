@@ -173,6 +173,58 @@ def test_generate_raises_timeout() -> None:
     kill_tree.assert_called_once()
 
 
+def test_generate_ignores_llm_service_model_label() -> None:
+    """Regression test for the confirmed bug: ``LlmService`` passes its own
+    cache/budget label (e.g. ``"codex_cli:default"``) as ``model`` on every
+    call. That label must never reach ``codex exec``'s argv -- only the
+    ``model`` configured at construction time (here: none) may.
+    """
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_popen_factory(argv, **kwargs):
+        captured["argv"] = argv
+        return _fake_popen(returncode=0, stdout=b"ok")
+
+    with (
+        patch("investment_assistant.llm.codex_client.shutil.which", return_value="C:/codex.exe"),
+        patch(
+            "investment_assistant.llm.codex_client.subprocess.Popen",
+            side_effect=fake_popen_factory,
+        ),
+    ):
+        client = CodexCliClient(exe="codex", model="")
+        client.generate("prompt", model="codex_cli:default")
+
+    argv = captured["argv"]
+    assert "--model" not in argv
+    assert "codex_cli:default" not in argv
+
+
+def test_generate_uses_constructor_model_not_generate_argument() -> None:
+    """The CLI model comes only from construction-time config."""
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_popen_factory(argv, **kwargs):
+        captured["argv"] = argv
+        return _fake_popen(returncode=0, stdout=b"ok")
+
+    with (
+        patch("investment_assistant.llm.codex_client.shutil.which", return_value="C:/codex.exe"),
+        patch(
+            "investment_assistant.llm.codex_client.subprocess.Popen",
+            side_effect=fake_popen_factory,
+        ),
+    ):
+        client = CodexCliClient(exe="codex", model="gpt-5.5")
+        client.generate("prompt", model="codex_cli:gpt-5.5")
+
+    argv = captured["argv"]
+    idx = argv.index("--model")
+    assert argv[idx + 1] == "gpt-5.5"
+
+
 def test_generate_sends_containment_header_and_prompt_over_stdin() -> None:
     captured: dict[str, bytes] = {}
 

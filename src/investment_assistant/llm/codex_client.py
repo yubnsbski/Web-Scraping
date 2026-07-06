@@ -94,26 +94,46 @@ class CodexCliClient:
     The binary is located via ``shutil.which`` at construction time; a missing
     binary raises immediately so the factory can treat the provider as
     disabled instead of failing later during a request.
+
+    ``model`` is the actual Codex CLI model id (empty string means "let the
+    CLI pick its own default"), configured once at construction time. It is
+    intentionally separate from the ``model`` argument on ``generate`` -- see
+    that method's docstring.
     """
 
-    def __init__(self, *, exe: str = "codex", timeout_s: int = DEFAULT_TIMEOUT_S) -> None:
+    def __init__(
+        self,
+        *,
+        exe: str = "codex",
+        timeout_s: int = DEFAULT_TIMEOUT_S,
+        model: str = "",
+    ) -> None:
         resolved = shutil.which(exe)
         if resolved is None:
             raise CodexUnavailableError("error")
         self.exe = resolved
         self.timeout_s = timeout_s
+        self.model = model
 
     def generate(self, prompt: str, *, model: str) -> str:
         """Generate text via ``codex exec``, feeding the prompt over stdin.
 
         Reached only through ``LlmService`` so cache/budget/fallback always
         apply first. Raises ``CodexUnavailableError`` on any failure.
+
+        ``model`` is accepted (and ignored) only to satisfy the
+        ``TextGenerationClient`` protocol: ``LlmService`` passes its own
+        cache/budget label (e.g. ``"codex_cli:default"``), which is not a
+        real Codex CLI model id and must never reach ``codex exec``'s
+        ``--model`` flag. The actual CLI model comes solely from
+        ``self.model``, set at construction time from
+        ``config/llm.yaml``'s ``providers.codex_cli.model``.
         """
 
         full_prompt = f"{CONTAINMENT_HEADER}\n\n{prompt}"
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_path = Path(tmp_dir) / "codex_last_message.txt"
-            argv = build_codex_argv(self.exe, model or None, output_path)
+            argv = build_codex_argv(self.exe, self.model or None, output_path)
             proc = self._spawn(argv)
             try:
                 stdout_bytes, stderr_bytes = proc.communicate(

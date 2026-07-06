@@ -204,7 +204,11 @@ def build_codex_service(
     chosen_client = client
     if chosen_client is None:
         try:
-            chosen_client = CodexCliClient(exe=codex_config.exe, timeout_s=codex_config.timeout_s)
+            chosen_client = CodexCliClient(
+                exe=codex_config.exe,
+                timeout_s=codex_config.timeout_s,
+                model=codex_config.model,
+            )
         except CodexUnavailableError:
             _logger.warning(
                 "codex_cli enabled but binary %r not found; treating as disabled",
