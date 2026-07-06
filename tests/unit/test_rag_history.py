@@ -94,6 +94,26 @@ def test_build_retrieval_query_raises_on_invalid_role() -> None:
         build_retrieval_query(messages)
 
 
+def test_build_retrieval_query_keeps_ticker_through_chained_followups() -> None:
+    """Regression: the topic entity must survive several ticker-less
+    follow-ups ("もっと詳細に教えて" was dropping KDDI from the evidence).
+    """
+    messages = [
+        {"role": "user", "content": "KDDIの配当利回りは？"},
+        {"role": "assistant", "content": "配当利回りは3.09%です。"},
+        {"role": "user", "content": "で、リスクは？"},
+        {"role": "assistant", "content": "通信料金の値下げ圧力があります。"},
+        {"role": "user", "content": "で、配当は？"},
+        {"role": "assistant", "content": "1株配当は84円です。"},
+        {"role": "user", "content": "もっと詳細に教えて"},
+    ]
+
+    query = build_retrieval_query(messages)
+
+    assert "9433" in query
+    assert standalone_question(messages).startswith("9433")
+
+
 def test_build_retrieval_query_greeting_gets_no_carry_or_concat() -> None:
     messages = [
         {"role": "user", "content": "KDDIの長期保有リスク"},

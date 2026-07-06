@@ -21,9 +21,9 @@ _ValidatedMessage = dict[str, str]
 # Only the tail of a conversation matters for retrieval/standalone-question
 # resolution; older turns are ignored entirely (not even validated).
 _MAX_HISTORY_MESSAGES = 12
-# Up to this many of the most recent *user* turns are scanned for carried
-# ticker/company mentions.
-_MAX_TICKER_LOOKBACK_TURNS = 3
+# Ticker carry-over scans ALL user turns inside the window: follow-up turns
+# ("で、配当は？", "もっと詳細に教えて") carry no ticker text themselves, so a
+# short lookback would lose the topic entity after a couple of follow-ups.
 _MAX_RETRIEVAL_CHARS = 512
 _MAX_CARRIED_TURN_CHARS = 200
 _FOLLOWUP_MIN_LEN = 12
@@ -149,8 +149,8 @@ def _history_context(
     windowed = _windowed_messages(messages)
     latest_text = _latest_user_text(windowed)
 
-    recent_turns = _recent_user_turns(windowed, _MAX_TICKER_LOOKBACK_TURNS)
-    earlier_turns = recent_turns[:-1]
+    all_user_turns = _recent_user_turns(windowed, len(windowed))
+    earlier_turns = all_user_turns[:-1]
 
     latest_tickers = sorted(extract_query_tickers(latest_text))
     if _is_greeting(latest_text):
@@ -171,9 +171,10 @@ def build_retrieval_query(messages: list[Message]) -> str:
     - Tickers detected in the latest turn's full (untruncated) text are
       prepended, so a ticker mentioned beyond the 512-char cap still scopes
       retrieval.
-    - Tickers/companies mentioned in earlier turns (of the last 3 user turns)
+    - Tickers/companies mentioned in any earlier user turn inside the window
       are carried forward -- prepended to the retrieval string -- only when
-      the latest turn itself names no ticker.
+      the latest turn itself names no ticker (chained follow-ups keep the
+      topic entity this way).
     - When the latest turn looks like a short follow-up, the previous user
       turn's text (truncated to ~200 chars) is appended for extra context.
     - Greetings/acknowledgements ("ありがとう", "こんにちは", ...) get no
