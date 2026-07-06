@@ -15,6 +15,13 @@ Sprint 2 (nav reorg: AI advisor as the front door) updated these invariants:
   advanced ("more") group.
 - the real-AI toggle drives call_real_api from state instead of a hardcoded
   false.
+
+Sprint B (chat-first frontend, web/src/chat/) added a new ChatView that
+replaces the legacy ChatPanel as the default chat-tab render, behind an
+`ia.chatV2` localStorage escape hatch that falls back to the old ChatPanel.
+The evidence-rendering components (CitationLinkedText, RagEvidenceCards,
+RagEvidenceQuality) moved out of App.tsx into web/src/rag/Evidence.tsx; App.tsx
+now imports them instead of defining them inline.
 """
 
 from __future__ import annotations
@@ -168,9 +175,11 @@ def test_send_to_chat_handoff_is_wired() -> None:
 
 
 def test_chat_tab_renders_the_weekly_workflow_strip() -> None:
-    """Task 2: the chat (AI advisor) landing view shows the reused
-    OneClickPanel workflow strip above the chat box, not a duplicated copy
-    of its logic.
+    """Task 2 (pre-Sprint-B): the legacy one-shot chat view still shows the
+    reused OneClickPanel workflow strip above the chat box, not a duplicated
+    copy of its logic. Sprint B moved this view behind the `ia.chatV2 ===
+    "off"` escape hatch (see test_chat_v2_escape_hatch_falls_back_to_legacy_chat_panel
+    below) -- the old ChatPanel/OneClickPanel wiring itself is unchanged.
     """
     source = _read_app_tsx()
 
@@ -181,12 +190,37 @@ def test_chat_tab_renders_the_weekly_workflow_strip() -> None:
     chat_tab_block = chat_tab_block_match.group(1)
 
     assert "<OneClickPanel" in chat_tab_block, (
-        "chat tab must render OneClickPanel (the weekly workflow strip)"
+        "chat tab must render OneClickPanel (the weekly workflow strip) in its legacy branch"
     )
-    assert "<ChatPanel" in chat_tab_block, "chat tab must still render ChatPanel"
+    assert "<ChatPanel" in chat_tab_block, "chat tab must still render ChatPanel in its legacy branch"
     # Only one function component definition of OneClickPanel should exist --
     # i.e. its logic is reused, not duplicated, across dashboard and chat.
     assert source.count("function OneClickPanel(") == 1
+
+
+def test_chat_v2_escape_hatch_falls_back_to_legacy_chat_panel() -> None:
+    """Sprint B: the chat tab defaults to the new ChatView (chat-first UI),
+    but setting localStorage["ia.chatV2"] = "off" must still render the old
+    one-shot ChatPanel (kept as dead code, not deleted) so the legacy view
+    stays reachable as a rollback path.
+    """
+    source = _read_app_tsx()
+
+    chat_tab_block_match = re.search(
+        r'\{tab === "chat" && \((.*?)\n        \)\}', source, re.DOTALL
+    )
+    assert chat_tab_block_match, "chat tab render block not found"
+    chat_tab_block = chat_tab_block_match.group(1)
+
+    assert 'localStorage.getItem("ia.chatV2") === "off"' in chat_tab_block, (
+        "chat tab must gate the legacy ChatPanel behind the ia.chatV2 escape hatch"
+    )
+    assert "<ChatView" in chat_tab_block, (
+        "chat tab must render the new ChatView component when ia.chatV2 is not \"off\""
+    )
+    assert 'import { ChatView } from "./chat/ChatView";' in source, (
+        "ChatView must be imported from web/src/chat/ChatView"
+    )
 
 
 def test_real_ai_toggle_drives_call_real_api_from_state() -> None:

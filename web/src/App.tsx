@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
+import { CitationLinkedText, RagEvidenceCards, RagEvidenceQuality } from "./rag/Evidence";
+import { ChatView } from "./chat/ChatView";
 
 type Json = Record<string, any>;
 type TabId = "dashboard" | "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat" | "plans" | "aistock";
@@ -120,43 +122,45 @@ export function App() {
   );
 
   return (
-    <div className="app-shell">
-      <aside className="side">
-        <div className="brand">
-          <span>投資支援</span>
-          <b>Evidence Desk</b>
-        </div>
-        <nav className="nav" aria-label="主要画面">
-          {MAIN_TABS.map((item) => (
-            <button
-              key={item.id}
-              className={tab === item.id ? "nav-item active" : "nav-item"}
-              onClick={() => setTab(item.id)}
-              title={item.label}
-            >
-              <span>{item.short}</span>
-              <b>{item.label}</b>
-            </button>
-          ))}
-          <details className="nav-more">
-            <summary>詳細機能</summary>
-            <div className="nav-more-list">
-              {MORE_TABS.map((item) => (
-                <button
-                  key={item.id}
-                  className={tab === item.id ? "nav-item active" : "nav-item"}
-                  onClick={() => setTab(item.id)}
-                  title={item.label}
-                >
-                  <span>{item.short}</span>
-                  <b>{item.label}</b>
-                </button>
-              ))}
-            </div>
-          </details>
-        </nav>
-        <p className="side-note">売買推奨・自動売買は行いません。判断材料と根拠を整理します。</p>
-      </aside>
+    <div className={tab === "chat" ? "app-shell chat-mode" : "app-shell"}>
+      {tab !== "chat" && (
+        <aside className="side">
+          <div className="brand">
+            <span>投資支援</span>
+            <b>Evidence Desk</b>
+          </div>
+          <nav className="nav" aria-label="主要画面">
+            {MAIN_TABS.map((item) => (
+              <button
+                key={item.id}
+                className={tab === item.id ? "nav-item active" : "nav-item"}
+                onClick={() => setTab(item.id)}
+                title={item.label}
+              >
+                <span>{item.short}</span>
+                <b>{item.label}</b>
+              </button>
+            ))}
+            <details className="nav-more">
+              <summary>詳細機能</summary>
+              <div className="nav-more-list">
+                {MORE_TABS.map((item) => (
+                  <button
+                    key={item.id}
+                    className={tab === item.id ? "nav-item active" : "nav-item"}
+                    onClick={() => setTab(item.id)}
+                    title={item.label}
+                  >
+                    <span>{item.short}</span>
+                    <b>{item.label}</b>
+                  </button>
+                ))}
+              </div>
+            </details>
+          </nav>
+          <p className="side-note">売買推奨・自動売買は行いません。判断材料と根拠を整理します。</p>
+        </aside>
+      )}
 
       <main className="workspace">
         <header className="topbar">
@@ -296,31 +300,35 @@ export function App() {
           />
         )}
         {tab === "chat" && (
-          <>
-            <details className="advisor-workflow">
-              <summary>今週のワークフロー（データ更新→保有分析→候補抽出→レポート）</summary>
-              <OneClickPanel
+          localStorage.getItem("ia.chatV2") === "off" ? (
+            <>
+              <details className="advisor-workflow">
+                <summary>今週のワークフロー（データ更新→保有分析→候補抽出→レポート）</summary>
+                <OneClickPanel
+                  holdingsCsv={holdingsCsv}
+                  financialsPath={financialsPath}
+                  watchTickers={watchTickers}
+                  onMarket={setMarketSnapshot}
+                  onAnalysis={setAnalysis}
+                  onCandidates={setCandidates}
+                  onReport={setReport}
+                  onMove={setTab}
+                />
+              </details>
+              <ChatPanel
+                draft={chatDraft}
+                onDraftChange={setChatDraft}
                 holdingsCsv={holdingsCsv}
-                financialsPath={financialsPath}
-                watchTickers={watchTickers}
-                onMarket={setMarketSnapshot}
-                onAnalysis={setAnalysis}
-                onCandidates={setCandidates}
-                onReport={setReport}
-                onMove={setTab}
+                onSearchAgain={(draft) => {
+                  setRagDraft(draft);
+                  setTab("rag");
+                }}
+                onOpenData={() => setTab("data")}
               />
-            </details>
-            <ChatPanel
-              draft={chatDraft}
-              onDraftChange={setChatDraft}
-              holdingsCsv={holdingsCsv}
-              onSearchAgain={(draft) => {
-                setRagDraft(draft);
-                setTab("rag");
-              }}
-              onOpenData={() => setTab("data")}
-            />
-          </>
+            </>
+          ) : (
+            <ChatView onNavigate={(tabId) => setTab(tabId as TabId)} />
+          )
         )}
         {tab === "plans" && <PlanBuilderPanel />}
         {tab === "aistock" && <StockAiPanel />}
@@ -4230,26 +4238,6 @@ function ForecastHighlights({ highlights }: { highlights: Json[] }) {
   );
 }
 
-function RagEvidenceQuality(props: {
-  title: string;
-  results: Json[];
-  requestedLimit: number;
-  selectedCount?: number;
-  actionLabel?: string;
-  onAction?: () => void;
-}) {
-  const warnings = ragEvidenceWarnings(props.results, props.requestedLimit, props.selectedCount);
-  return (
-    <QualityNotice
-      title={props.title}
-      warnings={warnings}
-      okMessage={`${props.results.length}件の根拠を確認できます。`}
-      actionLabel={props.actionLabel}
-      onAction={props.onAction}
-    />
-  );
-}
-
 function QualityNotice(props: {
   title: string;
   warnings: string[];
@@ -4279,86 +4267,6 @@ function QualityNotice(props: {
       )}
     </section>
   );
-}
-
-function CitationLinkedText(props: { text: string; citationCount: number; targetPrefix: string }) {
-  const { text, citationCount, targetPrefix } = props;
-  const parts: ReactNode[] = [];
-  const pattern = /\[(\d+)\]/g;
-  let cursor = 0;
-  let match = pattern.exec(text);
-  while (match) {
-    if (match.index > cursor) {
-      parts.push(text.slice(cursor, match.index));
-    }
-    const citationNumber = Number(match[1]);
-    const label = match[0];
-    if (Number.isInteger(citationNumber) && citationNumber >= 1 && citationNumber <= citationCount) {
-      parts.push(
-        <a
-          className="citation-link"
-          href={`#${targetPrefix}-${citationNumber}`}
-          key={`${targetPrefix}-${citationNumber}-${match.index}`}
-          aria-label={`根拠 ${citationNumber} へ移動`}
-        >
-          {label}
-        </a>,
-      );
-    } else {
-      parts.push(label);
-    }
-    cursor = match.index + label.length;
-    match = pattern.exec(text);
-  }
-  if (cursor < text.length) {
-    parts.push(text.slice(cursor));
-  }
-  return <div className="answer-text">{parts.length ? parts : text}</div>;
-}
-
-function RagEvidenceCards({ title, results, idPrefix }: { title: string; results: Json[]; idPrefix?: string }) {
-  return (
-    <section className="detail-section evidence-cards" aria-label={title}>
-      <h4>{title}</h4>
-      <div className="evidence-card-list">
-        {results.map((result, index) => {
-          const citation = evidenceSummary(result, index);
-          return (
-            <article
-              className="evidence-card"
-              id={idPrefix ? `${idPrefix}-${citation.number}` : undefined}
-              key={ragResultKey(result, index)}
-            >
-              <header>
-                <b>[{citation.number}] {citation.label}</b>
-                <span>{citation.score}</span>
-              </header>
-              <p>{previewText(result.text, 240)}</p>
-              <div className="rag-meta">
-                <span>文書: {citation.source}</span>
-                <span>チャンク: {citation.chunk_index}</span>
-                {citation.report_id !== "-" && <span>レポートID: {citation.report_id}</span>}
-                {citation.integrity_status !== "-" && <span>整合性: {citation.integrity_status}</span>}
-              </div>
-            </article>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function evidenceSummary(result: Json, index: number) {
-  const citation = asJson(result.citation) ?? {};
-  return {
-    number: index + 1,
-    label: String(citation.label ?? shortPath(String(result.source ?? ""))),
-    report_id: String(citation.report_id ?? "-"),
-    integrity_status: String(citation.integrity_status ?? "-"),
-    chunk_index: String(citation.chunk_index ?? result.chunk_index ?? "-"),
-    score: formatScore(citation.score ?? result.score),
-    source: shortPath(String(citation.source ?? result.source ?? "")),
-  };
 }
 
 function MarketResult({ data, mode }: { data: Json; mode: string }) {
@@ -5887,29 +5795,6 @@ function ragIndexWarnings(data: Json): string[] {
   if (sources < 3) warnings.push(`登録文書が${sources}件です。比較や反証には複数ソースの追加が必要です。`);
   if (chunks < 10) warnings.push(`検索チャンクが${chunks}件です。回答の根拠が薄くなりやすい状態です。`);
   if (chars < 1000) warnings.push("登録テキスト量が少ないため、本文PDF/HTML/レポート本文の追加登録を推奨します。");
-  return warnings;
-}
-
-function ragEvidenceWarnings(results: Json[], requestedLimit: number, selectedCount?: number): string[] {
-  const warnings: string[] = [];
-  const count = results.length;
-  if (selectedCount !== undefined && selectedCount === 0) {
-    warnings.push("AI確認に渡す根拠が0件です。チェックを入れるか、追加検索してください。");
-  }
-  if (count === 0) {
-    warnings.push("一致する根拠が0件です。検索語を広げるか、データ更新で資料をRAGへ追加してください。");
-    return warnings;
-  }
-  if (count < 2) warnings.push("根拠が1件だけです。単一ソース依存のため、反証・比較には不足しています。");
-  if (requestedLimit > 0 && count < Math.min(requestedLimit, 5)) {
-    warnings.push(`要求件数${requestedLimit}件に対して${count}件のみです。検索語・登録データの見直しが必要です。`);
-  }
-  const badIntegrity = results.filter((result) => {
-    const citation = asJson(result.citation) ?? {};
-    const status = String(citation.integrity_status ?? result.integrity_status ?? "").toLowerCase();
-    return status && status !== "ok" && status !== "unknown" && status !== "-";
-  }).length;
-  if (badIntegrity > 0) warnings.push(`整合性が要確認の根拠が${badIntegrity}件あります。回答前に根拠カードを確認してください。`);
   return warnings;
 }
 
