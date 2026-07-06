@@ -76,10 +76,10 @@ const MAIN_TABS = VISIBLE_TABS.filter((item) => item.group === "main");
 const MORE_TABS = VISIBLE_TABS.filter((item) => item.group === "more");
 
 export function App() {
-  const [tab, setTab] = useState<TabId>(() => {
-    const saved = localStorage.getItem("ia.tab");
-    return VISIBLE_TABS.some((item) => item.id === saved) ? (saved as TabId) : "chat";
-  });
+  // AI-first: every load lands on the chat assistant, regardless of the tab
+  // remembered from the previous session ("ia.tab" still drives in-session
+  // navigation state).
+  const [tab, setTab] = useState<TabId>("chat");
   useEffect(() => {
     localStorage.setItem("ia.tab", tab);
   }, [tab]);
