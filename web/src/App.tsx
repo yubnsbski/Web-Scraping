@@ -1,18 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
-import { CitationLinkedText, RagEvidenceCards, RagEvidenceQuality } from "./rag/Evidence";
+import { RagEvidenceQuality } from "./rag/Evidence";
 import { ChatView } from "./chat/ChatView";
 
 type Json = Record<string, any>;
-type TabId = "dashboard" | "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat" | "plans" | "aistock";
+type TabId = "dashboard" | "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat" | "plans";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 type RagSearchDraft = { query: string; dbPath: string; limit: string; version: number };
-type ChatDraft = { query: string; dbPath: string; limit: number; evidence?: Json[]; searchQuery?: string };
 
 const FINANCIALS_PATH = "local_docs/edinet/financials.csv";
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
-const DEFAULT_CHAT_QUERY = "KDDIの配当利回りと根拠を、投資助言にならない形で確認して";
-const DEFAULT_CHAT_LIMIT = 5;
 const WATCHLIST_STORAGE_KEY = "ia.watchlist";
 const DEFAULT_WATCHLIST = "7203 8306 9433 9432 6758 6861 8058 9984";
 // Shared one-tap presets for RAG search and AI chat, so both stay in sync.
@@ -39,18 +36,11 @@ const SAMPLE_HOLDINGS_CSV =
 const SAMPLE_FUNDS_CSV =
   "fund_code,name,asset_class,expense_ratio,distribution_policy,nisa_eligible,provider_id,diversification_score";
 
-// Advanced tabs are hidden from the visible navigation for now (their
-// backing API paths are quota-heavy / LLM-per-stock). They return as part of
-// the Sprint-2 nav reorg; flip this to true to re-enable them locally with
-// no other code changes.
-const SHOW_ADVANCED_TABS = false;
-
 const TABS: Array<{
   id: TabId;
   label: string;
   short: string;
   group: "main" | "more";
-  hidden?: boolean;
 }> = [
   // Sprint-2 nav reorg: the AI advisor is the front door. Primary (main)
   // group is the 4-step "just ask" workflow; everything else moves to the
@@ -66,14 +56,10 @@ const TABS: Array<{
   { id: "forecast", label: "予測スクリーニング", short: "予測", group: "more" },
   { id: "rag", label: "RAG検索", short: "RAG", group: "more" },
   { id: "plans", label: "プラン設計", short: "設計", group: "more" },
-  // aistock (StockAiPanel, /api/stocks/*) intentionally hidden — see
-  // SHOW_ADVANCED_TABS above. Component and client code stay intact.
-  { id: "aistock", label: "AI銘柄分析", short: "AI分析", group: "more", hidden: true },
 ];
 
-const VISIBLE_TABS = TABS.filter((item) => SHOW_ADVANCED_TABS || !item.hidden);
-const MAIN_TABS = VISIBLE_TABS.filter((item) => item.group === "main");
-const MORE_TABS = VISIBLE_TABS.filter((item) => item.group === "more");
+const MAIN_TABS = TABS.filter((item) => item.group === "main");
+const MORE_TABS = TABS.filter((item) => item.group === "more");
 
 export function App() {
   // AI-first: every load lands on the chat assistant, regardless of the tab
@@ -95,11 +81,6 @@ export function App() {
     dbPath: DEFAULT_RAG_DB_PATH,
     limit: "8",
     version: 0,
-  });
-  const [chatDraft, setChatDraft] = useState<ChatDraft>({
-    query: DEFAULT_CHAT_QUERY,
-    dbPath: DEFAULT_RAG_DB_PATH,
-    limit: DEFAULT_CHAT_LIMIT,
   });
   const [detailRequest, setDetailRequest] = useState<DetailRequest>({
     code: "8306",
@@ -293,45 +274,10 @@ export function App() {
             draft={ragDraft}
             onDraftChange={setRagDraft}
             onOpenData={() => setTab("data")}
-            onAskDraft={(draft) => {
-              setChatDraft(draft);
-              setTab("chat");
-            }}
           />
         )}
-        {tab === "chat" && (
-          localStorage.getItem("ia.chatV2") === "off" ? (
-            <>
-              <details className="advisor-workflow">
-                <summary>今週のワークフロー（データ更新→保有分析→候補抽出→レポート）</summary>
-                <OneClickPanel
-                  holdingsCsv={holdingsCsv}
-                  financialsPath={financialsPath}
-                  watchTickers={watchTickers}
-                  onMarket={setMarketSnapshot}
-                  onAnalysis={setAnalysis}
-                  onCandidates={setCandidates}
-                  onReport={setReport}
-                  onMove={setTab}
-                />
-              </details>
-              <ChatPanel
-                draft={chatDraft}
-                onDraftChange={setChatDraft}
-                holdingsCsv={holdingsCsv}
-                onSearchAgain={(draft) => {
-                  setRagDraft(draft);
-                  setTab("rag");
-                }}
-                onOpenData={() => setTab("data")}
-              />
-            </>
-          ) : (
-            <ChatView onNavigate={(tabId) => setTab(tabId as TabId)} />
-          )
-        )}
+        {tab === "chat" && <ChatView onNavigate={(tabId) => setTab(tabId as TabId)} />}
         {tab === "plans" && <PlanBuilderPanel />}
-        {tab === "aistock" && <StockAiPanel />}
       </main>
     </div>
   );
@@ -2688,7 +2634,6 @@ function RagSearchPanel(props: {
   draft: RagSearchDraft;
   onDraftChange: (value: RagSearchDraft) => void;
   onOpenData: () => void;
-  onAskDraft: (value: ChatDraft) => void;
 }) {
   const { draft } = props;
   const { query, dbPath, limit } = draft;
@@ -2713,16 +2658,6 @@ function RagSearchPanel(props: {
       }),
     );
   const search = () => searchWith(query);
-
-  const sendToChat = () => {
-    props.onAskDraft({
-      query: buildRagChatPrompt(query, selectedResults),
-      dbPath,
-      limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-      evidence: selectedResults,
-      searchQuery: query,
-    });
-  };
 
   const setAllEvidence = (value: boolean) =>
     setSelectedEvidence(
@@ -2800,7 +2735,6 @@ function RagSearchPanel(props: {
         <button className="primary" onClick={() => void search()}>
           検索
         </button>
-        <button onClick={sendToChat}>AI確認へ送る（{selectedResults.length}件）</button>
         <button onClick={() => void refreshStats()}>索引を確認</button>
       </ActionRow>
       <Status loading={searchState.loading || statsState.loading} error={searchState.error || statsState.error} />
@@ -2924,474 +2858,6 @@ function RagSearchResults(props: {
         );
       })}
     </div>
-  );
-}
-
-// Detect if a query is requesting a portfolio simulation
-function isSimQuery(q: string): boolean {
-  return /シミュレーション|simulation|ポートフォリオ.*組|銘柄.*予算|予算.*銘柄|配当.*目標|目標.*配当|年間.*万.*達成|達成.*年間/i.test(q);
-}
-
-// Parse holdings from CSV text into the format expected by /api/chat/simulate
-function holdingsCsvToSimHoldings(csv: string): Json[] {
-  const lines = csv.trim().split("\n");
-  if (lines.length < 2) return [];
-  const header = lines[0].split(",").map((h) => h.trim());
-  const tickerIdx = header.findIndex((h) => h === "ticker_or_fund_code");
-  const nameIdx = header.findIndex((h) => h === "name");
-  const costIdx = header.findIndex((h) => h === "avg_cost");
-  if (tickerIdx < 0) return [];
-  const holdings: Json[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",");
-    const ticker = cols[tickerIdx]?.trim();
-    if (!ticker) continue;
-    const price = costIdx >= 0 ? Number(cols[costIdx]?.trim()) : 0;
-    const name = nameIdx >= 0 ? (cols[nameIdx]?.trim() ?? ticker) : ticker;
-    holdings.push({ ticker, name, price: price || 0 });
-  }
-  return holdings;
-}
-
-// Extract budget (予算) and target dividend (目標配当) from natural language
-function parseSimParams(q: string): { budget: number; target: number } {
-  // Match patterns like 予算3000万, 予算30,000,000円, 3000万円の予算
-  const budgetMatch = q.match(/(?:予算|budget)[^\d]*?([\d,]+)\s*(億|千万|万)?円?/i)
-    ?? q.match(/([\d,]+)\s*(億|千万|万)円?.*?(?:予算|budget)/i);
-  let budget = 0;
-  if (budgetMatch) {
-    const num = parseFloat(budgetMatch[1].replace(/,/g, ""));
-    const unit = budgetMatch[2] ?? "";
-    budget = unit === "億" ? num * 1e8 : unit === "千万" ? num * 1e7 : unit === "万" ? num * 1e4 : num;
-  }
-  // Match patterns like 年間配当120万, 配当目標120万, 120万の配当
-  const targetMatch = q.match(/(?:年間配当|配当目標|目標配当)[^\d]*?([\d,]+)\s*(億|万)?円?/i)
-    ?? q.match(/([\d,]+)\s*(億|万)円?.*?(?:年間配当|配当目標|目標配当)/i);
-  let target = 0;
-  if (targetMatch) {
-    const num = parseFloat(targetMatch[1].replace(/,/g, ""));
-    const unit = targetMatch[2] ?? "";
-    target = unit === "億" ? num * 1e8 : unit === "万" ? num * 1e4 : num;
-  }
-  return { budget, target };
-}
-
-function ChatPanel(props: {
-  draft: ChatDraft;
-  onDraftChange: (value: ChatDraft) => void;
-  onSearchAgain: (value: RagSearchDraft) => void;
-  onOpenData: () => void;
-  holdingsCsv?: string;
-}) {
-  const [query, setQuery] = useState(props.draft.query);
-  const [dbPath, setDbPath] = useState(props.draft.dbPath);
-  const [limit, setLimit] = useState(String(props.draft.limit));
-  const [dividendOverrides, setDividendOverrides] = useState<string>("");
-  const state = useAsync<Json>();
-  const ragResults = Array.isArray(state.data?.results) ? (state.data.results as Json[]) : [];
-  const handoffEvidence = Array.isArray(props.draft.evidence) ? props.draft.evidence : [];
-  const answerText = String(state.data?.answer ?? state.data?.text ?? "回答がありません。");
-  const isOrchestrateResult = !!state.data && "synthesis" in state.data;
-  const requestedLimit = Number(limit) || DEFAULT_CHAT_LIMIT;
-  const [copyNotice, setCopyNotice] = useState<string | null>(null);
-  // --- Save simulation state ---
-  const [saveNotice, setSaveNotice] = useState<string | null>(null);
-  const [savedSims, setSavedSims] = useState<Json[]>([]);
-  const [showSaved, setShowSaved] = useState(false);
-  const [showSaveInput, setShowSaveInput] = useState(false);
-  const [saveName, setSaveName] = useState("");
-  const isSimResult = state.data !== null;
-
-  // --- Real-AI mode toggle (Sprint 2) ---
-  // OFF (default): offline pseudo-answer, no Gemini budget spent.
-  // ON: orchestrate / rag-answer requests ask the backend to call Gemini
-  // for real, and we show a compact remaining-daily-calls meter.
-  const [realAi, setRealAi] = useState<boolean>(
-    () => localStorage.getItem("ia.realAi") === "1",
-  );
-  useEffect(() => {
-    localStorage.setItem("ia.realAi", realAi ? "1" : "0");
-  }, [realAi]);
-  const [budgetInfo, setBudgetInfo] = useState<Json | null>(null);
-  const refreshBudget = async () => {
-    try {
-      const res = await api<Json>("/api/budget");
-      setBudgetInfo(res);
-    } catch (_e) {
-      // Budget fetch is best-effort UI sugar; hide the meter, don't crash.
-      setBudgetInfo(null);
-    }
-  };
-  useEffect(() => {
-    if (realAi) void refreshBudget();
-    else setBudgetInfo(null);
-    // Only re-fetch when the toggle flips, per spec (event-driven, no polling).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [realAi]);
-
-  const loadSavedSims = async () => {
-    try {
-      const res = await api<Json>("/api/simulations");
-      if (Array.isArray(res.simulations)) setSavedSims(res.simulations as Json[]);
-    } catch (_e) {
-      // ignore
-    }
-  };
-  useEffect(() => { void loadSavedSims(); }, []);
-
-  const saveSimulation = async () => {
-    if (!state.data) return;
-    const defaultName = `Plan-${new Date().toISOString().slice(0,16).replace("T","_")}`;
-    const name = saveName.trim() || defaultName;
-    try {
-      const res = await api<Json>("/api/simulations/save", {
-        name,
-        query,
-        result: state.data,
-      });
-      setSaveNotice(`✅ 保存しました: ${String(res.name ?? "")}（合計 ${String(res.total ?? "")} 件）`);
-      setSaveName("");
-      setShowSaveInput(false);
-      void loadSavedSims();
-    } catch (caught) {
-      setSaveNotice(`❌ 保存失敗: ${caught instanceof Error ? caught.message : String(caught)}`);
-    }
-    setTimeout(() => setSaveNotice(null), 4000);
-  };
-
-  const deleteSim = async (simId: string) => {
-    try {
-      await api<Json>("/api/simulations/delete", { id: simId });
-      void loadSavedSims();
-    } catch (caught) {
-      setSaveNotice(`❌ 削除失敗: ${caught instanceof Error ? caught.message : String(caught)}`);
-      setTimeout(() => setSaveNotice(null), 3000);
-    }
-  };
-
-  const reloadSim = (sim: Json) => {
-    const q = String(sim.query ?? "");
-    if (q) updateQuery(q);
-  };
-
-  const copyAnswer = async () => {
-    try {
-      await copyTextToClipboard(buildAnswerCopyText(query, answerText, ragResults));
-      setCopyNotice("回答と根拠をコピーしました。");
-    } catch (caught) {
-      setCopyNotice(`コピーに失敗しました: ${caught instanceof Error ? caught.message : String(caught)}`);
-    }
-  };
-  useEffect(() => {
-    setQuery(props.draft.query);
-    setDbPath(props.draft.dbPath);
-    setLimit(String(props.draft.limit));
-  }, [props.draft]);
-  const updateQuery = (value: string) => {
-    setQuery(value);
-    props.onDraftChange({
-      query: value,
-      dbPath,
-      limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-      evidence: props.draft.evidence,
-      searchQuery: props.draft.searchQuery,
-    });
-  };
-  const updateDbPath = (value: string) => {
-    setDbPath(value);
-    props.onDraftChange({
-      query,
-      dbPath: value,
-      limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-      evidence: props.draft.evidence,
-      searchQuery: props.draft.searchQuery,
-    });
-  };
-  const updateLimit = (value: string) => {
-    setLimit(value);
-    props.onDraftChange({
-      query,
-      dbPath,
-      limit: Number(value) || DEFAULT_CHAT_LIMIT,
-      evidence: props.draft.evidence,
-      searchQuery: props.draft.searchQuery,
-    });
-  };
-  const searchAgain = () => {
-    props.onSearchAgain({
-      query: props.draft.searchQuery ?? suggestedRagQueryFromChat(query),
-      dbPath,
-      limit: String(Number(limit) || DEFAULT_CHAT_LIMIT),
-      version: Date.now(),
-    });
-  };
-  // Parse dividend overrides from "7267:70,2914:242,8593:51" style input
-  const parsedOverrides = (): Record<string, number> => {
-    const out: Record<string, number> = {};
-    if (!dividendOverrides.trim()) return out;
-    for (const part of dividendOverrides.split(/[,\s]+/)) {
-      const [ticker, dps] = part.split(":");
-      if (ticker && dps) out[ticker.trim()] = parseFloat(dps.trim());
-    }
-    return out;
-  };
-  const askSimulate = () => {
-    const holdings = holdingsCsvToSimHoldings(props.holdingsCsv ?? "");
-    const { budget, target } = parseSimParams(query);
-    const manualOverrides = parsedOverrides();
-    return state.run(async () => {
-      // 手動入力が空の場合はYahoo Finance APIから1株配当を自動取得
-      let overrides: Record<string, number> = manualOverrides;
-      if (Object.keys(overrides).length === 0 && holdings.length > 0) {
-        try {
-          const tickers = holdings.map((h) => String((h as Json).ticker));
-          const yahooResult = await api<Json>("/api/yahoo/dps", { tickers });
-          if (yahooResult.dps && typeof yahooResult.dps === "object") {
-            overrides = yahooResult.dps as Record<string, number>;
-          }
-        } catch (_e) {
-          // Yahoo Finance取得失敗 → EDINETデータにフォールバック
-        }
-      }
-      return api<Json>("/api/chat/simulate", {
-        query,
-        holdings,
-        budget,
-        target_annual_dividend: target,
-        dividend_overrides: overrides,
-        dividend_basis: "latest",
-      });
-    });
-  };
-  const ask = () => {
-    if (isSimQuery(query) && (props.holdingsCsv ?? "").includes("ticker_or_fund_code")) {
-      return askSimulate();
-    }
-    return state
-      .run(() =>
-        api<Json>("/api/rag/answer", {
-          query,
-          db_path: dbPath,
-          limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-          call_real_api: realAi,
-        }),
-      )
-      .then((result) => {
-        if (realAi) void refreshBudget();
-        return result;
-      });
-  };
-  const askDetailed = () =>
-    state
-      .run(() =>
-        api<Json>("/api/orchestrate", {
-          query,
-          db_path: dbPath,
-          limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-          call_real_api: realAi,
-        }),
-      )
-      .then((result) => {
-        if (realAi) void refreshBudget();
-        return result;
-      });
-  const askWith = (q: string) => {
-    updateQuery(q);
-    if (isSimQuery(q) && (props.holdingsCsv ?? "").includes("ticker_or_fund_code")) {
-      const holdings = holdingsCsvToSimHoldings(props.holdingsCsv ?? "");
-      const { budget, target } = parseSimParams(q);
-      const manualOverrides = parsedOverrides();
-      return state.run(async () => {
-        let overrides: Record<string, number> = manualOverrides;
-        if (Object.keys(overrides).length === 0 && holdings.length > 0) {
-          try {
-            const tickers = holdings.map((h) => String((h as Json).ticker));
-            const yahooResult = await api<Json>("/api/yahoo/dps", { tickers });
-            if (yahooResult.dps && typeof yahooResult.dps === "object") {
-              overrides = yahooResult.dps as Record<string, number>;
-            }
-          } catch (_e) {
-            // Yahoo Finance取得失敗 → フォールバック
-          }
-        }
-        return api<Json>("/api/chat/simulate", {
-          query: q,
-          holdings,
-          budget,
-          target_annual_dividend: target,
-          dividend_overrides: overrides,
-          dividend_basis: "latest",
-        });
-      });
-    }
-    return state
-      .run(() =>
-        api<Json>("/api/rag/answer", {
-          query: q,
-          db_path: dbPath,
-          limit: Number(limit) || DEFAULT_CHAT_LIMIT,
-          call_real_api: realAi,
-        }),
-      )
-      .then((result) => {
-        if (realAi) void refreshBudget();
-        return result;
-      });
-  };
-  const hasHoldings = (props.holdingsCsv ?? "").includes("ticker_or_fund_code") &&
-    holdingsCsvToSimHoldings(props.holdingsCsv ?? "").length > 0;
-  return (
-    <section className="screen">
-      <ScreenTitle title="AIアドバイザー" body="RAGの根拠確認 + 保有分析の銘柄でポートフォリオシミュレーションができます。" />
-      <div className="advisor-realai-row">
-        <Check label="本物のAI (Gemini)" checked={realAi} onChange={setRealAi} />
-        {realAi && budgetInfo && (
-          <span className={budgetInfo.warning ? "badge warn" : "badge ready"}>
-            残り本日 {String(budgetInfo.daily_remaining)}/{String(budgetInfo.hard_daily_limit)}
-          </span>
-        )}
-      </div>
-      {!realAi && (
-        <p className="hint">オフライン簡易応答モード（本物のAIをオンにするとGemini APIで回答します）</p>
-      )}
-      <div className="form-grid tight">
-        <Field label="RAG DB">
-          <input value={dbPath} onChange={(event) => updateDbPath(event.target.value)} />
-        </Field>
-        <Field label="件数">
-          <input value={limit} onChange={(event) => updateLimit(event.target.value)} inputMode="numeric" />
-        </Field>
-      </div>
-      <textarea
-        value={query}
-        onChange={(e) => updateQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            void ask();
-          }
-        }}
-        placeholder="質問を入力（Ctrl/⌘+Enterで確認）"
-      />
-      <div className="quick-queries" aria-label="よく使う質問">
-        {QUICK_QUERY_PRESETS.map((item) => (
-          <button
-            key={item}
-            className="table-action"
-            onClick={() => void askWith(item)}
-          >
-            {item}
-          </button>
-        ))}
-        {hasHoldings && (
-          <button
-            className="table-action"
-            onClick={() => void askWith("保有分析の銘柄で予算3000万円、年間配当120万円目標でシミュレーションして")}
-          >
-            📊 配当シミュレーション
-          </button>
-        )}
-      </div>
-      {hasHoldings && (
-        <div className="form-grid tight" style={{ marginTop: "8px" }}>
-          <Field label="配当上書き（例: 7267:70,2914:242,8593:51）">
-            <input
-              value={dividendOverrides}
-              onChange={(e) => setDividendOverrides(e.target.value)}
-              placeholder="ticker:円,ticker:円 ..."
-            />
-          </Field>
-        </div>
-      )}
-      <RagEvidenceQuality
-        title="AI確認に渡す根拠量"
-        results={handoffEvidence}
-        requestedLimit={requestedLimit}
-        selectedCount={handoffEvidence.length}
-        actionLabel="データ更新へ"
-        onAction={props.onOpenData}
-      />
-      {handoffEvidence.length > 0 && (
-        <RagEvidenceCards title="AI確認に渡した根拠" results={handoffEvidence} idPrefix="handoff-evidence" />
-      )}
-      <ActionRow>
-        <button className="primary" onClick={() => void ask()}>
-          確認する
-        </button>
-        <button
-          className="primary"
-          onClick={() => void askDetailed()}
-          title="3案生成→批評→統合の多段処理（通常確認より時間がかかります）"
-        >
-          詳細分析（マルチエージェント）
-        </button>
-        {hasHoldings && (
-          <button className="primary" onClick={() => void askSimulate()} title="保有分析の銘柄でシミュレーション実行">
-            📊 シミュレーション
-          </button>
-        )}
-        <button onClick={searchAgain}>根拠を追加検索</button>
-      </ActionRow>
-      <Status loading={state.loading} error={state.error} />
-      {state.data && (
-        <div className="answer">
-          <div className="answer-head">
-            <h3>回答</h3>
-            <button className="table-action" onClick={() => void copyAnswer()}>
-              回答をコピー
-            </button>
-            {isSimResult && !showSaveInput && (
-              <button className="table-action" onClick={() => {
-                setSaveName(`Plan-${new Date().toISOString().slice(0,16).replace("T","_")}`);
-                setShowSaveInput(true);
-              }}>
-                💾 保存
-              </button>
-            )}
-          </div>
-          {isSimResult && showSaveInput && (
-            <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap" }}>
-              <input value={saveName} onChange={(e) => setSaveName(e.target.value)}
-                placeholder="保存名" style={{ padding: "4px 10px", border: "1px solid var(--color-border,#ccc)", borderRadius: "4px", minWidth: "200px" }}
-                onKeyDown={(e) => { if (e.key === "Enter") void saveSimulation(); if (e.key === "Escape") setShowSaveInput(false); }} />
-              <button className="primary" onClick={() => void saveSimulation()}>保存</button>
-              <button onClick={() => setShowSaveInput(false)}>キャンセル</button>
-            </div>
-          )}
-          {copyNotice && <p className="notice safe">{copyNotice}</p>}
-          {saveNotice && <p className="notice safe">{saveNotice}</p>}
-          <ForecastHighlights highlights={Array.isArray(state.data.highlights) ? (state.data.highlights as Json[]) : []} />
-          <RagEvidenceQuality
-            title="回答時の根拠量"
-            results={ragResults}
-            requestedLimit={requestedLimit}
-            actionLabel="データ更新へ"
-            onAction={props.onOpenData}
-          />
-          <CitationLinkedText text={answerText} citationCount={ragResults.length} targetPrefix="answer-evidence" />
-          {isOrchestrateResult && (
-            <>
-              <p className="notice">詳細分析: 3ドラフト→批評→統合（計5回のローカルLLM処理・無料）</p>
-              {typeof state.data.disclaimer === "string" && (
-                <p className="notice">{state.data.disclaimer}</p>
-              )}
-            </>
-          )}
-          {ragResults.length > 0 && (
-            <RagEvidenceCards title="回答時に照合した根拠" results={ragResults} idPrefix="answer-evidence" />
-          )}
-          <JsonDetails data={state.data} />
-        </div>
-      )}
-      {/* Saved simulations panel */}
-      <SavedSimsPanel
-        savedSims={savedSims}
-        showSaved={showSaved}
-        onToggle={() => { setShowSaved((v) => !v); void loadSavedSims(); }}
-        onReload={reloadSim}
-        onDelete={(id) => void deleteSim(id)}
-      />
-    </section>
   );
 }
 
@@ -4213,27 +3679,6 @@ function SavedSimsPanel(props: {
               ))}
             </div>
       )}
-    </div>
-  );
-}
-
-function ForecastHighlights({ highlights }: { highlights: Json[] }) {
-  if (highlights.length === 0) return null;
-  return (
-    <div className="detail-section" aria-label="予測ハイライト">
-      <h4>予測ハイライト（統計推定・非助言）</h4>
-      <ul className="forecast-highlights">
-        {highlights.map((item, index) => (
-          <li key={`${String(item.ticker ?? item.source ?? index)}`}>
-            <b>
-              {item.name ? `${String(item.name)}` : ""}
-              {item.ticker ? `（${String(item.ticker)}）` : ""}
-            </b>
-            {item.forecast ? <div>予測: {String(item.forecast)}</div> : null}
-            {item.tags ? <div className="hint">特徴: {String(item.tags)}</div> : null}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
@@ -5278,335 +4723,6 @@ function useAsync<T>() {
   return { loading, error, data, run, reset };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AI銘柄分析パネル
-// ─────────────────────────────────────────────────────────────────────────────
-
-const SCORE_AXES: Array<[string, string]> = [
-  ["stability_score",   "安定性"],
-  ["health_score",      "財務"],
-  ["yield_score",       "利回り"],
-  ["momentum_score",    "成長"],
-  ["payout_score",      "性向"],
-  ["streak_score",      "連配"],
-  ["sector_rank_score", "業種内"],
-];
-
-function ScoreBar({ value }: { value: number }) {
-  const pct = Math.round(value * 100);
-  const color = pct >= 70 ? "#16a34a" : pct >= 45 ? "#ca8a04" : "#dc2626";
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-      <div style={{ flex: 1, height: "6px", background: "var(--color-border,#e2e8f0)", borderRadius: "3px" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: "3px" }} />
-      </div>
-      <span style={{ fontSize: "0.78em", fontWeight: 600, color, minWidth: "28px", textAlign: "right" }}>
-        {pct}
-      </span>
-    </div>
-  );
-}
-
-// ── AI銘柄分析パネル（フリック/スプリント統合版）─────────────────────────────
-
-type AiMode = "sprint" | "collect_score" | "analyze";
-
-function fmtAgo(iso: string | null | undefined): string {
-  if (!iso) return "なし";
-  try {
-    const diff = Date.now() - new Date(iso).getTime();
-    const h = Math.floor(diff / 3600000);
-    if (h < 1) return "1時間以内";
-    if (h < 24) return `約${h}時間前`;
-    return `約${Math.floor(h / 24)}日前`;
-  } catch { return iso; }
-}
-
-function StockAiPanel() {
-  const [tickers, setTickers] = useState("8306 8316 8411 9432 9433 2914 8058 8031");
-  const [mode, setMode] = useState<AiMode>("sprint");
-  const [useLlm, setUseLlm] = useState(false);
-  const [perspective, setPerspective] = useState("高配当・長期保有");
-
-  const flickUpdate = useAsync<Json>();
-  const sprintStatus = useAsync<Json>();
-  const output = useAsync<Json>();
-
-  // マウント時: スプリントキャッシュ状況を取得
-  useEffect(() => {
-    sprintStatus.run(() => api("/api/sprint/status", {}));
-  }, []);
-
-  const cacheInfo = sprintStatus.data;
-  const cacheStale = cacheInfo?.stale !== false;
-
-  async function handleFlickUpdate() {
-    const tickerList = tickers.split(/[\s,，]+/).map((t: string) => t.trim()).filter(Boolean);
-    const result = await flickUpdate.run(() =>
-      api("/api/flick/update", { watchlist: tickerList, max_age_hours: 24 })
-    );
-    if (result) {
-      // キャッシュステータス更新
-      sprintStatus.run(() => api("/api/sprint/status", {}));
-    }
-  }
-
-  async function handleOutput() {
-    const tickerList = tickers.split(/[\s,，]+/).map((t: string) => t.trim()).filter(Boolean);
-
-    if (mode === "sprint") {
-      // キャッシュから即時応答
-      await output.run(() =>
-        api("/api/sprint/rank", { tickers: tickerList.length > 0 ? tickerList : undefined })
-      );
-    } else if (mode === "collect_score") {
-      // ネットワーク取得 → スコア（同期）
-      await output.run(async () => {
-        await api("/api/stocks/collect", { tickers: tickerList });
-        return api("/api/stocks/score", { tickers: tickerList });
-      });
-    } else {
-      // collect + LLM分析
-      await output.run(async () => {
-        await api("/api/stocks/collect", { tickers: tickerList });
-        return api("/api/stocks/analyze", { tickers: tickerList, use_llm: useLlm, perspective });
-      });
-    }
-  }
-
-  const ranked: Json[] = output.data?.ranked ?? [];
-  const fromCache = output.data?.source === "sprint_cache";
-
-  return (
-    <section className="panel" style={{ maxWidth: "960px", margin: "0 auto" }}>
-      {/* ヘッダー */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: "12px", marginBottom: "16px", flexWrap: "wrap" }}>
-        <h2 style={{ margin: 0 }}>AI銘柄分析</h2>
-        <span style={{ fontSize: "0.8em", color: "#6b7280" }}>
-          キャッシュ: {cacheInfo ? `${cacheInfo.cached}銘柄` : "–"} /
-          最終更新: {fmtAgo(cacheInfo?.newest)}
-          {cacheStale && <span style={{ color: "#ca8a04", marginLeft: "6px" }}>⚠ データが古い — 差分更新してください</span>}
-        </span>
-      </div>
-
-      {/* フリック（入力系）コントロール */}
-      <div className="card" style={{ marginBottom: "12px", padding: "14px 16px", borderLeft: "3px solid #2563eb" }}>
-        <div style={{ fontSize: "0.78em", fontWeight: 700, color: "#2563eb", marginBottom: "8px", letterSpacing: "0.05em" }}>
-          ① フリック（入力系）— バックグラウンド差分収集
-        </div>
-        <Field label="ウォッチリスト（スペース/カンマ区切り）">
-          <textarea
-            rows={2}
-            style={{ width: "100%", fontFamily: "monospace", fontSize: "0.9em", resize: "vertical" }}
-            value={tickers}
-            onChange={e => setTickers(e.target.value)}
-          />
-        </Field>
-        <div style={{ display: "flex", gap: "8px", marginTop: "10px", alignItems: "center", flexWrap: "wrap" }}>
-          <button
-            className="btn-primary"
-            disabled={flickUpdate.loading}
-            onClick={handleFlickUpdate}
-            style={{ fontSize: "0.88em" }}
-          >
-            {flickUpdate.loading ? "差分取得中..." : "差分更新（期限切れデータのみ再取得）"}
-          </button>
-          {flickUpdate.data && (
-            <span style={{ fontSize: "0.82em", color: "#6b7280" }}>
-              更新 {flickUpdate.data.tickers_updated}件 / スキップ {flickUpdate.data.tickers_skipped}件
-              ({flickUpdate.data.elapsed_s}s)
-            </span>
-          )}
-          {flickUpdate.error && <span style={{ color: "#dc2626", fontSize: "0.82em" }}>{flickUpdate.error}</span>}
-        </div>
-      </div>
-
-      {/* スプリント（出力系）コントロール */}
-      <div className="card" style={{ marginBottom: "16px", padding: "14px 16px", borderLeft: "3px solid #16a34a" }}>
-        <div style={{ fontSize: "0.78em", fontWeight: 700, color: "#16a34a", marginBottom: "10px", letterSpacing: "0.05em" }}>
-          ② スプリント（出力系）— 応答モード選択
-        </div>
-        <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
-          {([ ["sprint", "⚡ スプリント（キャッシュ即時）"], ["collect_score", "🔄 取得→スコア"], ["analyze", "🤖 取得→LLM分析"] ] as const).map(([m, label]) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              style={{
-                padding: "5px 12px",
-                borderRadius: "6px",
-                border: mode === m ? "2px solid #16a34a" : "1px solid var(--color-border,#e2e8f0)",
-                background: mode === m ? "#f0fdf4" : "transparent",
-                fontWeight: mode === m ? 700 : 400,
-                cursor: "pointer",
-                fontSize: "0.85em",
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {mode === "sprint" && (
-          <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: "10px" }}>
-            保存済みデータから即時返答。ネットワーク・AI不使用。{cacheStale ? "※データが古い可能性があります。「差分更新」を実行してください。" : ""}
-          </div>
-        )}
-        {mode === "analyze" && (
-          <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "10px", flexWrap: "wrap" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.88em" }}>
-              <input type="checkbox" checked={useLlm} onChange={e => setUseLlm(e.target.checked)} />
-              Gemini AIコメント付き
-            </label>
-            {useLlm && (
-              <input
-                placeholder="分析観点"
-                style={{ width: "180px", fontSize: "0.88em" }}
-                value={perspective}
-                onChange={e => setPerspective(e.target.value)}
-              />
-            )}
-          </div>
-        )}
-
-        <button
-          className="btn-primary"
-          disabled={output.loading}
-          onClick={handleOutput}
-          style={{ background: "#16a34a" }}
-        >
-          {output.loading
-            ? (mode === "sprint" ? "キャッシュ取得中..." : mode === "collect_score" ? "取得→スコア計算中..." : "LLM分析中...")
-            : (mode === "sprint" ? "⚡ スプリント実行" : mode === "collect_score" ? "取得→スコア" : "取得→LLM分析")}
-        </button>
-      </div>
-
-      <Status loading={output.loading} error={output.error} />
-
-      {/* 結果テーブル */}
-      {ranked.length > 0 && (
-        <>
-          <div style={{ fontSize: "0.8em", color: "#6b7280", marginBottom: "8px" }}>
-            {fromCache ? "⚡ キャッシュ応答" : "🔄 リアルタイム取得"} — {ranked.length}銘柄
-            {output.data?.cache_stale && <span style={{ color: "#ca8a04", marginLeft: "8px" }}>⚠ データが古い</span>}
-          </div>
-          <div className="card" style={{ padding: 0, overflow: "auto" }}>
-            <table className="data-table" style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "center", width: "36px" }}>#</th>
-                  <th style={{ textAlign: "left" }}>銘柄</th>
-                  <th style={{ textAlign: "right" }}>利回り</th>
-                  <th style={{ textAlign: "right" }}>性向</th>
-                  <th style={{ textAlign: "right" }}>連配</th>
-                  <th style={{ textAlign: "right", fontWeight: 800 }}>総合</th>
-                  {SCORE_AXES.map(([, label]) => (
-                    <th key={label} style={{ textAlign: "left", minWidth: "76px", fontSize: "0.8em" }}>{label}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {ranked.map((s: Json) => <StockAiRow key={s.ticker} s={s} bd={s.breakdown ?? {}} />)}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function StockAiRow({ s, bd }: { s: Json; bd: Json }) {
-  const [open, setOpen] = useState(false);
-  const totalPct = Math.round((bd.total_score ?? 0) * 100);
-  const totalColor = totalPct >= 65 ? "#16a34a" : totalPct >= 45 ? "#ca8a04" : "#6b7280";
-  const hasDetail = (s.rationale?.length > 0) || s.llm_comment;
-
-  return (
-    <>
-      {/* メイン行 */}
-      <tr
-        onClick={() => hasDetail && setOpen(o => !o)}
-        style={{ cursor: hasDetail ? "pointer" : "default", background: open ? "var(--color-background-secondary)" : "transparent" }}
-      >
-        <td style={{ textAlign: "center", fontWeight: 700, color: "#6b7280" }}>#{s.rank}</td>
-        <td>
-          <div style={{ fontWeight: 700, fontSize: "1.05em" }}>
-            {s.name}
-            {hasDetail && <span style={{ fontSize: "0.7em", color: "#94a3b8", marginLeft: "4px" }}>{open ? "▲" : "▼"}</span>}
-          </div>
-          <div style={{ fontSize: "0.76em", color: "#888" }}>{s.ticker}</div>
-        </td>
-        <td style={{ textAlign: "right", fontWeight: 700, color: "#16a34a" }}>
-          {s.dividend_yield_pct != null ? `${Number(s.dividend_yield_pct).toFixed(2)}%` : "-"}
-        </td>
-        <td style={{ textAlign: "right", fontSize: "0.9em" }}>
-          {s.payout_ratio_pct != null ? `${Number(s.payout_ratio_pct).toFixed(0)}%` : "-"}
-        </td>
-        <td style={{ textAlign: "right", fontSize: "0.9em" }}>
-          {s.consecutive_raises != null ? `${s.consecutive_raises}年` : "-"}
-        </td>
-        <td style={{ textAlign: "right", fontWeight: 800, color: totalColor }}>
-          {totalPct}
-        </td>
-        {SCORE_AXES.map(([key, label]) => (
-          <td key={label} style={{ minWidth: "80px", paddingRight: "8px" }}>
-            <ScoreBar value={bd[key] ?? 0} />
-          </td>
-        ))}
-
-      </tr>
-
-      {/* AIコメント — 常時表示（LLM分析時）*/}
-      {s.llm_comment && !open && (
-        <tr style={{ background: "transparent" }}>
-          <td />
-          <td colSpan={6 + SCORE_AXES.length} style={{ padding: "2px 8px 8px 4px" }}>
-            <div style={{
-              fontSize: "0.82em", lineHeight: 1.55, color: "var(--color-text)",
-              borderLeft: "3px solid #2563eb", paddingLeft: "8px",
-              background: "color-mix(in srgb, #2563eb 6%, transparent)",
-              borderRadius: "0 4px 4px 0", padding: "6px 10px",
-            }}>
-              <span style={{ fontSize: "0.75em", fontWeight: 700, color: "#2563eb", marginRight: "6px" }}>AI評価</span>
-              {s.llm_comment}
-            </div>
-          </td>
-        </tr>
-      )}
-
-      {/* 展開詳細（クリック時）*/}
-      {open && (
-        <tr style={{ background: "var(--color-background-secondary)" }}>
-          <td colSpan={7 + SCORE_AXES.length} style={{ padding: "10px 16px" }}>
-            {/* スコア根拠 */}
-            <div style={{ display: "grid", gap: "3px", marginBottom: s.llm_comment ? "10px" : "0" }}>
-              {(s.rationale ?? []).map((line: string, i: number) => (
-                <div key={i} style={{
-                  fontSize: "0.83em",
-                  color: line.startsWith("⚠") ? "#dc2626" : line.startsWith("✓") ? "#16a34a" : "var(--color-text-secondary,#6b7280)"
-                }}>
-                  {line}
-                </div>
-              ))}
-            </div>
-            {/* AIコメント（展開時も表示）*/}
-            {s.llm_comment && (
-              <div style={{
-                padding: "10px 12px", background: "var(--color-background)",
-                borderRadius: "6px", fontSize: "0.88em", lineHeight: 1.65,
-                borderLeft: "3px solid #2563eb",
-              }}>
-                <strong style={{ fontSize: "0.78em", color: "#2563eb", display: "block", marginBottom: "5px" }}>AI評価</strong>
-                {s.llm_comment}
-              </div>
-            )}
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
 function buildWorkState(input: {
   marketSnapshot: Json | null;
   analysis: Json | null;
@@ -5741,46 +4857,6 @@ function formatScore(value: unknown): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "-";
   return numeric.toLocaleString("ja-JP", { maximumFractionDigits: 4 });
-}
-
-function buildRagChatPrompt(query: string, results: Json[]): string {
-  const trimmedQuery = query.trim() || "RAG検索結果";
-  const citations = results
-    .slice(0, 5)
-    .map((result, index) => {
-      const citation = asJson(result.citation) ?? {};
-      const source = shortPath(String(result.source ?? ""));
-      const rawLabel = citation.label ?? source;
-      const label = String(rawLabel || `根拠${index + 1}`);
-      const preview = previewText(result.text, 180);
-      return `- [${index + 1}] ${label}${source ? ` / ${source}` : ""}\n  要約: ${preview}`;
-    })
-    .filter(Boolean);
-  const citationBlock =
-    citations.length > 0 ? `\n\n確認済み根拠候補:\n${citations.join("\n")}` : "";
-  return `「${trimmedQuery}」について、RAGの根拠を引用しながら、投資助言にならない形で要点・不確実性・追加確認事項を簡潔に説明して。${citationBlock}`;
-}
-
-function buildAnswerCopyText(query: string, answerText: string, results: Json[]): string {
-  const lines = [`Q: ${query.trim() || "(質問なし)"}`, "", answerText.trim()];
-  if (results.length > 0) {
-    lines.push("", "根拠:");
-    results.forEach((result, index) => {
-      const citation = asJson(result.citation) ?? {};
-      const source = shortPath(String(result.source ?? ""));
-      const label = String(citation.label ?? source ?? `根拠${index + 1}`);
-      lines.push(`[${index + 1}] ${label}${source && label !== source ? ` / ${source}` : ""}`);
-    });
-  }
-  lines.push("", "※本ツールは投資助言・売買推奨を行いません（根拠確認の補助）。");
-  return lines.join("\n");
-}
-
-function suggestedRagQueryFromChat(query: string): string {
-  const trimmed = query.trim();
-  const quoted = trimmed.match(/^「(.+?)」について/);
-  if (quoted?.[1]?.trim()) return quoted[1].trim();
-  return trimmed.slice(0, 120) || "配当 利回り 根拠";
 }
 
 function ragIndexWarnings(data: Json): string[] {
