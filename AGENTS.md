@@ -45,24 +45,6 @@
 - 無料枠上限に近づいた場合は警告し、上限到達時は設定されたフォールバックを使用する。
 - 単体テストではGemini APIを呼ばず、mockまたはfake clientを使う。
 
-## Codexプロバイダ (codex_cli) ルール
-
-- `codex_cli` も必ず `src/investment_assistant/llm/service.py` 経由（予算・キャッシュ・
-  フォールバック適用）で呼び出す。`llm/codex_client.py` を直接、あるいは
-  `LlmService`/`ChainLlmService` を経由せずに呼び出さない。
-- ChatGPT OAuthトークンの抽出・直接API利用は禁止（規約違反）。`codex exec` CLI経由の
-  呼び出しのみを行う。
-- デフォルト無効（`config/llm.yaml` の `providers.codex_cli.enabled: false`）。有効化は
-  オーナーの明示判断で行う。グレーゾーンの利用であることを認識した上で使うこと。
-- ローカル専用の想定。`webapi` をLAN/外部に公開する構成にする場合は `codex_cli` を
-  無効化する。
-- 自主上限は1日10回（`daily_request_limit`、失敗した試行も含めてカウント）。
-  レート制限エラー後はクールダウン（既定30分）を置き、その間は起動せずスキップする。
-  一括呼び出しや、上限に達するかどうかを探るための呼び出しは行わない。
-- 単体テストでは `subprocess` を起動しない。`CodexCliClient` を使うテストは必ず fake
-  クライアント（または `subprocess.Popen` のパッチ）を使う。実サブプロセスを伴うテストを
-  追加する場合は `@pytest.mark.integration` を付け、デフォルトの `pytest -q` から除外する。
-
 ## 投資・コンプライアンス
 
 - 個別商品の売買を断定的に推奨しない。

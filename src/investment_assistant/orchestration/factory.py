@@ -4,26 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from investment_assistant.llm.chain import ChainLlmService
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
-    DEFAULT_LLM_CONFIG_PATH,
-    build_codex_service,
     build_llm_service,
-    load_gemini_runtime_config,
-    load_llm_runtime_config,
 )
 from investment_assistant.llm.gemini_client import TextGenerationClient
-from investment_assistant.llm.service import LlmService, LlmServiceProtocol
+from investment_assistant.llm.service import LlmService
 from investment_assistant.orchestration.orchestrator import (
     DEFAULT_ROLE_MODELS,
     MultiModelOrchestrator,
     OrchestrationConfig,
     RoleModels,
 )
-
-CRITIC_ROLE = "critic"
-CODEX_PROVIDER_NAME = "codex_cli"
 
 
 class LocalOrchestrationClient:
@@ -99,24 +91,14 @@ def build_orchestrator(
     config: OrchestrationConfig | None = None,
     client: TextGenerationClient | None = None,
     call_real_api: bool = False,
-    llm_config_path: str | Path = DEFAULT_LLM_CONFIG_PATH,
-    codex_client: TextGenerationClient | None = None,
 ) -> MultiModelOrchestrator:
     """Construct a MultiModelOrchestrator with one guarded service per role.
 
     All roles share the configured budget guard and cache (same DB paths), so
     multi-model orchestration cannot exceed the free-tier budget. When
     ``call_real_api`` is false and no ``client`` is given, a deterministic local
-    client is used so the pipeline runs offline.
-
-    When ``call_real_api`` is true and ``config/llm.yaml`` (``llm_config_path``)
-    both enables ``providers.codex_cli`` and lists it ahead of ``gemini`` for
-    the critic role, the critic becomes a ``ChainLlmService`` that tries Codex
-    CLI first and falls through to the plain Gemini critic service. Every
-    other case (offline, config absent, codex disabled, binary missing) yields
-    exactly today's behavior: a single Gemini-backed ``LlmService`` per role.
-    ``codex_client`` lets tests inject a fake Codex client without touching
-    ``shutil.which``/subprocess.
+    client is used so the pipeline runs offline. Every role (drafter, critic,
+    synthesizer) is a single Gemini-backed ``LlmService``.
     """
 
     fallback_client = None if call_real_api else LocalOrchestrationClient()
@@ -131,25 +113,9 @@ def build_orchestrator(
             config_path, client=chosen, model=model, enforce_budget=enforce_budget
         )
 
-    critic_service: LlmServiceProtocol = make_service(role_models.critic)
-    if call_real_api:
-        llm_runtime = load_llm_runtime_config(llm_config_path)
-        critic_providers = llm_runtime.roles.get(CRITIC_ROLE, ())
-        if llm_runtime.codex.enabled and CODEX_PROVIDER_NAME in critic_providers:
-            gemini_runtime = load_gemini_runtime_config(config_path)
-            codex_service = build_codex_service(
-                llm_runtime.codex,
-                cache_db_path=gemini_runtime.cache_db_path,
-                cache_enabled=gemini_runtime.cache_enabled,
-                cache_ttl_days=gemini_runtime.cache_ttl_days,
-                client=codex_client,
-            )
-            if codex_service is not None:
-                critic_service = ChainLlmService([codex_service, critic_service])
-
     return MultiModelOrchestrator(
         drafter=make_service(role_models.drafter),
-        critic=critic_service,
+        critic=make_service(role_models.critic),
         synthesizer=make_service(role_models.synthesizer),
         config=config,
     )

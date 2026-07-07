@@ -105,17 +105,17 @@ def test_service_default_provider_label_is_gemini_for_backward_compat(tmp_path):
 
 def test_service_custom_provider_label_surfaces_on_success(tmp_path):
     service = LlmService(
-        model="codex_cli:default",
+        model="local:default",
         client=FakeClient(),
         cache=LlmCache(tmp_path / "cache.sqlite"),
         budget_guard=BudgetGuard(
             tmp_path / "usage.sqlite",
             BudgetConfig(daily_request_limit=10, monthly_request_limit=100),
         ),
-        provider="codex_cli",
+        provider="local",
     )
     response = service.generate(task_type="rag_answer", prompt="hello")
-    assert response.source == "codex_cli"
+    assert response.source == "local"
 
 
 @dataclass
@@ -135,12 +135,12 @@ def test_cooldown_minutes_records_cooldown_on_rate_limit_reason(tmp_path):
         BudgetConfig(daily_request_limit=10, monthly_request_limit=100),
     )
     service = LlmService(
-        model="codex_cli:default",
+        model="local:default",
         client=RateLimitedClient(),
         cache=LlmCache(tmp_path / "cache.sqlite"),
         budget_guard=guard,
         fallback=FallbackConfig(on_error="skip_llm"),
-        provider="codex_cli",
+        provider="local",
         cooldown_minutes=30,
     )
 
@@ -159,12 +159,12 @@ def test_count_failed_attempts_counts_errors_against_daily_cap(tmp_path):
         ),
     )
     service = LlmService(
-        model="codex_cli:default",
+        model="local:default",
         client=FailingClient(),
         cache=LlmCache(tmp_path / "cache.sqlite"),
         budget_guard=guard,
         fallback=FallbackConfig(on_error="skip_llm"),
-        provider="codex_cli",
+        provider="local",
         count_failed_attempts=True,
     )
 

@@ -1,8 +1,8 @@
 """Chain of guarded LLM services, tried in order with fallthrough.
 
-Used to let a role (currently only the critic) try a secondary provider
-(Codex CLI) first and fall through to the primary Gemini-backed service when
-the secondary is skipped, in cooldown, over budget, or erroring.
+Lets a role try a secondary provider first and fall through to the primary
+service when the secondary is skipped, in cooldown, over budget, or erroring
+(e.g. the planned local-LLM-first / Gemini-escalation chain).
 """
 
 from __future__ import annotations

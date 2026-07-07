@@ -73,12 +73,12 @@ class LlmService:
         self.enforce_budget = enforce_budget
         # Label surfaced on successful responses (``response.source``). Defaults
         # to "gemini" to keep existing callers/tests (which assert that literal
-        # string) unchanged; other providers (e.g. "codex_cli") pass their own.
+        # string) unchanged; other providers pass their own label.
         self.provider = provider
         # When set, a client error classified as "rate_limit" (via a ``reason``
-        # attribute on the raised exception -- see CodexUnavailableError) puts
-        # this service's budget guard into cooldown for this many minutes so
-        # subsequent calls are skipped without spawning/calling the client.
+        # attribute on the raised exception) puts this service's budget guard
+        # into cooldown for this many minutes so subsequent calls are skipped
+        # without spawning/calling the client.
         self.cooldown_minutes = cooldown_minutes
         # When true, a failed client call is recorded against the daily/monthly
         # budget too (not just successes/cache hits). Off by default so the
