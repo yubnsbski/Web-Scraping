@@ -1,28 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
-import { RagEvidenceQuality } from "./rag/Evidence";
 import { ChatView } from "./chat/ChatView";
 
 type Json = Record<string, any>;
-type TabId = "dashboard" | "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "rag" | "chat" | "plans";
+type TabId = "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "chat" | "plans";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
-type RagSearchDraft = { query: string; dbPath: string; limit: string; version: number };
 
 const FINANCIALS_PATH = "local_docs/edinet/financials.csv";
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const WATCHLIST_STORAGE_KEY = "ia.watchlist";
 const DEFAULT_WATCHLIST = "7203 8306 9433 9432 6758 6861 8058 9984";
-// Shared one-tap presets for RAG search and AI chat, so both stay in sync.
-const QUICK_QUERY_PRESETS = [
-  "配当 方針 根拠",
-  "減配 リスク",
-  "自己資本比率",
-  "株主還元 自社株買い",
-  "NISA 枠",
-  "集中リスク",
-  "株価 予測 上昇率",
-  "予測 期待リターン 上位",
-];
 
 function parseTickers(text: string): string[] {
   return text.split(/[\s,]+/).map((code) => code.trim()).filter(Boolean);
@@ -49,12 +36,10 @@ const TABS: Array<{
   { id: "holdings", label: "保有分析", short: "保有", group: "main" },
   { id: "screen", label: "候補抽出", short: "候補", group: "main" },
   { id: "data", label: "データ更新", short: "更新", group: "main" },
-  { id: "dashboard", label: "全体", short: "全体", group: "more" },
   { id: "report", label: "レポート", short: "報告", group: "more" },
   { id: "watch", label: "ウォッチ", short: "監視", group: "more" },
-  { id: "detail", label: "詳細", short: "詳細", group: "more" },
   { id: "forecast", label: "予測スクリーニング", short: "予測", group: "more" },
-  { id: "rag", label: "RAG検索", short: "RAG", group: "more" },
+  { id: "detail", label: "詳細", short: "詳細", group: "more" },
   { id: "plans", label: "プラン設計", short: "設計", group: "more" },
 ];
 
@@ -76,12 +61,6 @@ export function App() {
   const [analysis, setAnalysis] = useState<Json | null>(null);
   const [candidates, setCandidates] = useState<Json | null>(null);
   const [report, setReport] = useState<Json | null>(null);
-  const [ragDraft, setRagDraft] = useState<RagSearchDraft>({
-    query: "配当 利回り 根拠",
-    dbPath: DEFAULT_RAG_DB_PATH,
-    limit: "8",
-    version: 0,
-  });
   const [detailRequest, setDetailRequest] = useState<DetailRequest>({
     code: "8306",
     assetType: "stock",
@@ -168,27 +147,6 @@ export function App() {
           onOpenWatch={() => setTab("watch")}
         />
 
-        {tab === "dashboard" && (
-          <>
-            <OneClickPanel
-              holdingsCsv={holdingsCsv}
-              financialsPath={financialsPath}
-              watchTickers={watchTickers}
-              onMarket={setMarketSnapshot}
-              onAnalysis={setAnalysis}
-              onCandidates={setCandidates}
-              onReport={setReport}
-              onMove={setTab}
-            />
-            <Dashboard
-              marketSnapshot={marketSnapshot}
-              analysis={analysis}
-              candidates={candidates}
-              report={report}
-              onMove={setTab}
-            />
-          </>
-        )}
         {tab === "data" && (
           <DataUpdatePanel
             financialsPath={financialsPath}
@@ -223,14 +181,6 @@ export function App() {
               setDetailRequest((prev) => ({ code, assetType, version: prev.version + 1 }));
               setTab("detail");
             }}
-            onOpenRag={(codes) => {
-              setRagDraft((prev) => ({
-                ...prev,
-                query: codes.length > 0 ? codes.join(" ") : prev.query,
-                version: Date.now(),
-              }));
-              setTab("rag");
-            }}
             onUseForReport={(csv) => {
               setHoldingsCsv(csv);
               setTab("report");
@@ -264,63 +214,15 @@ export function App() {
           <ReportPanel
             holdingsCsv={holdingsCsv}
             financialsPath={financialsPath}
-            ragDbPath={ragDraft.dbPath}
+            ragDbPath={DEFAULT_RAG_DB_PATH}
             candidates={candidates}
             onReport={setReport}
-          />
-        )}
-        {tab === "rag" && (
-          <RagSearchPanel
-            draft={ragDraft}
-            onDraftChange={setRagDraft}
-            onOpenData={() => setTab("data")}
           />
         )}
         {tab === "chat" && <ChatView onNavigate={(tabId) => setTab(tabId as TabId)} />}
         {tab === "plans" && <PlanBuilderPanel />}
       </main>
     </div>
-  );
-}
-
-function Dashboard(props: {
-  marketSnapshot: Json | null;
-  analysis: Json | null;
-  candidates: Json | null;
-  report: Json | null;
-  onMove: (tab: TabId) => void;
-}) {
-  const summary = props.analysis?.summary ?? {};
-  const kpis = [
-    { label: "評価額", value: yen(summary.market_value), active: props.analysis !== null },
-    { label: "配当見込み", value: yen(summary.annual_income_estimate), active: props.analysis !== null },
-    { label: "候補", value: String(props.candidates?.count ?? "-"), active: props.candidates !== null },
-    { label: "市場データ", value: marketCount(props.marketSnapshot), active: props.marketSnapshot !== null },
-    { label: "レポート", value: props.report ? "作成済み" : "-", active: props.report !== null },
-  ];
-  return (
-    <section className="screen">
-      <div className="screen-head">
-        <div>
-          <h2>作業の現在地</h2>
-          <p>まずデータ更新、次に保有分析、最後に候補とレポートを確認します。</p>
-        </div>
-      </div>
-      <div className="kpi-grid">
-        {kpis.map((kpi) => (
-          <article className={kpi.active ? "kpi active" : "kpi"} key={kpi.label}>
-            <span>{kpi.label}</span>
-            <b>{kpi.value}</b>
-          </article>
-        ))}
-      </div>
-      <div className="flow">
-        <FlowStep title="1. 市場データ更新" body="Yahoo由来の価格系列・市場財務指標を更新します。" onClick={() => props.onMove("data")} />
-        <FlowStep title="2. 保有分析" body="CSVまたは手入力を読み、評価額・NISA・配当を集計します。" onClick={() => props.onMove("holdings")} />
-        <FlowStep title="3. 候補抽出" body="条件一致だけを表示します。売買推奨は出しません。" onClick={() => props.onMove("screen")} />
-        <FlowStep title="4. レポート" body="根拠・計算式・免責をまとめた月次レポートを生成します。" onClick={() => props.onMove("report")} />
-      </div>
-    </section>
   );
 }
 
@@ -734,7 +636,7 @@ function YahooBatchUpdatePanel(props: {
         <b>反映先</b>
         <span>市場財務 → 候補抽出・詳細・レポート</span>
         <span>OHLCV → 予測・価格確認</span>
-        <span>RAG → RAG検索・AI確認</span>
+        <span>RAG → AIアドバイザーでの根拠確認</span>
       </div>
       <div className="batch-step-list">
         {steps.map((step) => (
@@ -749,7 +651,7 @@ function YahooBatchUpdatePanel(props: {
         <div className="batch-next-actions" aria-label="次に見る画面">
           <span>次に見る</span>
           <button className="table-action" onClick={() => props.onMove("forecast")}>予測へ</button>
-          <button className="table-action" onClick={() => props.onMove("rag")}>RAGへ</button>
+          <button className="table-action" onClick={() => props.onMove("chat")}>AIで確認</button>
           <button className="table-action" onClick={() => props.onMove("screen")}>候補抽出へ</button>
         </div>
       )}
@@ -1658,7 +1560,6 @@ function ScreenPanel(props: {
   financialsPath: string;
   onCandidates: (value: Json) => void;
   onOpenDetail: (code: string, assetType: "stock" | "fund") => void;
-  onOpenRag: (codes: string[]) => void;
   onUseForReport: (csv: string) => void;
 }) {
   const [minEquity, setMinEquity] = useState("30");
@@ -1741,9 +1642,6 @@ function ScreenPanel(props: {
             <ActionRow>
               <button className="primary" disabled={selected.size === 0 || sim.loading} onClick={simulate}>
                 {sim.loading ? "試算中..." : "選択銘柄でポートフォリオ試算"}
-              </button>
-              <button disabled={selected.size === 0} onClick={() => props.onOpenRag([...selected])}>
-                選択銘柄をRAG検索
               </button>
             </ActionRow>
           </div>
@@ -1836,147 +1734,6 @@ function DetailPanel(props: {
       {state.data && <DetailResult data={state.data} onMove={props.onMove} />}
       <Status loading={forecast.loading} error={forecast.error} />
       {forecast.data && <ForecastResult data={forecast.data} />}
-    </section>
-  );
-}
-
-type StepState = "pending" | "running" | "done" | "error";
-
-function OneClickPanel(props: {
-  holdingsCsv: string;
-  financialsPath: string;
-  watchTickers: string[];
-  onMarket: (value: Json) => void;
-  onAnalysis: (value: Json) => void;
-  onCandidates: (value: Json) => void;
-  onReport: (value: Json) => void;
-  onMove: (tab: TabId) => void;
-}) {
-  const labels = ["市場データ更新", "保有分析", "候補抽出", "レポート生成", "RAGに保存・索引"];
-  const [status, setStatus] = useState<StepState[]>([
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-  ]);
-  const [running, setRunning] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-
-  const holdingTickers = useMemo(
-    () => holdingStockTickers(props.holdingsCsv),
-    [props.holdingsCsv],
-  );
-  const hasHoldings = holdingTickers.length > 0;
-
-  const run = async () => {
-    setRunning(true);
-    setNote(null);
-    setStatus(["pending", "pending", "pending", "pending", "pending"]);
-    const setStep = (index: number, value: StepState) =>
-      setStatus((prev) => prev.map((current, idx) => (idx === index ? value : current)));
-    const errors: string[] = [];
-    const step = async (index: number, fn: () => Promise<void>, skip = false) => {
-      if (skip) {
-        setStep(index, "done");
-        return;
-      }
-      setStep(index, "running");
-      try {
-        await fn();
-        setStep(index, "done");
-      } catch (caught) {
-        setStep(index, "error");
-        errors.push(`${labels[index]}: ${caught instanceof Error ? caught.message : String(caught)}`);
-      }
-    };
-
-    // 1. refresh market data for the holdings (fall back to the watch list).
-    const refreshTickers = hasHoldings ? holdingTickers : props.watchTickers;
-    await step(0, async () => {
-      const result = await api<Json>("/api/market/refresh", { tickers: refreshTickers });
-      props.onMarket(result);
-    }, refreshTickers.length === 0);
-
-    // 2. portfolio analysis (needs holdings).
-    await step(1, async () => {
-      const result = await api<Json>("/api/portfolio/analyze", {
-        csv_text: props.holdingsCsv,
-        financials_csv: props.financialsPath,
-      });
-      props.onAnalysis(result);
-    }, !hasHoldings);
-
-    // 3. candidate screening.
-    let candidateRows: Json[] = [];
-    await step(2, async () => {
-      const result = await api<Json>("/api/candidates/screen", {
-        asset_types: ["stock", "fund"],
-        financials_csv: props.financialsPath,
-      });
-      props.onCandidates(result);
-      candidateRows = Array.isArray(result.results) ? (result.results as Json[]) : [];
-    });
-
-    // 4. monthly report (needs holdings).
-    let reportObj: Json | null = null;
-    await step(3, async () => {
-      const result = await api<Json>("/api/reports/investment-monthly", {
-        csv_text: props.holdingsCsv,
-        financials_csv: props.financialsPath,
-        candidates: candidateRows,
-        save_history: true,
-      });
-      props.onReport(result);
-      reportObj = result;
-    }, !hasHoldings);
-
-    // 5. save the report as markdown and index it into the RAG store, so the
-    //    AI / RAG search can cite this run's analysis. Strengthens RAG search.
-    await step(4, async () => {
-      if (!reportObj) throw new Error("レポートが無いため索引できません");
-      await api<Json>("/api/reports/investment-monthly/markdown/save", {
-        report: reportObj,
-        index_after_save: true,
-      });
-    }, !hasHoldings || !reportObj);
-
-    setRunning(false);
-    if (errors.length) {
-      setNote(`一部スキップ/失敗: ${errors.join(" / ")}`);
-    } else if (!hasHoldings) {
-      setNote("保有銘柄が未入力のため、候補抽出のみ実行しました。保有分析タブで保有を入力すると全工程（レポート→RAG索引）が動きます。");
-    } else {
-      setNote("完了：データ更新→保有分析→候補抽出→レポート→RAG索引まで実行しました。AI確認/RAG検索で今回の分析を根拠に使えます。");
-    }
-  };
-
-  const icon = (state: StepState) =>
-    state === "done" ? "✓" : state === "running" ? "…" : state === "error" ? "×" : "・";
-
-  return (
-    <section className="oneclick">
-      <div className="oneclick-head">
-        <div>
-          <h3>ワンクリック実行</h3>
-          <p className="muted">データ更新 → 保有分析 → 候補抽出 → レポートを順に自動実行します（非助言）。</p>
-        </div>
-        <button className="primary" disabled={running} onClick={() => void run()}>
-          {running ? "実行中..." : "▶ 全工程を実行"}
-        </button>
-      </div>
-      <ol className="oneclick-steps">
-        {labels.map((label, index) => (
-          <li key={label} className={`oneclick-step ${status[index]}`}>
-            <span className="oc-icon">{icon(status[index])}</span>
-            <span className="oc-label">{`${index + 1}. ${label}`}</span>
-          </li>
-        ))}
-      </ol>
-      {note && <p className="hint">{note}</p>}
-      {status[3] === "done" && (
-        <button className="ghost" onClick={() => props.onMove("report")}>レポートを開く →</button>
-      )}
     </section>
   );
 }
@@ -2627,237 +2384,6 @@ function ReportPanel(props: {
       {historyState.data && <ReportHistoryTable data={historyState.data} onLoad={loadReport} onRefresh={refreshHistory} />}
       {displayReport && <ReportResult data={displayReport} ragDbPath={props.ragDbPath} />}
     </section>
-  );
-}
-
-function RagSearchPanel(props: {
-  draft: RagSearchDraft;
-  onDraftChange: (value: RagSearchDraft) => void;
-  onOpenData: () => void;
-}) {
-  const { draft } = props;
-  const { query, dbPath, limit } = draft;
-  const [hybrid, setHybrid] = useState(true);
-  const [selectedEvidence, setSelectedEvidence] = useState<Record<string, boolean>>({});
-  const searchState = useAsync<Json>();
-  const statsState = useAsync<Json>();
-  const results = Array.isArray(searchState.data?.results) ? (searchState.data.results as Json[]) : [];
-  const selectedResults = results.filter((result, index) => selectedEvidence[ragResultKey(result, index)] !== false);
-  const requestedLimit = Number(limit) || 8;
-  const updateDraft = (patch: Partial<Omit<RagSearchDraft, "version">>) => {
-    props.onDraftChange({ ...draft, ...patch });
-  };
-
-  const searchWith = (q: string) =>
-    searchState.run(() =>
-      api<Json>("/api/rag/search", {
-        query: q,
-        db_path: dbPath,
-        limit: requestedLimit,
-        hybrid,
-      }),
-    );
-  const search = () => searchWith(query);
-
-  const setAllEvidence = (value: boolean) =>
-    setSelectedEvidence(
-      Object.fromEntries(results.map((result, index) => [ragResultKey(result, index), value])),
-    );
-  const allSelected = results.length > 0 && selectedResults.length === results.length;
-
-  const refreshStats = () =>
-    statsState.run(() =>
-      api<Json>("/api/rag/stats", {
-        db_path: dbPath,
-      }),
-    );
-
-  useEffect(() => {
-    void refreshStats();
-  }, []);
-
-  useEffect(() => {
-    setSelectedEvidence(
-      Object.fromEntries(results.map((result, index) => [ragResultKey(result, index), true])),
-    );
-  }, [searchState.data]);
-
-  // When navigated here from another panel (e.g. candidate selection bumps the
-  // draft version), auto-run the search for the handed-off query.
-  useEffect(() => {
-    if (props.draft.version > 0 && query.trim()) void search();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.draft.version]);
-
-  return (
-    <section className="screen">
-      <ScreenTitle
-        title="RAG検索"
-        body="保存済みレポートや開示文書を先に検索し、AIへ渡す前の根拠を確認します。"
-      />
-      <div className="form-grid">
-        <Field label="検索語">
-          <input
-            value={query}
-            onChange={(event) => updateDraft({ query: event.target.value })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void search();
-              }
-            }}
-            placeholder="Enterで検索"
-          />
-        </Field>
-        <Field label="RAG DB">
-          <input value={dbPath} onChange={(event) => updateDraft({ dbPath: event.target.value })} />
-        </Field>
-        <Field label="件数">
-          <input value={limit} onChange={(event) => updateDraft({ limit: event.target.value })} inputMode="numeric" />
-        </Field>
-        <Check label="ハイブリッド検索" checked={hybrid} onChange={setHybrid} />
-      </div>
-      <div className="quick-queries" aria-label="検索例">
-        {QUICK_QUERY_PRESETS.map((item) => (
-          <button
-            key={item}
-            className="table-action"
-            onClick={() => {
-              updateDraft({ query: item });
-              void searchWith(item);
-            }}
-          >
-            {item}
-          </button>
-        ))}
-      </div>
-      <ActionRow>
-        <button className="primary" onClick={() => void search()}>
-          検索
-        </button>
-        <button onClick={() => void refreshStats()}>索引を確認</button>
-      </ActionRow>
-      <Status loading={searchState.loading || statsState.loading} error={searchState.error || statsState.error} />
-      {statsState.data && (
-        <>
-          <RagIndexQuality data={statsState.data} onOpenData={props.onOpenData} />
-          <RagStatsSummary data={statsState.data} />
-        </>
-      )}
-      {searchState.data && (
-        <ResultBlock title="検索結果" meta={`${results.length}件 / ${hybrid ? "hybrid" : "keyword"}`}>
-          <RagEvidenceQuality
-            title="検索結果の根拠量"
-            results={results}
-            requestedLimit={requestedLimit}
-            selectedCount={selectedResults.length}
-            actionLabel="データ更新へ"
-            onAction={props.onOpenData}
-          />
-          {results.length > 1 && (
-            <div className="evidence-toolbar" aria-label="根拠の一括選択">
-              <span>{selectedResults.length}/{results.length} 件をAI確認に使用</span>
-              <button
-                className="table-action"
-                disabled={allSelected}
-                onClick={() => setAllEvidence(true)}
-              >
-                すべて選択
-              </button>
-              <button
-                className="table-action"
-                disabled={selectedResults.length === 0}
-                onClick={() => setAllEvidence(false)}
-              >
-                すべて解除
-              </button>
-            </div>
-          )}
-          <RagSearchResults
-            results={results}
-            selectedEvidence={selectedEvidence}
-            onToggleEvidence={(key, value) => {
-              setSelectedEvidence((prev) => ({ ...prev, [key]: value }));
-            }}
-          />
-          <JsonDetails data={searchState.data} />
-        </ResultBlock>
-      )}
-    </section>
-  );
-}
-
-function RagIndexQuality({ data, onOpenData }: { data: Json; onOpenData: () => void }) {
-  const warnings = ragIndexWarnings(data);
-  return (
-    <QualityNotice
-      title="RAGデータ量"
-      warnings={warnings}
-      okMessage="RAG索引には検索に使える文書とチャンクがあります。"
-      actionLabel="データ更新へ"
-      onAction={onOpenData}
-    />
-  );
-}
-
-function RagStatsSummary({ data }: { data: Json }) {
-  return (
-    <section className="detail-section rag-stats" aria-label="RAG索引の状態">
-      <h4>索引の状態</h4>
-      <div className="detail-metrics">
-        <DetailFact label="文書" value={`${String(data.sources_count ?? 0)}件`} />
-        <DetailFact label="チャンク" value={`${String(data.chunks_count ?? 0)}件`} />
-        <DetailFact label="文字数" value={String(data.total_chars ?? 0)} />
-        <DetailFact label="DB" value={shortPath(String(data.db_path ?? "")) || "-"} />
-      </div>
-    </section>
-  );
-}
-
-function RagSearchResults(props: {
-  results: Json[];
-  selectedEvidence?: Record<string, boolean>;
-  onToggleEvidence?: (key: string, value: boolean) => void;
-}) {
-  const { results, selectedEvidence, onToggleEvidence } = props;
-  if (results.length === 0) {
-    return <p className="muted">一致する根拠は見つかりませんでした。</p>;
-  }
-  return (
-    <div className="rag-results">
-      {results.map((result, index) => {
-        const citation = asJson(result.citation) ?? {};
-        const key = ragResultKey(result, index);
-        const checked = selectedEvidence?.[key] !== false;
-        return (
-          <article className={checked ? "rag-result selected" : "rag-result"} key={key}>
-            <header>
-              <div className="rag-title">
-                <b>{String(citation.label ?? `#${index + 1}`)}</b>
-                {onToggleEvidence && (
-                  <label className="rag-select">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(event) => onToggleEvidence(key, event.target.checked)}
-                    />
-                    <span>AI確認に使う</span>
-                  </label>
-                )}
-              </div>
-              <span>{formatScore(citation.score ?? result.score)}</span>
-            </header>
-            <p>{previewText(result.text, 360)}</p>
-            <div className="rag-meta">
-              <span>文書: {shortPath(String(result.source ?? ""))}</span>
-              <span>チャンク: {String(result.chunk_index ?? "-")}</span>
-              {citation.report_id && <span>レポートID: {String(citation.report_id)}</span>}
-              {citation.integrity_status && <span>整合性: {String(citation.integrity_status)}</span>}
-            </div>
-          </article>
-        );
-      })}
-    </div>
   );
 }
 
@@ -3680,37 +3206,6 @@ function SavedSimsPanel(props: {
             </div>
       )}
     </div>
-  );
-}
-
-function QualityNotice(props: {
-  title: string;
-  warnings: string[];
-  okMessage: string;
-  actionLabel?: string;
-  onAction?: () => void;
-}) {
-  const ok = props.warnings.length === 0;
-  return (
-    <section className={ok ? "quality-notice safe" : "quality-notice"} aria-label={props.title}>
-      <strong>{props.title}</strong>
-      {ok ? (
-        <p>{props.okMessage}</p>
-      ) : (
-        <>
-          <ul>
-            {props.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-          {props.onAction && props.actionLabel && (
-            <button className="table-action quality-action" onClick={props.onAction}>
-              {props.actionLabel}
-            </button>
-          )}
-        </>
-      )}
-    </section>
   );
 }
 
@@ -4640,15 +4135,6 @@ function ResultBlock({ title, meta, children }: { title: string; meta?: string; 
   );
 }
 
-function FlowStep(props: { title: string; body: string; onClick: () => void }) {
-  return (
-    <button className="flow-step" onClick={props.onClick}>
-      <b>{props.title}</b>
-      <span>{props.body}</span>
-    </button>
-  );
-}
-
 function ScreenTitle({ title, body }: { title: string; body: string }) {
   return (
     <div className="screen-head">
@@ -4760,13 +4246,6 @@ function normalizeUpdateScope(value: unknown): "tickers" | "nikkei225" | "financ
   return null;
 }
 
-function marketCount(value: Json | null): string {
-  if (!value) return "-";
-  if (value.matched_tickers !== undefined) return `${String(value.matched_tickers)}銘柄`;
-  if (value.daily_bars_count !== undefined) return `${String(value.daily_bars_count)}行`;
-  return "取得済み";
-}
-
 function batchStepLabel(value: string): string {
   const labels: Record<string, string> = {
     pending: "待機",
@@ -4851,37 +4330,6 @@ function formatBytes(value: unknown): string {
   if (bytes < 1024) return `${Math.round(bytes)} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toLocaleString("ja-JP", { maximumFractionDigits: 1 })} KB`;
   return `${(bytes / (1024 * 1024)).toLocaleString("ja-JP", { maximumFractionDigits: 1 })} MB`;
-}
-
-function formatScore(value: unknown): string {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "-";
-  return numeric.toLocaleString("ja-JP", { maximumFractionDigits: 4 });
-}
-
-function ragIndexWarnings(data: Json): string[] {
-  const sources = Number(data.sources_count ?? 0);
-  const chunks = Number(data.chunks_count ?? 0);
-  const chars = Number(data.total_chars ?? 0);
-  const warnings: string[] = [];
-  if (!sources || !chunks) {
-    warnings.push("RAG索引に登録済み文書がありません。レポート保存・開示文書取得・RAG保存で根拠を追加してください。");
-    return warnings;
-  }
-  if (sources < 3) warnings.push(`登録文書が${sources}件です。比較や反証には複数ソースの追加が必要です。`);
-  if (chunks < 10) warnings.push(`検索チャンクが${chunks}件です。回答の根拠が薄くなりやすい状態です。`);
-  if (chars < 1000) warnings.push("登録テキスト量が少ないため、本文PDF/HTML/レポート本文の追加登録を推奨します。");
-  return warnings;
-}
-
-function ragResultKey(result: Json, index: number): string {
-  return String(result.chunk_id ?? `${result.source ?? "source"}-${result.chunk_index ?? index}`);
-}
-
-function previewText(value: unknown, maxLength: number): string {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
-  if (text.length <= maxLength) return text || "-";
-  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
 }
 
 function formatFreshness(item: Json): string {

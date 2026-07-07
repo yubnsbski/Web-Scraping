@@ -11,8 +11,8 @@ Sprint 2 (nav reorg: AI advisor as the front door) updated these invariants:
 - chat is now the default landing tab and the first entry in the primary
   ("main") nav group, relabeled "AIアドバイザー".
 - holdings/screen/data round out the 4 primary tabs.
-- dashboard/report/watch/detail/forecast/rag/plans were demoted to the
-  advanced ("more") group.
+- report/watch/detail/forecast/plans were demoted to the advanced ("more")
+  group.
 - the real-AI toggle drives call_real_api from state instead of a hardcoded
   false.
 
@@ -23,10 +23,15 @@ hatch, StockAiPanel, and the hidden `aistock` tab entirely -- the chat tab
 now always renders ChatView, and StockAiPanel/aistock no longer exist in
 the codebase (their backend routes are untouched).
 The evidence-rendering components (CitationLinkedText, RagEvidenceCards,
-RagEvidenceQuality) moved out of App.tsx into web/src/rag/Evidence.tsx;
-App.tsx no longer imports CitationLinkedText/RagEvidenceCards directly
-(only RagEvidenceQuality, used by RagSearchPanel) since those two are only
-used by web/src/chat/ChatMessageView.tsx now.
+RagEvidenceQuality) live in web/src/rag/Evidence.tsx, used by
+web/src/chat/ChatMessageView.tsx.
+
+Sprint D4 (tab consolidation) removed the `rag` (RAG検索) and `dashboard`
+(全体) tabs entirely -- their sole components (RagSearchPanel and
+Dashboard/OneClickPanel) and the helpers used only by them are gone from
+App.tsx. App.tsx no longer imports RagEvidenceQuality (it was only used by
+the now-removed RagSearchPanel). The RAG and one-click-batch backend routes
+are untouched; chat still uses /api/rag/* internally via the backend.
 """
 
 from __future__ import annotations
@@ -77,19 +82,18 @@ def test_primary_nav_is_the_ai_advisor_workflow() -> None:
 
 
 def test_advanced_group_holds_the_demoted_tabs() -> None:
-    """The 7 tabs demoted out of the primary nav must still exist, in the
-    "more" group.
+    """The 5 tabs demoted out of the primary nav must still exist, in the
+    "more" group, in this exact order (Sprint D4: rag/dashboard removed).
     """
     source = _read_app_tsx()
     tabs_block = _tabs_block(source)
     entries = _tab_entries(tabs_block)
 
     more_ids = [entry[0] for entry in entries if entry[2] == "more"]
-    expected_demoted = ["dashboard", "report", "watch", "detail", "forecast", "rag", "plans"]
-    for expected_id in expected_demoted:
-        assert expected_id in more_ids, (
-            f"{expected_id!r} must remain in the advanced (more) nav group"
-        )
+    assert more_ids == ["report", "watch", "forecast", "detail", "plans"], (
+        f"advanced (more) nav group must be exactly report/watch/forecast/detail/plans, "
+        f"in that order: {more_ids!r}"
+    )
     # aistock (StockAiPanel) was removed in Sprint D1 -- no longer part of TABS.
     assert "aistock" not in more_ids
 
@@ -97,6 +101,26 @@ def test_advanced_group_holds_the_demoted_tabs() -> None:
     assert re.search(r"<summary>詳細機能</summary>", source), (
         "advanced nav group summary label must be 詳細機能"
     )
+
+
+def test_rag_and_dashboard_tabs_are_removed() -> None:
+    """Sprint D4: the rag (RAG検索) and dashboard (全体) tabs, their sole
+    components, and the frontend's only /api/flick and /api/sprint
+    references must all be gone. Backend /api/rag/* routes are untouched --
+    chat still calls them internally.
+    """
+    source = _read_app_tsx()
+    tabs_block = _tabs_block(source)
+    entries = _tab_entries(tabs_block)
+    all_ids = [entry[0] for entry in entries]
+
+    assert "rag" not in all_ids
+    assert "dashboard" not in all_ids
+    assert "function RagSearchPanel(" not in source
+    assert "function Dashboard(" not in source
+    assert "function OneClickPanel(" not in source
+    assert "/api/flick" not in source
+    assert "/api/sprint" not in source
 
 
 def test_chat_is_the_default_landing_tab() -> None:
