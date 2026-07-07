@@ -1,10 +1,9 @@
 """End-to-end data pipeline demo, fully offline (no network, no API keys).
 
 Drives the *real* CLI/runner paths with injected fakes so you can watch the
-whole chain work without reaching EDINET or any IR site:
+whole chain work without reaching EDINET or any external site:
 
-    IR crawl (fixture HTML)  -> RAG store -> search
-    EDINET ingest (fake API) -> financials.csv
+    EDINET ingest (fake API) -> financials.csv -> RAG store -> search
     financials.csv           -> dividend simulator + after-tax reverse calc
 
 Exposed on the CLI as ``investment-assistant demo`` and runnable directly via
@@ -20,50 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant import cli
-from investment_assistant.crawler.frontier import FetchedPage
 from investment_assistant.edinet.models import EdinetDocument, parse_documents
 from investment_assistant.portfolio.simulator import (
     plan_for_target_dividend,
     simulate_portfolio,
 )
 
-# --- Stage 1 fixtures: a tiny IR site (table of contents -> dividend + PDF) ---
-
-_IR_PAGES = {
-    "https://demo.example.com/ir/": (
-        '<a href="/ir/dividend/">配当方針・株主還元</a>'
-        '<a href="/ir/kessan_tanshin.pdf">2024年3月期 決算短信</a>'
-        '<a href="/ir/style.css">stylesheet</a>'
-    ),
-    "https://demo.example.com/ir/dividend/": (
-        "<h1>配当方針</h1><p>当社は安定配当を基本方針とし、配当性向30%を目安に、"
-        "営業キャッシュフローの範囲内で株主還元を行います。累進配当を志向します。</p>"
-    ),
-}
-
-
-def _crawl_fetch(url: str) -> FetchedPage:
-    return FetchedPage(url=url, allowed=True, html=_IR_PAGES.get(url, ""))
-
-
-_IR_REGISTRY = """
-sources:
-  - name: "demo_ir_crawl"
-    ticker: "0000"
-    company: "デモ商事"
-    source_type: "issuer_ir"
-    method: "crawl"
-    allowed: true
-    url: "https://demo.example.com/ir/"
-    allowed_domains: "demo.example.com"
-    url_prefix: "https://demo.example.com/ir/"
-    crawl_mode: "targeted"
-    max_depth: 2
-    max_pages: 10
-"""
-
-
-# --- Stage 2 fixtures: a fake EDINET API (canned doc list + CSV archives) -----
+# --- Stage 1 fixtures: a fake EDINET API (canned doc list + CSV archives) -----
 
 
 def _edinet_csv_zip(dps_current: str, dps_prior: str, equity: str) -> bytes:
@@ -148,30 +110,29 @@ def run_offline_demo() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         rag_db = root / "rag.sqlite"
-        ir_registry = root / "ir.yaml"
-        ir_registry.write_text(_IR_REGISTRY, encoding="utf-8")
         edinet_registry = root / "edinet.yaml"
         edinet_registry.write_text(_EDINET_REGISTRY, encoding="utf-8")
 
-        _banner("STAGE 1 — IR crawl (fixture HTML, fake fetch) -> RAG store")
-        crawl_out: dict[str, Any] = cli.run_crawl(
-            path=ir_registry,
-            output_dir=root / "crawl",
+        _banner("STAGE 1 — EDINET ingest (fake API) -> financials.csv -> RAG store")
+        ingest: dict[str, Any] = cli.run_edinet_ingest(
+            registry_path=edinet_registry,
+            end_date="2024-06-21",
+            days=1,
+            output_dir=root / "edinet",
             db_path=rag_db,
-            fetch=_crawl_fetch,
+            client=_FakeEdinetClient(),  # type: ignore[arg-type]
             index_after=True,
         )
-        result: dict[str, Any] = crawl_out["results"][0]
-        print(f"  fetched pages : {result['fetched']}")
-        print(f"  kept (target) : {result['target_pages_count']}")
-        doc_urls = [d["url"] for d in result["documents"]]
-        print(f"  documents surfaced (not crawled as HTML): {doc_urls}")
-        print(f"  pages indexed : {crawl_out.get('index', {})}")
+        csv_path = str(ingest["financials_csv"])
+        data_rows = Path(csv_path).read_text(encoding="utf-8").strip().splitlines()[1:]
+        print(f"  financials.csv: {csv_path}")
+        print(f"  rows          : {data_rows}")
+        print(f"  filings indexed into RAG: {ingest.get('index', {})}")
 
         print()
-        _banner("STAGE 2 — RAG search over the crawled text")
+        _banner("STAGE 2 — RAG search over the ingested filing text")
         hits: list[dict[str, Any]] = cli.run_rag_search(
-            query="配当性向 株主還元", db_path=rag_db, limit=1
+            query="配当性向", db_path=rag_db, limit=1
         )
         if hits:
             print(f"  top hit source: {hits[0]['source']}")
@@ -180,22 +141,7 @@ def run_offline_demo() -> int:
             print("  (no hits)")
 
         print()
-        _banner("STAGE 3 — EDINET ingest (fake API) -> financials.csv")
-        ingest: dict[str, Any] = cli.run_edinet_ingest(
-            registry_path=edinet_registry,
-            end_date="2024-06-21",
-            days=1,
-            output_dir=root / "edinet",
-            client=_FakeEdinetClient(),  # type: ignore[arg-type]
-            index_after=False,
-        )
-        csv_path = str(ingest["financials_csv"])
-        data_rows = Path(csv_path).read_text(encoding="utf-8").strip().splitlines()[1:]
-        print(f"  financials.csv: {csv_path}")
-        print(f"  rows          : {data_rows}")
-
-        print()
-        _banner("STAGE 4 — Dividend simulator on the ingested data")
+        _banner("STAGE 3 — Dividend simulator on the ingested data")
         holdings = [{"ticker": "0000", "price": 1800, "nisa": False}]
         sim: dict[str, Any] = simulate_portfolio(
             budget=1_000_000, holdings=holdings, financials_csv=csv_path
@@ -220,7 +166,7 @@ def run_offline_demo() -> int:
                   f"-> 必要予算 {_yen(tgt['required_budget'])} ({reach})")
 
         print()
-        print("OK — full pipeline ran offline (crawl + RAG + EDINET + simulator).")
+        print("OK — full pipeline ran offline (EDINET + RAG + simulator).")
         return 0
 
 

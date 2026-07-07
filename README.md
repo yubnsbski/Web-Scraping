@@ -19,7 +19,7 @@ Codex中心で開発・保守を自動化する、家庭向け自動化・投資
 investment-assistant demo          # または: python -m investment_assistant.demo
 ```
 
-`IR crawl（フィクスチャHTML）→ RAG検索 → EDINET ingest（fake API）→ 配当シミュレータ＋手取り逆算`
+`EDINET ingest（fake API）→ financials.csv → RAG索引・検索 → 配当シミュレータ＋手取り逆算`
 を、本物のCLI経路にfakeを注入して順に実行します。実運用コマンドは下記Runbookと
 `docs/dividend_data_runbook.md` を参照してください。
 

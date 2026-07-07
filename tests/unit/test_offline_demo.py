@@ -9,9 +9,9 @@ from investment_assistant.demo import run_offline_demo
 def test_offline_pipeline_demo_runs_clean(capsys) -> None:
     assert run_offline_demo() == 0
     out = capsys.readouterr().out
-    # Each stage ran and the crawler surfaced the PDF rather than crawling it.
-    assert "STAGE 1" in out and "STAGE 4" in out
-    assert "kessan_tanshin.pdf" in out
+    # Each stage ran end to end: EDINET ingest -> RAG index/search -> simulator.
+    assert "STAGE 1" in out and "STAGE 3" in out
+    assert "financials.csv" in out
     assert "ran offline" in out
 
 

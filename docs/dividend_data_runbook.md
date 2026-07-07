@@ -1,27 +1,22 @@
-# Dividend data run set (EDINET + IR crawl)
+# Dividend data run set (EDINET)
 
 A turnkey way to pull the data the dividend simulator and AI Chat need:
 
 - **EDINET** → structured numbers (営業CF / 自己資本比率 / １株配当 / 配当性向) into
-  `financials.csv` — the dividend simulator's input.
-- **IR crawl** → qualitative text (配当方針 / 株主還元 / 中期経営計画) into the RAG
-  store — grounding for AI Chat.
+  `financials.csv` — the dividend simulator's input, and the filing text is
+  indexed into the RAG store as grounding for AI Chat.
 
-Both paths share the registry safety boundary: only `allowed: true` sources
-with `source_type` of `public_api` (EDINET) or `issuer_ir` (crawl) run; the
-crawler is locked to `allowed_domains` + `url_prefix` and follows robots.txt.
+Only `allowed: true` sources with `source_type: public_api` (EDINET) run.
 
-> Network note: the data sources are not reachable from the Claude Code sandbox
-> (egress is proxy-filtered and EDINET needs a key), so run this on your machine
-> or a Codespace where outbound HTTPS to EDINET / the IR domains is allowed.
+> Network note: EDINET is not reachable from the Claude Code sandbox (egress is
+> proxy-filtered and EDINET needs a key), so run this on your machine or a
+> Codespace where outbound HTTPS to EDINET is allowed.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
 | `examples/source_registry_dividend_edinet.yaml` | 12 well-known dividend payers (EDINET, resolved by securities code — no URLs to verify) |
-| `examples/source_registry_dividend_ir.yaml` | 6 IR-site crawl targets (verify each `url` before a live run) |
-| `scripts/run_dividend_crawl.sh` | Runs both, indexes into the RAG store, prints a summary |
 
 ## One-shot run
 
@@ -29,35 +24,21 @@ crawler is locked to `allowed_domains` + `url_prefix` and follows robots.txt.
 # 1. EDINET v2 Subscription-Key (free): https://api.edinet-fsa.go.jp
 export EDINET_API_KEY=...
 
-# 2. Run everything (3y EDINET backfill + IR crawl + RAG index)
-scripts/run_dividend_crawl.sh
-#   YEARS=5 scripts/run_dividend_crawl.sh      # deeper backfill
-#   SKIP_CRAWL=1 scripts/run_dividend_crawl.sh # EDINET numbers only
+# 2. EDINET financials (3y backfill), indexed into the RAG store
+investment-assistant edinet-ingest \
+  --registry examples/source_registry_dividend_edinet.yaml \
+  --years 3 --output-dir local_docs/edinet
+
+# Inspect what landed
+investment-assistant rag-stats
 ```
 
 Output:
 
 - `local_docs/edinet/financials.csv` — the simulator input (ticker, fiscal_year,
   operating_cf, equity_ratio, dividend_per_share, payout_policy).
-- `local_docs/edinet/<ticker>/<doc_id>.txt` + crawled IR pages, indexed into
+- `local_docs/edinet/<ticker>/<doc_id>.txt`, indexed into
   `.cache/investment_assistant/rag.sqlite`.
-
-## Step by step (if you prefer)
-
-```bash
-# EDINET financials (official filings)
-investment-assistant edinet-ingest \
-  --registry examples/source_registry_dividend_edinet.yaml \
-  --years 3 --output-dir local_docs/edinet
-
-# IR-page crawl (domain/prefix-locked, robots-respecting)
-investment-assistant crawl \
-  --path examples/source_registry_dividend_ir.yaml \
-  --output-dir local_docs/crawl
-
-# Inspect what landed
-investment-assistant rag-stats
-```
 
 ## See it work offline (no network, no key)
 
@@ -65,18 +46,10 @@ investment-assistant rag-stats
 investment-assistant demo          # or: python -m investment_assistant.demo
 ```
 
-Drives the real CLI paths with injected fakes through the whole chain — IR
-crawl (fixture HTML) → RAG search → EDINET ingest (fake API) → `financials.csv`
-→ dividend simulator + after-tax reverse calc — so you can confirm the pipeline
-end to end before running it for real.
-
-## Crawler note: PDFs and assets
-
-The crawler classifies each discovered link: HTML **pages** are crawled, static
-**assets** (css/js/images/fonts) are dropped, and **documents** (PDF 決算短信 /
-有価証券報告書 / Excel) are surfaced under `documents` in the crawl report instead
-of being fetched and mis-parsed as HTML. Use that list to pull the source PDFs
-out of band if you need them.
+Drives the real CLI paths with injected fakes through the whole chain — EDINET
+ingest (fake API) → `financials.csv` → RAG index/search → dividend simulator +
+after-tax reverse calc — so you can confirm the pipeline end to end before
+running it for real.
 
 ## Feeding the simulator
 
@@ -135,8 +108,5 @@ ticker states surfaced. Yahoo is `development_only`, so these endpoints return
 - **More tickers:** copy a block in `source_registry_dividend_edinet.yaml`,
   change `ticker` / `company`. EDINET resolves by securities code, so no URL is
   needed.
-- **More IR sites:** copy a block in `source_registry_dividend_ir.yaml`, set the
-  current `url`, `allowed_domains`, and `url_prefix`. A stale URL is harmless —
-  the crawler just returns no pages.
 - **Nikkei 225:** `scripts/build_nikkei225_edinet_registry.py` generates a
   full-index EDINET registry.
