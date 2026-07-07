@@ -538,6 +538,18 @@
   color: var(--muted);
 }
 
+/* Mobile bar: hidden on desktop, shown under 720px. */
+.chatview-mobile-bar {
+  display: none;
+}
+
+.chatview-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 50;
+}
+
 @media (max-width: 720px) {
   .chatview {
     grid-template-columns: minmax(0, 1fr);
@@ -545,6 +557,44 @@
 
   .chatview-sidebar {
     display: none;
+  }
+
+  /* Drawer: the same sidebar, floated over the chat when opened from ☰. */
+  .chatview.chatview-mobile-open .chatview-sidebar {
+    display: grid;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(82vw, 320px);
+    z-index: 60;
+    background: var(--surface-soft);
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .chatview-mobile-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .chatview-mobile-title {
+    flex: 1;
+    font-weight: 700;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chatview-mobile-menu-btn,
+  .chatview-mobile-new-btn {
+    min-width: 40px;
+    min-height: 36px;
+    font-size: 18px;
+    line-height: 1;
   }
 
   .chatview.chatview-collapsed {

@@ -14,22 +14,20 @@ const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const DEFAULT_LIMIT = 6;
 
 // Mirrors the surviving TABS entries in App.tsx (main group minus "chat",
-// plus the "more" group; aistock stays hidden per SHOW_ADVANCED_TABS there).
-// Duplicated here (rather than imported) because TABS is a module-private
-// constant in App.tsx -- this is the "mirror the labels/ids" case called out
-// in the Sprint B spec, not a shared source of truth.
+// plus the "more" group). Duplicated here (rather than imported) because
+// TABS is a module-private constant in App.tsx -- this is the "mirror the
+// labels/ids" case called out in the Sprint B spec, not a shared source of
+// truth.
 const MAIN_NAV_ITEMS = [
   { id: "holdings", label: "保有分析" },
   { id: "screen", label: "候補抽出" },
   { id: "data", label: "データ更新" },
 ];
 const MORE_NAV_ITEMS = [
-  { id: "dashboard", label: "全体" },
   { id: "report", label: "レポート" },
   { id: "watch", label: "ウォッチ" },
   { id: "detail", label: "詳細" },
   { id: "forecast", label: "予測スクリーニング" },
-  { id: "rag", label: "RAG検索" },
   { id: "plans", label: "プラン設計" },
 ];
 
@@ -51,6 +49,8 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Mobile (<=720px): the sidebar is hidden by CSS; this opens it as a drawer.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -129,8 +129,21 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
     if (message.retryPayload) void sendTurn(null, message.retryPayload);
   };
 
+  const chatviewClass = [
+    "chatview",
+    sidebarCollapsed ? "chatview-collapsed" : "",
+    mobileSidebarOpen ? "chatview-mobile-open" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const closeMobileSidebar = () => setMobileSidebarOpen(false);
+
   return (
-    <div className={sidebarCollapsed ? "chatview chatview-collapsed" : "chatview"}>
+    <div className={chatviewClass}>
+      {mobileSidebarOpen && (
+        <div className="chatview-backdrop" onClick={closeMobileSidebar} aria-hidden="true" />
+      )}
       <aside className="chatview-sidebar">
         <div className="chatview-sidebar-head">
           <button
@@ -145,7 +158,13 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
         </div>
         {!sidebarCollapsed && (
           <>
-            <button className="chatview-new-btn" onClick={newConversation}>
+            <button
+              className="chatview-new-btn"
+              onClick={() => {
+                newConversation();
+                closeMobileSidebar();
+              }}
+            >
               + 新しいチャット
             </button>
             <div className="chatview-conv-list" aria-label="チャット履歴">
@@ -158,7 +177,10 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
                 >
                   <button
                     className="chatview-conv-select"
-                    onClick={() => selectConversation(conversation.id)}
+                    onClick={() => {
+                      selectConversation(conversation.id);
+                      closeMobileSidebar();
+                    }}
                     title={conversation.title}
                   >
                     {conversation.title}
@@ -176,7 +198,14 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
             </div>
             <nav className="chatview-nav" aria-label="他の機能">
               {MAIN_NAV_ITEMS.map((item) => (
-                <button key={item.id} className="chatview-nav-item" onClick={() => props.onNavigate(item.id)}>
+                <button
+                  key={item.id}
+                  className="chatview-nav-item"
+                  onClick={() => {
+                    props.onNavigate(item.id);
+                    closeMobileSidebar();
+                  }}
+                >
                   {item.label}
                 </button>
               ))}
@@ -184,7 +213,14 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
                 <summary>詳細機能</summary>
                 <div className="chatview-nav-more-list">
                   {MORE_NAV_ITEMS.map((item) => (
-                    <button key={item.id} className="chatview-nav-item" onClick={() => props.onNavigate(item.id)}>
+                    <button
+                      key={item.id}
+                      className="chatview-nav-item"
+                      onClick={() => {
+                        props.onNavigate(item.id);
+                        closeMobileSidebar();
+                      }}
+                    >
                       {item.label}
                     </button>
                   ))}
@@ -196,6 +232,28 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
       </aside>
 
       <div className="chatview-main">
+        <div className="chatview-mobile-bar">
+          <button
+            className="chatview-mobile-menu-btn"
+            onClick={() => {
+              setSidebarCollapsed(false);
+              setMobileSidebarOpen(true);
+            }}
+            aria-label="メニューを開く"
+            title="メニューを開く"
+          >
+            ☰
+          </button>
+          <span className="chatview-mobile-title">投資AIアシスタント</span>
+          <button
+            className="chatview-mobile-new-btn"
+            onClick={newConversation}
+            aria-label="新しいチャット"
+            title="新しいチャット"
+          >
+            ＋
+          </button>
+        </div>
         {conversationMessages.length === 0 ? (
           <WelcomeScreen onStart={() => composerRef.current?.focus()} onSuggestion={handleSuggestion} />
         ) : (
