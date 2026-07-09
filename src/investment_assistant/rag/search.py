@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant.portfolio.jp_company_names import COMPANY_NAMES
-from investment_assistant.rag.embeddings import Embedder, HashingEmbedder, cosine
+from investment_assistant.rag.embeddings import (
+    Embedder,
+    EmbedderMismatchError,
+    HashingEmbedder,
+    cosine,
+    embed_queries,
+)
 from investment_assistant.rag.store import RagStore, StoredChunk
 from investment_assistant.rag.tokenize import tokenize
 
@@ -128,6 +134,13 @@ def hybrid_search(
     Lexical and semantic scores are each min-max normalized to [0, 1] across the
     candidate set, then blended as ``alpha * semantic + (1 - alpha) * lexical``.
     ``alpha=0`` is pure lexical (BM25), ``alpha=1`` is pure semantic.
+
+    The query embedder must match the embedder the index was built with
+    (recorded in DB meta at index time): vectors from different embedders live
+    in incompatible spaces (often with different dimensions), so a mismatch
+    raises :class:`EmbedderMismatchError` instead of silently returning
+    garbage similarities. Indexes created before meta was tracked are allowed
+    through unchecked.
     """
 
     if not 0.0 <= alpha <= 1.0:
@@ -137,9 +150,19 @@ def hybrid_search(
     if not terms or limit <= 0:
         return []
     chosen_embedder = embedder if embedder is not None else HashingEmbedder()
+    stored_name = store.stored_embedder_name()
+    if stored_name is not None and stored_name != chosen_embedder.name:
+        msg = (
+            f"query embedder {chosen_embedder.name!r} does not match embedder "
+            f"{stored_name!r} recorded for this index; resolve the embedder from "
+            "the stored name (resolve_embedder(read_stored_embedder_name(db_path))) "
+            "or rebuild the index with the desired embedder "
+            "(e.g. rag-index-dir --embeddings <name>)"
+        )
+        raise EmbedderMismatchError(msg)
 
     lexical = {chunk.chunk_id: score for chunk, score in store.search_bm25(terms, limit=limit * 5)}
-    query_vector = chosen_embedder.embed([query])[0]
+    query_vector = embed_queries(chosen_embedder, [query])[0]
     embedded = store.iter_embeddings()
     semantic = {chunk.chunk_id: cosine(query_vector, vector) for chunk, vector in embedded}
     chunks_by_id = {chunk.chunk_id: chunk for chunk, _ in embedded}

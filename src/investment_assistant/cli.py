@@ -480,6 +480,13 @@ def run_edinet_ingest(
     return result
 
 
+_EMBEDDINGS_FLAG_HELP = (
+    "embedder name: 'hashing' (default), 'gemini', or a sentence-transformers "
+    "model — an alias like 'multilingual-e5-small' or any model id like "
+    "'intfloat/multilingual-e5-small' (requires the [embeddings] extra)"
+)
+
+
 def _index_embedder(embeddings: str | None) -> Embedder:
     """Resolve the embedder for indexing from a flag or ``RAG_EMBEDDINGS`` env."""
 
@@ -684,9 +691,12 @@ def run_rag_search(
 ) -> list[dict[str, object]]:
     """Search the local RAG store without calling an LLM."""
 
-    store = RagStore(db_path)
+    # Embed hybrid queries in the same space the corpus was indexed with
+    # (neural / gemini / hashing), read from DB meta.
+    embedder = resolve_embedder(read_stored_embedder_name(db_path))
+    store = RagStore(db_path, embedder=embedder)
     if hybrid:
-        results = hybrid_search(store, query=query, limit=limit, alpha=alpha)
+        results = hybrid_search(store, query=query, limit=limit, alpha=alpha, embedder=embedder)
     else:
         results = search_chunks(store, query=query, limit=limit)
     return [search_result_to_dict(result) for result in results]
@@ -1380,14 +1390,14 @@ def main(argv: list[str] | None = None) -> int:
     rag_index_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_index_parser.add_argument("--max-chars", type=int, default=800)
     rag_index_parser.add_argument("--overlap-chars", type=int, default=120)
-    rag_index_parser.add_argument("--embeddings", choices=["hashing", "gemini"])
+    rag_index_parser.add_argument("--embeddings", help=_EMBEDDINGS_FLAG_HELP)
 
     rag_index_dir_parser = subparsers.add_parser("rag-index-dir")
     rag_index_dir_parser.add_argument("--path", required=True)
     rag_index_dir_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
     rag_index_dir_parser.add_argument("--max-chars", type=int, default=800)
     rag_index_dir_parser.add_argument("--overlap-chars", type=int, default=120)
-    rag_index_dir_parser.add_argument("--embeddings", choices=["hashing", "gemini"])
+    rag_index_dir_parser.add_argument("--embeddings", help=_EMBEDDINGS_FLAG_HELP)
     rag_index_dir_parser.add_argument(
         "--all-files",
         action="store_true",
@@ -1409,6 +1419,7 @@ def main(argv: list[str] | None = None) -> int:
     market_rag_parser.add_argument("--daily-bars-csv", default="local_docs/market/daily_bars.csv")
     market_rag_parser.add_argument("--output-dir", default="local_docs/market/rag")
     market_rag_parser.add_argument("--db-path", default=str(DEFAULT_RAG_DB_PATH))
+    market_rag_parser.add_argument("--embeddings", help=_EMBEDDINGS_FLAG_HELP)
     market_rag_parser.add_argument(
         "--no-index", action="store_true", help="Only write notes; skip RAG indexing"
     )
@@ -1768,7 +1779,9 @@ def _dispatch(args: argparse.Namespace) -> object | None:
             include_forecast=bool(args.forecast),
         )
         if not args.no_index and result["documents_written"]:
-            result["index"] = run_rag_index_dir(path=args.output_dir, db_path=args.db_path)
+            result["index"] = run_rag_index_dir(
+                path=args.output_dir, db_path=args.db_path, embeddings=args.embeddings
+            )
         return result
     if command == "market-forecast":
         from investment_assistant.portfolio.market_forecast import forecast_ticker

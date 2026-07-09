@@ -1,6 +1,6 @@
 """Text embeddings for hybrid (lexical + semantic) RAG search.
 
-Two embedders are provided:
+Three embedders are provided:
 
 * :class:`HashingEmbedder` -- a dependency-free, deterministic embedding based on
   hashing tokens into a fixed number of buckets with sublinear term weighting and
@@ -9,8 +9,14 @@ Two embedders are provided:
 * :class:`GeminiEmbedder` -- optional, lazily imports the Google GenAI SDK and
   calls the embeddings API. Use it for stronger semantic recall when a key and
   the ``[gemini]`` extra are available.
+* :class:`~investment_assistant.rag.neural_embeddings.SentenceTransformersEmbedder`
+  -- optional, lazily imports ``sentence-transformers`` and embeds with a local
+  neural model on CPU (``[embeddings]`` extra). Selected through
+  :func:`resolve_embedder` by alias (e.g. ``"multilingual-e5-small"``), model id
+  (``"intfloat/multilingual-e5-small"``), or the persisted ``"st:<model_id>"``
+  form.
 
-Both return L2-normalized vectors so a dot product equals cosine similarity.
+All return L2-normalized vectors so a dot product equals cosine similarity.
 """
 
 from __future__ import annotations
@@ -20,7 +26,7 @@ import importlib
 import importlib.util
 import math
 import os
-from typing import Protocol
+from typing import Protocol, cast
 
 from investment_assistant.rag.tokenize import tokenize
 
@@ -28,13 +34,25 @@ DEFAULT_EMBEDDING_DIM = 256
 
 
 class Embedder(Protocol):
-    """Protocol for text embedders used by hybrid search."""
+    """Protocol for text embedders used by hybrid search.
+
+    ``embed`` embeds documents/passages (index time). Asymmetric embedders
+    (e.g. the e5 family) may additionally provide an ``embed_queries`` method
+    for search queries; callers should embed queries via the module-level
+    :func:`embed_queries` helper, which falls back to ``embed`` when the
+    method is absent, so symmetric embedders like the hashing one keep
+    working unchanged.
+    """
 
     name: str
     dim: int
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Return one L2-normalized vector per input text."""
+
+
+class EmbedderMismatchError(RuntimeError):
+    """Query embedder does not match the embedder an index was built with."""
 
 
 class HashingEmbedder:
@@ -101,13 +119,44 @@ def resolve_embedder(name: str | None, *, api_key: str | None = None) -> Embedde
     """Map an embedder name to an instance.
 
     ``"gemini"`` selects semantic Gemini embeddings (requires ``GEMINI_API_KEY``
-    and the optional SDK; constructed lazily). Anything else — including
-    ``None`` — falls back to the dependency-free :class:`HashingEmbedder`.
+    and the optional SDK; constructed lazily). A sentence-transformers name —
+    a registered alias like ``"multilingual-e5-small"``, any ``"org/model"``
+    model id, or the persisted ``"st:<model_id>"`` form — selects the neural
+    :class:`~investment_assistant.rag.neural_embeddings.SentenceTransformersEmbedder`
+    (requires the ``[embeddings]`` extra; model loaded lazily). Anything else —
+    including ``None`` — falls back to the dependency-free
+    :class:`HashingEmbedder`, which stays the default.
     """
 
-    if (name or "").strip().lower() == "gemini":
+    normalized = (name or "").strip()
+    if normalized.lower() == "gemini":
         return GeminiEmbedder(api_key=api_key)
+    if normalized and normalized.lower() != "hashing":
+        # Imported lazily to keep this module import-light; the neural module
+        # itself defers the sentence-transformers import until first embed.
+        from investment_assistant.rag.neural_embeddings import (
+            resolve_sentence_transformers_embedder,
+        )
+
+        neural = resolve_sentence_transformers_embedder(normalized)
+        if neural is not None:
+            return neural
     return HashingEmbedder()
+
+
+def embed_queries(embedder: Embedder, texts: list[str]) -> list[list[float]]:
+    """Embed search queries, honoring asymmetric query/passage embedders.
+
+    Dispatches to the embedder's ``embed_queries`` method when it exists (e.g.
+    e5-style models that require a ``"query: "`` prefix at search time) and
+    falls back to plain :meth:`Embedder.embed` otherwise, so symmetric
+    embedders need no changes.
+    """
+
+    method = getattr(embedder, "embed_queries", None)
+    if callable(method):
+        return cast("list[list[float]]", method(texts))
+    return embedder.embed(texts)
 
 
 def cosine(left: list[float], right: list[float]) -> float:

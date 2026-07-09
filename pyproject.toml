@@ -21,6 +21,9 @@ forecast = [
     "numpy>=1.26",
     "scikit-learn>=1.4",
 ]
+embeddings = [
+    "sentence-transformers>=3.0",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5.0",
