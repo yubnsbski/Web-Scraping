@@ -2,10 +2,14 @@ gemini:
   enabled: true
   # 解答精度を優先する場合は、無料枠で利用できる新しめのモデルに更新します。
   # 環境で利用可能なモデル名に合わせて変更してください（実API利用は手動承認が前提）。
-  model: gemini-2.0-flash
-  # gemini-2.0-flash free tier as of 2026-07: 1,500 requests/day. Monthly cap
-  # is a conservative in-house ceiling (not an official monthly quota), kept
-  # well above 30 x daily so the daily limit remains the binding constraint.
+  model: gemini-2.5-flash
+  # gemini-2.0-flash lost its free tier (429 limit:0 observed 2026-07-09).
+  # gemini-3.5-flash works on the free tier but 503s under load ~50% of the
+  # time (observed same day) and the LLM service has no retry — every 503
+  # becomes a fallback answer. gemini-2.5-flash was stable; revisit 3.5 once
+  # a retry lands in llm/service.py.
+  # The request limits below are in-house ceilings; Google's server-side
+  # quota is the real bound and a 429 falls back per `fallback:` below.
   # warning/hard-stop ratios below yield an effective ~1200/1425 daily cutoff.
   daily_request_limit: 1500
   monthly_request_limit: 45000

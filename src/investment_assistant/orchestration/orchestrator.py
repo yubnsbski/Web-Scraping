@@ -37,10 +37,12 @@ class RoleModels:
     synthesizer: str
 
 
+# gemini-2.0-flash lost its free tier (429 limit:0, 2026-07-09); keep these
+# aligned with config/gemini.yaml `model`.
 DEFAULT_ROLE_MODELS = RoleModels(
-    drafter="gemini-2.0-flash",
-    critic="gemini-2.0-flash",
-    synthesizer="gemini-2.0-flash",
+    drafter="gemini-2.5-flash",
+    critic="gemini-2.5-flash",
+    synthesizer="gemini-2.5-flash",
 )
 
 
