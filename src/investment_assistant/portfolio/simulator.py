@@ -7,10 +7,17 @@ a Bollinger-style band (mean - k·σ, lower band), so the income is reverse-deri
 from a defensible lower estimate rather than the latest (possibly peak) payout.
 
 Inputs:
-- budget + weighting (equal / safety / amount / shares), or
+- budget + weighting (equal / safety / yield / amount / shares), or
 - per-holding fixed ``shares`` or ``amount``.
 Prices come from the market-price provider (user input or fetched); dividends
 come from EDINET ``financials.csv``. Pure arithmetic — no LLM, no recommendation.
+
+``auto_weight="yield"`` changes ALLOCATION ONLY: it splits the same budget
+across the same user-chosen holdings proportionally to each name's own
+conservative dividend yield (with a concentration cap), so more of the budget
+lands on names that already pay more per yen invested. It does not add, drop,
+rank, or otherwise recommend any holding — it is a mechanical reweighting of
+the caller-supplied universe, same as ``equal``/``safety``.
 """
 
 from __future__ import annotations
@@ -28,9 +35,13 @@ DISCLAIMER = (
     "将来を保証しない参考値です。"
 )
 
-_AUTO_WEIGHT_MODES = ("equal", "safety", "amount", "shares")
+_AUTO_WEIGHT_MODES = ("equal", "safety", "yield", "amount", "shares")
 _OPTIMIZATION_MODES = ("none", "cash_min", "dividend_max", "balanced")
 _BAND_K = 2.0
+
+# Concentration guard for auto_weight="yield": no single name's pre-flooring
+# weight may exceed this share of the budget, however extreme its yield.
+_YIELD_WEIGHT_CAP = 0.4
 
 # Japanese listed-stock dividend withholding: 15.315% income + 5% resident tax.
 # Mechanical approximation only — ignores 配当控除/総合課税 elections. NISA = 0%.
@@ -154,6 +165,18 @@ def simulate_portfolio(
 ) -> dict[str, object]:
     """Build a portfolio and project dividend income (conservative by default).
 
+    ``auto_weight`` splits the budget across ``holdings`` (allocation only, no
+    ranking/recommendation of names):
+
+    - ``equal`` – same weight per name.
+    - ``safety`` – weighted by each name's dividend-safety score.
+    - ``yield`` – weighted by each name's conservative dividend yield (band
+      lower / price, falling back to the latest yield when no band is
+      available), capped at ``_YIELD_WEIGHT_CAP`` (40%) per name before lot
+      flooring so one high-yield outlier can't dominate the mix.
+    - ``amount`` / ``shares`` – ignore ``budget`` and use each holding's fixed
+      ``amount`` / ``shares`` instead.
+
     ``optimization`` chooses how a *budget* is turned into integer lots when the
     weighting is not per-holding fixed (``amount`` / ``shares``):
 
@@ -161,6 +184,11 @@ def simulate_portfolio(
     - ``cash_min`` – minimise leftover cash (knapsack fill of the budget).
     - ``dividend_max`` – maximise annual dividend (buy best dividend-per-yen lots).
     - ``balanced`` – maximise dividend-per-yen weighted by each name's safety.
+
+    Any ``optimization`` other than ``none`` picks lots by its own per-yen
+    score and ignores ``auto_weight`` entirely (this was already true for
+    ``equal``/``safety``), so ``auto_weight="yield"`` combines with any
+    ``optimization`` the same way ``equal``/``safety`` already do.
     """
 
     budget = max(0.0, float(budget))
@@ -205,7 +233,9 @@ def plan_for_target_dividend(
     ``target_annual_dividend`` and reports the required budget. ``optimization``
     of ``dividend_max`` / ``balanced`` reaches the target with the *least* budget
     (best dividend-per-yen first); otherwise lots are spread round-robin across
-    the holdings for diversification.
+    the holdings for diversification. ``auto_weight`` (including ``yield``) only
+    affects the *displayed* weights here — the lot selection itself is driven by
+    ``optimization``/round-robin as above (allocation only, no ranking advice).
 
     ``net_target`` interprets the target as *after-tax* (手取り) income: taxable
     holdings count their dividend net of ``DIVIDEND_TAX_RATE``, NISA holdings
@@ -448,16 +478,92 @@ def _prepare_holding(
 
 
 def _resolve_weights(prepared: list[_Prepared], mode: str) -> list[float]:
+    """Allocation-only weighting per name — never a ranking/recommendation.
+
+    ``yield`` weights by conservative dividend yield and then applies a
+    concentration cap (see ``_cap_weights``) before returning, so the caller's
+    lot-flooring step starts from an already-diversified split.
+    """
+
     if mode == "safety":
         raw = [max(h.safety, 0.0) for h in prepared]
+    elif mode == "yield":
+        raw = _yield_raw_weights(prepared)
     elif mode in ("amount", "shares"):
         raw = [1.0 for _ in prepared]  # not used; allocation is per-holding fixed
     else:  # equal
         raw = [1.0 for _ in prepared]
     total = sum(raw)
     if total <= 0:
-        return [1.0 / len(prepared) for _ in prepared]
-    return [value / total for value in raw]
+        weights = [1.0 / len(prepared) for _ in prepared]
+    else:
+        weights = [value / total for value in raw]
+    if mode == "yield":
+        weights = _cap_weights(weights, _YIELD_WEIGHT_CAP)
+    return weights
+
+
+def _yield_raw_weights(prepared: list[_Prepared]) -> list[float]:
+    """Raw (pre-normalisation) yield weight per holding for ``auto_weight="yield"``.
+
+    Uses each holding's conservative dividend yield (``dps_conservative /
+    price``); ``dps_conservative`` already falls back to the latest
+    dividend-per-share when no Bollinger band is available (see
+    ``_prepare_holding``), so no separate fallback is needed here. Names with
+    no computable positive yield (no dividend history, or a hard-cut band that
+    clamped to 0) get the smallest positive yield seen among the other priced
+    holdings — some allocation rather than none — or, if *no* holding has a
+    positive yield, an equal (1.0 each) raw weight so the result degrades to
+    an equal split.
+    """
+
+    yields = [h.dps_conservative / h.price if h.price > 0 else 0.0 for h in prepared]
+    positive = [y for y in yields if y > 0]
+    if not positive:
+        return [1.0 for _ in prepared]
+    floor = min(positive)
+    return [y if y > 0 else floor for y in yields]
+
+
+def _cap_weights(weights: list[float], cap: float) -> list[float]:
+    """Cap any single weight at ``cap``, renormalising the excess to the rest.
+
+    Iterates (water-filling) until no uncapped weight exceeds ``cap`` or the
+    cap becomes mathematically infeasible for this many names (``n * cap <
+    1``, e.g. a single name, or two names with ``cap=0.4`` — 40%+40% can't
+    reach 100%); in the infeasible case the plain normalised weights are
+    returned unchanged rather than looping forever or distorting a universe
+    too small for the cap to make sense on.
+    """
+
+    n = len(weights)
+    if n == 0:
+        return []
+    total = sum(weights)
+    w = [x / total for x in weights] if total > 0 else [1.0 / n for _ in range(n)]
+    if n * cap < 1.0 - 1e-9:
+        return w
+    fixed = [False] * n
+    for _ in range(n):
+        active = [i for i in range(n) if not fixed[i]]
+        over = [i for i in active if w[i] > cap + 1e-9]
+        if not over:
+            break
+        for i in over:
+            w[i] = cap
+            fixed[i] = True
+        active = [i for i in range(n) if not fixed[i]]
+        remaining = 1.0 - sum(cap for i in range(n) if fixed[i])
+        active_total = sum(w[i] for i in active)
+        if active_total > 0:
+            scale = remaining / active_total
+            for i in active:
+                w[i] *= scale
+        else:
+            share = remaining / len(active)
+            for i in active:
+                w[i] = share
+    return w
 
 
 def _resolve_shares(
@@ -491,7 +597,10 @@ def _weighted_floor_shares(
     shares: list[int] = []
     for holding, weight in zip(prepared, weights, strict=True):
         lot_cost = holding.price * holding.lot
-        lots = math.floor((budget * weight) / lot_cost) if lot_cost > 0 else 0
+        # The epsilon keeps an exactly-affordable lot from being floored away
+        # when the weight carries float error (e.g. a renormalised 0.2 arriving
+        # as 0.19999999999999998); real fractional lots sit far above 1e-9.
+        lots = math.floor((budget * weight) / lot_cost + 1e-9) if lot_cost > 0 else 0
         shares.append(lots * holding.lot)
     return shares
 

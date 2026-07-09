@@ -341,6 +341,156 @@ def test_target_dividend_net_nisa_counts_in_full() -> None:
     assert out["target"]["required_budget"] == 500_000  # type: ignore[index]
 
 
+def test_yield_weight_mode_outperforms_equal_at_same_budget() -> None:
+    # Yields differ a lot (1% / 2.5% / 5%... i.e. dps 2/5/10 at price 100);
+    # yield-weighting should tilt the same budget toward the higher payers and
+    # so raise (never lower) the resulting annual dividend vs. equal-weight.
+    holdings = [
+        {"ticker": "A", "price": 100, "dividend_per_share": 2, "lot": 1},
+        {"ticker": "B", "price": 100, "dividend_per_share": 5, "lot": 1},
+        {"ticker": "C", "price": 100, "dividend_per_share": 10, "lot": 1},
+    ]
+    equal_out = simulate_portfolio(
+        budget=300_000, holdings=holdings, auto_weight="equal", financials_csv=_NO_CSV
+    )
+    yield_out = simulate_portfolio(
+        budget=300_000, holdings=holdings, auto_weight="yield", financials_csv=_NO_CSV
+    )
+    assert yield_out["weight_mode"] == "yield"
+    # Exact figures: equal splits 100,000 each -> 1000 shares each -> 2000+5000+10000.
+    assert equal_out["summary"]["annual_dividend"] == 17_000  # type: ignore[index]
+    # yield weights (capped at 40%) come out to 0.2/0.4/0.4 -> 600/1200/1200 shares.
+    assert yield_out["summary"]["annual_dividend"] == 19_200  # type: ignore[index]
+    assert yield_out["summary"]["annual_dividend"] >= equal_out["summary"]["annual_dividend"]  # type: ignore[index]
+    assert (
+        yield_out["summary"]["annual_dividend_net"]  # type: ignore[index]
+        >= equal_out["summary"]["annual_dividend_net"]  # type: ignore[index]
+    )
+
+
+def test_yield_mode_caps_concentration_before_lot_flooring() -> None:
+    # C is an extreme yield outlier (100x A/B); its raw weight (~98%) must be
+    # capped at 40% before lot flooring, with the excess split across A and B.
+    holdings = [
+        {"ticker": "A", "price": 100, "dividend_per_share": 1, "lot": 1},
+        {"ticker": "B", "price": 100, "dividend_per_share": 1, "lot": 1},
+        {"ticker": "C", "price": 100, "dividend_per_share": 100, "lot": 1},
+    ]
+    out = simulate_portfolio(
+        budget=300_000, holdings=holdings, auto_weight="yield", financials_csv=_NO_CSV
+    )
+    allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
+    assert allocs["C"]["weight"] == 0.4
+    assert allocs["A"]["weight"] == allocs["B"]["weight"] == 0.3
+
+
+def test_yield_mode_no_yield_data_falls_back_to_smallest_positive() -> None:
+    # A has no dividend data at all (dps=0); it should get the same weight as
+    # B, the holding with the smallest *positive* yield, rather than being
+    # zeroed out of the allocation.
+    holdings = [
+        {"ticker": "A", "price": 100, "lot": 1},
+        {"ticker": "B", "price": 100, "dividend_per_share": 5, "lot": 1},
+        {"ticker": "C", "price": 100, "dividend_per_share": 15, "lot": 1},
+    ]
+    out = simulate_portfolio(
+        budget=300_000, holdings=holdings, auto_weight="yield", financials_csv=_NO_CSV
+    )
+    allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
+    assert allocs["A"]["weight"] == allocs["B"]["weight"] == 0.3
+    assert allocs["C"]["weight"] == 0.4
+
+
+def test_yield_mode_all_zero_yield_falls_back_equal_split() -> None:
+    # Neither holding has any dividend data -> equal split, and with only two
+    # names the 40% cap is mathematically infeasible (0.4+0.4<1), so it is
+    # skipped rather than distorting the split.
+    holdings = [
+        {"ticker": "A", "price": 100, "lot": 1},
+        {"ticker": "B", "price": 200, "lot": 1},
+    ]
+    out = simulate_portfolio(
+        budget=100_000, holdings=holdings, auto_weight="yield", financials_csv=_NO_CSV
+    )
+    allocs = {a["ticker"]: a for a in out["allocations"]}  # type: ignore[union-attr]
+    assert allocs["A"]["weight"] == allocs["B"]["weight"] == 0.5
+
+
+def test_yield_mode_drops_non_positive_price_holdings() -> None:
+    out = simulate_portfolio(
+        budget=100_000,
+        holdings=[
+            {"ticker": "X", "price": 0, "dividend_per_share": 999},
+            {"ticker": "Y", "price": 1000, "dividend_per_share": 10},
+        ],
+        auto_weight="yield",
+        financials_csv=_NO_CSV,
+    )
+    assert out["available"] is True
+    assert len(out["allocations"]) == 1  # type: ignore[arg-type]
+    assert out["allocations"][0]["ticker"] == "Y"  # type: ignore[index]
+    assert out["allocations"][0]["weight"] == 1.0  # type: ignore[index]
+
+
+def test_yield_mode_empty_holdings_unavailable() -> None:
+    out = simulate_portfolio(budget=1000, holdings=[], auto_weight="yield", financials_csv=_NO_CSV)
+    assert out["available"] is False
+
+
+def test_yield_mode_composes_with_optimization_modes() -> None:
+    # auto_weight="yield" combines with optimization the same way equal/safety
+    # already do: optimize!="none" picks lots by its own per-yen score and the
+    # weight mode only affects what the resulting split is *called*.
+    holdings = [
+        {"ticker": "A", "price": 1000, "dividend_per_share": 10},
+        {"ticker": "B", "price": 1000, "dividend_per_share": 60},
+    ]
+    out = simulate_portfolio(
+        budget=1_000_000,
+        holdings=holdings,
+        auto_weight="yield",
+        optimization="balanced",
+        financials_csv=_NO_CSV,
+    )
+    assert out["available"] is True
+    assert out["optimization"] == "balanced"
+    assert out["weight_mode"] == "yield"
+
+
+def test_target_dividend_yield_mode_needs_no_more_budget_than_equal() -> None:
+    # auto_weight only changes the *displayed* weights for plan_for_target_dividend
+    # (lot selection is driven by optimization/round-robin, not auto_weight), so
+    # with the same optimize the required budgets come out identical here.
+    holdings = [
+        {"ticker": "A", "price": 1000, "dividend_per_share": 40},
+        {"ticker": "B", "price": 2000, "dividend_per_share": 30},
+    ]
+    equal_plan = plan_for_target_dividend(
+        target_annual_dividend=20_000,
+        holdings=holdings,
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+        auto_weight="equal",
+    )
+    yield_plan = plan_for_target_dividend(
+        target_annual_dividend=20_000,
+        holdings=holdings,
+        dividend_basis="latest",
+        financials_csv=_NO_CSV,
+        auto_weight="yield",
+    )
+    assert yield_plan["weight_mode"] == "yield"  # type: ignore[index]
+    assert equal_plan["weight_mode"] == "equal"  # type: ignore[index]
+    assert (
+        yield_plan["target"]["required_budget"]  # type: ignore[index]
+        <= equal_plan["target"]["required_budget"]  # type: ignore[index]
+    )
+    assert (
+        yield_plan["target"]["required_budget"]  # type: ignore[index]
+        == equal_plan["target"]["required_budget"]  # type: ignore[index]
+    )
+
+
 def test_no_valid_holdings_returns_unavailable() -> None:
     out = simulate_portfolio(
         budget=1000, holdings=[{"ticker": "X", "price": 0}], financials_csv=_NO_CSV
