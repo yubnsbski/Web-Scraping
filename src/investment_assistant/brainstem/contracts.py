@@ -21,8 +21,9 @@ SourceMode = Literal["rag", "web", "auto"]
 
 # gemini_chain: guarded single-shot RAG answer (cli.run_rag_answer).
 # orchestrate: multi-model orchestration (cli.run_orchestrate_answer).
+# small_talk: local, no-search, no-LLM reply to greetings/thanks/acks.
 # local_ollama is reserved for O1; unreachable until QueryRouter grows it.
-RouteName = Literal["gemini_chain", "orchestrate", "local_ollama"]
+RouteName = Literal["gemini_chain", "orchestrate", "small_talk", "local_ollama"]
 
 
 @dataclass(frozen=True)

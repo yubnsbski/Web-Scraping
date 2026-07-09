@@ -25,6 +25,7 @@ from investment_assistant.brainstem.contracts import (
     ResolvedContext,
     RouteDecision,
 )
+from investment_assistant.brainstem.smalltalk import detect_small_talk, small_talk_reply
 
 JsonDict = dict[str, Any]
 
@@ -52,6 +53,21 @@ class Generator:
         resolved: ResolvedContext,
         route: RouteDecision,
     ) -> GenerationAttempt:
+        if route.route == "small_talk":
+            latest = (request.messages[-1].get("content") or "") if request.messages else ""
+            category = detect_small_talk(latest) or "ack"
+            raw = {
+                "answer": small_talk_reply(category),
+                "results": [],
+                "small_talk": True,
+                "llm": {
+                    "source": "local_small_talk",
+                    "warning": False,
+                    "skipped": True,
+                    "cache_key": None,
+                },
+            }
+            return GenerationAttempt(route=route.route, raw=raw)
         if route.route == "orchestrate":
             orchestrate_fn = self._orchestrate_answer_fn or cli.run_orchestrate_answer
             raw = orchestrate_fn(

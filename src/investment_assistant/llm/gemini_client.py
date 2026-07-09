@@ -22,6 +22,39 @@ class TextGenerationClient(Protocol):
         """Generate text for ``prompt`` with ``model``."""
 
 
+class GeminiApiError(RuntimeError):
+    """Raised when a Gemini API call fails, with a classified ``reason``.
+
+    ``reason`` is read by ``LlmService`` (via ``getattr(exc, "reason", None)``)
+    to decide cooldown / retry behavior: ``"rate_limit"`` (HTTP 429, enters
+    cooldown), ``"server_error"`` (HTTP 5xx, transient and worth retrying --
+    the failed request consumed no quota), ``"empty_response"`` (Gemini
+    returned HTTP 200 with no usable text -- quota already spent, so never
+    retried), or ``None`` for anything else.
+    """
+
+    def __init__(self, message: str, *, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def _classify_gemini_error(exc: Exception) -> str | None:
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code is None:
+        return None
+    # SDK/transport layers sometimes report the status as a string ("429");
+    # coerce before classifying so those are not silently unclassified.
+    try:
+        code_int = int(str(code))
+    except (TypeError, ValueError):
+        return None
+    if code_int == 429:
+        return "rate_limit"
+    if 500 <= code_int < 600:
+        return "server_error"
+    return None
+
+
 @dataclass
 class GeminiClient:
     """Real Gemini API client using the optional official Google GenAI SDK."""
@@ -46,9 +79,14 @@ class GeminiClient:
 
         genai = importlib.import_module("google.genai")
         client = genai.Client(api_key=key)
-        response = client.models.generate_content(model=model, contents=prompt)
+        try:
+            response = client.models.generate_content(model=model, contents=prompt)
+        except Exception as exc:  # noqa: BLE001 - reclassified as GeminiApiError below
+            reason = _classify_gemini_error(exc)
+            raise GeminiApiError(str(exc), reason=reason) from exc
+
         text = getattr(response, "text", None)
         if not isinstance(text, str) or not text.strip():
             msg = "Gemini API response did not include non-empty text"
-            raise RuntimeError(msg)
+            raise GeminiApiError(msg, reason="empty_response")
         return text

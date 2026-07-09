@@ -362,6 +362,28 @@ def test_chat_turn_hybrid_threads_store_embedder_into_search(
     assert captured["embedder"] is not None
 
 
+def test_chat_turn_small_talk_skips_search_and_llm(tmp_path: Path) -> None:
+    db = tmp_path / "rag.sqlite"
+    _index_kddi_doc(db, tmp_path)
+
+    status, payload = handle_api(
+        "POST",
+        "/api/chat/turn",
+        {"messages": [{"role": "user", "content": "ありがとう"}], "db_path": str(db)},
+    )
+
+    assert status == 200
+    message = payload["message"]
+    assert message["kind"] == "small_talk"
+    assert message["citations"] == []
+    assert message["evidence"] == []
+
+    meta = message["meta"]
+    assert meta["disclaimer"] == ""
+    assert meta["llm"]["source"] == "local_small_talk"
+    assert meta["llm"]["skipped"] is True
+
+
 def test_chat_turn_call_real_api_false_stays_offline(tmp_path: Path) -> None:
     db = tmp_path / "rag.sqlite"
     _index_kddi_doc(db, tmp_path)
@@ -380,3 +402,5 @@ def test_chat_turn_call_real_api_false_stays_offline(tmp_path: Path) -> None:
 
     assert status == 200
     assert payload["message"]["meta"]["llm"]["skipped"] is False
+    # The offline template must be labeled honestly -- never as "gemini".
+    assert payload["message"]["meta"]["llm"]["source"] == "local_template"

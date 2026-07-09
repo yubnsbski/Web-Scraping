@@ -867,10 +867,19 @@ def run_rag_answer(
     :func:`investment_assistant.rag.answer.generate_rag_answer`.
     """
 
-    chosen_client = (
-        client if client is not None else (None if call_real_api else LocalRagAnswerClient())
-    )
-    service = build_llm_service(config_path, client=chosen_client)
+    if client is not None:
+        # Explicitly injected client (tests / smoke checks): keep the
+        # default "gemini" provider label so existing assertions stay green.
+        service = build_llm_service(config_path, client=client)
+    elif call_real_api:
+        service = build_llm_service(config_path, client=None)
+    else:
+        # No client injected and not calling the real API: falls back to the
+        # deterministic offline template. Label it honestly so
+        # meta.llm.source never claims Gemini produced this text.
+        service = build_llm_service(
+            config_path, client=LocalRagAnswerClient(), provider="local_template"
+        )
     # Embed hybrid queries in the same space the corpus was indexed with
     # (gemini vs hashing), read from DB meta so old hashing DBs keep working.
     embedder = resolve_embedder(read_stored_embedder_name(db_path))

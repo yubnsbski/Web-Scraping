@@ -71,7 +71,12 @@ def _normalize(
     no_evidence = result_count == 0
 
     llm_meta: JsonDict | None
-    if no_evidence:
+    if raw.get("small_talk"):
+        kind = "small_talk"
+        content = str(raw.get("answer", ""))
+        llm_meta = _llm_meta(raw.get("llm"))
+        highlights = []
+    elif no_evidence:
         kind = "no_evidence"
         content = str(raw.get("answer", ""))
         # The orchestrate skip path carries neither an "llm" nor a "synthesis"
@@ -97,7 +102,12 @@ def _normalize(
         highlights = list(raw.get("highlights") or [])
 
     citations = [result.get("citation") for result in results if isinstance(result, dict)]
-    disclaimer = raw.get("disclaimer") or RAG_DISCLAIMER
+    is_small_talk = kind == "small_talk"
+    # Small talk never searches anything, so "no evidence" (which implies a
+    # failed/empty search) does not apply; and it is not investment content,
+    # so the RAG disclaimer must not be shown (frontend hides it when falsy).
+    reported_no_evidence = False if is_small_talk else no_evidence
+    disclaimer = "" if is_small_talk else (raw.get("disclaimer") or RAG_DISCLAIMER)
 
     # Budget reporting is informational; a broken/missing budget config must
     # not take down the chat response itself.
@@ -131,7 +141,7 @@ def _normalize(
                     "alpha": alpha,
                     "limit": limit,
                     "result_count": result_count,
-                    "no_evidence": no_evidence,
+                    "no_evidence": reported_no_evidence,
                 },
                 "budget": budget,
                 "simulation": None,

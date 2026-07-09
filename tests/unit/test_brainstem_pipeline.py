@@ -310,6 +310,58 @@ def test_brainstem_service_run_turn_end_to_end_with_fake_generator() -> None:
     assert payload["message"]["meta"]["retrieval"]["result_count"] == 1
 
 
+def test_brainstem_service_run_turn_small_talk_never_calls_rag_or_orchestrate() -> None:
+    def explode_rag(**kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("rag_answer_fn must not be called for small_talk")
+
+    def explode_orchestrate(**kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("orchestrate_answer_fn must not be called for small_talk")
+
+    service = BrainstemService(
+        generator=Generator(
+            rag_answer_fn=explode_rag, orchestrate_answer_fn=explode_orchestrate
+        )
+    )
+    request = _request([{"role": "user", "content": "ありがとう"}])
+
+    payload = service.run_turn(request)
+
+    message = payload["message"]
+    assert message["kind"] == "small_talk"
+    assert message["citations"] == []
+    assert message["evidence"] == []
+    assert payload["message"]["meta"]["disclaimer"] == ""
+    assert payload["message"]["meta"]["llm"]["source"] == "local_small_talk"
+
+
+def test_brainstem_service_run_turn_normal_question_still_routes_to_gemini_chain() -> None:
+    def fake_rag_answer(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "answer": "fake answer",
+            "results": [{"citation": {"source": "x.md"}, "text": "t"}],
+            "llm": {"source": "local", "warning": None, "skipped": False, "cache_key": "k"},
+        }
+
+    service = BrainstemService(generator=Generator(rag_answer_fn=fake_rag_answer))
+    request = _request([{"role": "user", "content": "KDDIについて教えて"}])
+
+    payload = service.run_turn(request)
+
+    assert payload["message"]["kind"] == "rag_answer"
+
+
+def test_brainstem_service_run_turn_detailed_mode_small_talk_still_small_talk() -> None:
+    def explode_orchestrate(**kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("orchestrate_answer_fn must not be called for small_talk")
+
+    service = BrainstemService(generator=Generator(orchestrate_answer_fn=explode_orchestrate))
+    request = _request([{"role": "user", "content": "ありがとう"}], answer_mode="detailed")
+
+    payload = service.run_turn(request)
+
+    assert payload["message"]["kind"] == "small_talk"
+
+
 def test_brainstem_service_run_turn_propagates_context_errors() -> None:
     service = BrainstemService()
     request = _request(

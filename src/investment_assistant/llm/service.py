@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -9,6 +11,14 @@ from investment_assistant.llm.budget_guard import BudgetGuard
 from investment_assistant.llm.cache import LlmCache
 from investment_assistant.llm.gemini_client import TextGenerationClient
 from investment_assistant.observability import get_logger
+
+# Reasons worth a short local retry. Only server_error (5xx): the request
+# never succeeded, so retrying does not double-spend free-tier quota. An
+# empty_response is an HTTP 200 that already consumed quota -- retrying it
+# would conflict with the free-tier budget mandate (AGENTS.md), so it falls
+# through to the fallback like any other failure. rate_limit needs a
+# cooldown, not a retry.
+_RETRYABLE_REASONS = frozenset({"server_error"})
 
 _logger = get_logger("llm.service")
 
@@ -60,6 +70,8 @@ class LlmService:
         provider: str = "gemini",
         cooldown_minutes: int | None = None,
         count_failed_attempts: bool = False,
+        max_retries: int = 0,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         self.model = model
         self.client = client
@@ -84,6 +96,13 @@ class LlmService:
         # budget too (not just successes/cache hits). Off by default so the
         # existing Gemini budget semantics are unchanged.
         self.count_failed_attempts = count_failed_attempts
+        # Extra attempts (beyond the first) for transient client failures
+        # (reason "server_error" only -- see ``gemini_client.GeminiApiError``
+        # and ``_RETRYABLE_REASONS``). 0 (default) preserves today's
+        # single-attempt behavior. rate_limit never retries (cooldown instead)
+        # and empty_response never retries (it already consumed quota).
+        self.max_retries = max_retries
+        self.sleep_fn = sleep_fn or time.sleep
 
     def generate(self, *, task_type: str, prompt: str, priority: str = "normal") -> LlmResponse:
         """Generate text through cache, budget guard, and fallback controls."""
@@ -113,15 +132,36 @@ class LlmService:
                 return self._fallback_response(decision.reason, prompt, cache_key)
             warning = decision.warning
 
-        try:
-            text = self.client.generate(prompt, model=self.model)
-        except Exception as exc:  # noqa: BLE001
-            reason = getattr(exc, "reason", None)
+        total_attempts = self.max_retries + 1
+        text: str | None = None
+        last_exc: Exception | None = None
+        for attempt_index in range(1, total_attempts + 1):
+            try:
+                text = self.client.generate(prompt, model=self.model)
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                reason = getattr(exc, "reason", None)
+                if reason in _RETRYABLE_REASONS and attempt_index < total_attempts:
+                    _logger.warning(
+                        "llm call failed task=%s model=%s attempt=%d reason=%s; retrying",
+                        task_type,
+                        self.model,
+                        attempt_index,
+                        reason,
+                    )
+                    self.sleep_fn(attempt_index * 1.0)
+                    continue
+                break
+
+        if last_exc is not None:
+            reason = getattr(last_exc, "reason", None)
             _logger.warning(
                 "llm call failed task=%s model=%s error=%s reason=%s; using fallback",
                 task_type,
                 self.model,
-                type(exc).__name__,
+                type(last_exc).__name__,
                 reason,
             )
             if self.enforce_budget and self.count_failed_attempts:
@@ -130,6 +170,7 @@ class LlmService:
                 self.budget_guard.record_cooldown(self.cooldown_minutes)
             return self._fallback_response(reason or "error", prompt, cache_key)
 
+        assert text is not None  # loop only exits with last_exc is None after a success
         self.cache.set(cache_key, text)
         if self.enforce_budget:
             self.budget_guard.record_call(task_type, self.model, cache_key, cache_hit=False)

@@ -70,3 +70,23 @@ def test_build_llm_service_from_config_uses_injected_client_and_cache(tmp_path):
     assert first.source == "gemini"
     assert second.source == "cache"
     assert client.calls == 1
+
+
+def test_build_llm_service_wires_retry_and_cooldown_defaults(tmp_path):
+    """The production chat path must retry transient 5xx (max_retries=2) and
+    cool down for 15 minutes on a real 429 (cooldown_minutes=15)."""
+
+    config_path = write_config(tmp_path)
+    service = build_llm_service(config_path, client=FakeClient())
+
+    assert service.max_retries == 2
+    assert service.cooldown_minutes == 15
+
+
+def test_build_llm_service_provider_label_override(tmp_path):
+    config_path = write_config(tmp_path)
+    service = build_llm_service(config_path, client=FakeClient(), provider="local_template")
+
+    response = service.generate(task_type="rag_answer", prompt="hello")
+
+    assert response.source == "local_template"

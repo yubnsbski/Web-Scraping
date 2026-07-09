@@ -71,13 +71,17 @@ def build_llm_service(
     client: TextGenerationClient | None = None,
     model: str | None = None,
     enforce_budget: bool = True,
+    provider: str = "gemini",
 ) -> LlmService:
     """Build the single approved LLM service from ``config/gemini.yaml``.
 
     Tests and smoke checks can inject a fake ``client``. Production callers that
     omit it receive the isolated ``GeminiClient`` wrapper. ``model`` overrides the
     configured model id, enabling role-based multi-model orchestration while
-    sharing the same budget guard and cache.
+    sharing the same budget guard and cache. ``provider`` is the label surfaced
+    on successful responses (``response.source``) -- callers that swap in a
+    non-Gemini client (e.g. the offline ``LocalRagAnswerClient``) should pass
+    an honest label instead of the "gemini" default.
     """
 
     config = load_gemini_runtime_config(config_path)
@@ -93,6 +97,12 @@ def build_llm_service(
         budget_guard=BudgetGuard(config.usage_db_path, config.budget),
         fallback=config.fallback,
         enforce_budget=enforce_budget,
+        provider=provider,
+        # Retry transient 5xx failures (free-tier safe: the failed request
+        # consumed no quota), and cool down for 15 minutes on a real 429 so
+        # the production chat path stops hammering an exhausted quota.
+        max_retries=2,
+        cooldown_minutes=15,
     )
 
 

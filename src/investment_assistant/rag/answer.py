@@ -119,15 +119,66 @@ def generate_rag_answer(
 
     prompt = build_rag_answer_prompt(query=query, context=context)
     response = service.generate(task_type=RAG_ANSWER_TASK_TYPE, prompt=prompt)
+    highlights = evidence_highlights(results)
+    answer = response.text
+    if not str(answer).strip():
+        answer = _blank_answer_fallback(response.source, highlights)
     return {
         "query": query,
-        "answer": response.text,
+        "answer": answer,
         "context": context,
-        "highlights": evidence_highlights(results),
+        "highlights": highlights,
         "results": [search_result_to_dict(result) for result in results],
         "llm": _response_to_dict(response),
         "disclaimer": DISCLAIMER,
     }
+
+
+# Period-neutral wording: this message covers both the daily and the monthly
+# budget limits, so it must not claim 「本日の」.
+_BUDGET_EXHAUSTED_MESSAGE = (
+    "AI利用枠の上限に達したため、AIによる回答を生成できませんでした。"
+)
+_TRANSIENT_FAILURE_MESSAGE = (
+    "AIによる回答生成に一時的に失敗しました。時間をおいてもう一度お試しください。"
+)
+
+
+def _blank_answer_fallback(source: str, highlights: list[dict[str, object]]) -> str:
+    """Deterministic Japanese message shown when the LLM produced no text.
+
+    ``source`` is ``LlmResponse.source`` (e.g. ``"fallback:local_summary:error"``
+    or ``"fallback:skip_llm:daily_limit_reached"``): a budget-exhaustion reason
+    gets a distinct message from a generic transient failure. When evidence
+    highlights are available, up to three are appended as a short excerpt so
+    the user is not left with a bare apology.
+    """
+
+    if "daily_limit" in source or "monthly_limit" in source:
+        message = _BUDGET_EXHAUSTED_MESSAGE
+    else:
+        message = _TRANSIENT_FAILURE_MESSAGE
+
+    bullets = [_highlight_to_line(item) for item in highlights[:3]]
+    bullets = [line for line in bullets if line]
+    if bullets:
+        message += "\n\n検索で見つかった根拠の抜粋:\n" + "\n".join(
+            f"- {line}" for line in bullets
+        )
+    return message
+
+
+def _highlight_to_line(item: object) -> str:
+    """Coerce one ``evidence_highlights`` item into a short display string."""
+
+    if not isinstance(item, dict):
+        return str(item).strip()
+
+    label = item.get("name") or item.get("source") or ""
+    parts = [str(part) for part in (item.get("forecast"), item.get("tags")) if part]
+    detail = " / ".join(parts)
+    line = f"{label}: {detail}" if label and detail else str(label or detail)
+    return line.strip()
 
 
 def _response_to_dict(response: LlmResponse) -> dict[str, object]:

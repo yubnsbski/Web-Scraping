@@ -179,6 +179,150 @@ def test_count_failed_attempts_counts_errors_against_daily_cap(tmp_path):
     assert second.text == "two"
 
 
+@dataclass
+class FlakyThenOkClient:
+    """Fails ``fail_times`` calls with a classified ``reason``, then succeeds."""
+
+    fail_times: int
+    reason: str = "server_error"
+    calls: int = 0
+
+    def generate(self, prompt: str, *, model: str) -> str:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            err = RuntimeError(f"boom {self.calls}")
+            err.reason = self.reason  # type: ignore[attr-defined]
+            raise err
+        return f"{model}: {prompt}"
+
+
+@dataclass
+class AlwaysFailingClassifiedClient:
+    reason: str = "server_error"
+    calls: int = 0
+
+    def generate(self, prompt: str, *, model: str) -> str:
+        self.calls += 1
+        err = RuntimeError("boom")
+        err.reason = self.reason  # type: ignore[attr-defined]
+        raise err
+
+
+def test_retry_recovers_after_one_transient_server_error(tmp_path):
+    client = FlakyThenOkClient(fail_times=1, reason="server_error")
+    sleeps: list[float] = []
+    guard = BudgetGuard(
+        tmp_path / "usage.sqlite",
+        BudgetConfig(daily_request_limit=10, monthly_request_limit=100),
+    )
+    service = LlmService(
+        model="gemini-test",
+        client=client,
+        cache=LlmCache(tmp_path / "cache.sqlite"),
+        budget_guard=guard,
+        max_retries=2,
+        sleep_fn=sleeps.append,
+    )
+
+    response = service.generate(task_type="rag_answer", prompt="hello")
+
+    assert response.text == "gemini-test: hello"
+    assert response.source == "gemini"
+    assert client.calls == 2
+    assert sleeps == [1.0]
+    assert guard.count_daily() == 1  # the failed retry attempt was not counted
+
+
+def test_retry_exhausted_after_max_retries_falls_back(tmp_path):
+    client = AlwaysFailingClassifiedClient(reason="server_error")
+    sleeps: list[float] = []
+    guard = BudgetGuard(
+        tmp_path / "usage.sqlite",
+        BudgetConfig(daily_request_limit=10, monthly_request_limit=100),
+    )
+    service = LlmService(
+        model="gemini-test",
+        client=client,
+        cache=LlmCache(tmp_path / "cache.sqlite"),
+        budget_guard=guard,
+        fallback=FallbackConfig(on_error="local_summary"),
+        max_retries=2,
+        sleep_fn=sleeps.append,
+    )
+
+    response = service.generate(task_type="rag_answer", prompt="hello")
+
+    # max_retries + 1 total attempts, exactly one fallback response.
+    assert client.calls == 3
+    assert sleeps == [1.0, 2.0]
+    assert response.source == "fallback:local_summary:server_error"
+    assert response.text == "hello"
+
+
+def test_empty_response_reason_never_retries(tmp_path):
+    """empty_response is an HTTP 200 that already consumed free-tier quota;
+    retrying it would double-spend, so it must fall straight to the fallback."""
+
+    client = AlwaysFailingClassifiedClient(reason="empty_response")
+    sleeps: list[float] = []
+    service = LlmService(
+        model="gemini-test",
+        client=client,
+        cache=LlmCache(tmp_path / "cache.sqlite"),
+        budget_guard=BudgetGuard(
+            tmp_path / "usage.sqlite",
+            BudgetConfig(daily_request_limit=10, monthly_request_limit=100),
+        ),
+        fallback=FallbackConfig(on_error="local_summary"),
+        max_retries=2,
+        sleep_fn=sleeps.append,
+    )
+
+    response = service.generate(task_type="rag_answer", prompt="hello")
+
+    assert client.calls == 1
+    assert sleeps == []
+    assert response.source == "fallback:local_summary:empty_response"
+    assert response.text == "hello"
+
+
+def test_rate_limit_reason_never_retries_and_still_records_cooldown(tmp_path):
+    client = AlwaysFailingClassifiedClient(reason="rate_limit")
+    sleeps: list[float] = []
+    guard = BudgetGuard(
+        tmp_path / "usage.sqlite",
+        BudgetConfig(daily_request_limit=10, monthly_request_limit=100),
+    )
+    service = LlmService(
+        model="local:default",
+        client=client,
+        cache=LlmCache(tmp_path / "cache.sqlite"),
+        budget_guard=guard,
+        fallback=FallbackConfig(on_error="skip_llm"),
+        provider="local",
+        cooldown_minutes=30,
+        max_retries=2,
+        sleep_fn=sleeps.append,
+    )
+
+    response = service.generate(task_type="rag_answer", prompt="hello")
+
+    assert client.calls == 1
+    assert sleeps == []
+    assert response.source == "fallback:skip_llm:rate_limit"
+    assert guard.in_cooldown() is True
+
+
+def test_max_retries_zero_default_matches_today_single_attempt_behavior(tmp_path):
+    client = FailingClient()
+    service = build_service(tmp_path, client)
+
+    response = service.generate(task_type="rag_answer", prompt="hello")
+
+    assert client.calls == 1
+    assert response.source == "fallback:local_summary:error"
+
+
 def test_without_count_failed_attempts_errors_do_not_count_against_daily_cap(tmp_path):
     guard = BudgetGuard(
         tmp_path / "usage.sqlite",
