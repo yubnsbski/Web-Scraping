@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from investment_assistant.observability import configure_logging, get_logger
+from investment_assistant.webapi.local_env import load_local_env_files
 from investment_assistant.webapi.service import JsonDict, handle_api
 
 _logger = get_logger("webapi.server")
@@ -177,6 +178,10 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
     """Run the blocking HTTP server until interrupted."""
 
     configure_logging()
+    # Secrets (GEMINI_API_KEY, EDINET_API_KEY, ...) live in git-ignored
+    # .env.local / .env; every serve entrypoint must load them, not just
+    # ``python -m investment_assistant.webapi`` (the CLI exe skips __main__).
+    load_local_env_files()
     httpd = ThreadingHTTPServer((host, port), _Handler)
     _logger.info("serving on http://%s:%d (api under /api/, frontend if built)", host, port)
     try:

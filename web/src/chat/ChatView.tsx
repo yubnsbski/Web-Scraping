@@ -44,7 +44,10 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
   const [draftText, setDraftText] = useState("");
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<ChatMode>("answer");
-  const [realAi, setRealAi] = useState<boolean>(() => localStorage.getItem("ia.realAi") === "1");
+  // v2 key: real AI defaults ON. The old "ia.realAi" key was auto-written "0"
+  // on mount for every visitor, so it cannot tell an explicit opt-out from the
+  // old default — ignore it and only honor an explicit "0" on the v2 key.
+  const [realAi, setRealAi] = useState<boolean>(() => localStorage.getItem("ia.realAi.v2") !== "0");
   const [budgetInfo, setBudgetInfo] = useState<BudgetInfo | null>(null);
   const [dbPath, setDbPath] = useState(DEFAULT_RAG_DB_PATH);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
@@ -54,7 +57,7 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("ia.realAi", realAi ? "1" : "0");
+    localStorage.setItem("ia.realAi.v2", realAi ? "1" : "0");
   }, [realAi]);
 
   const refreshBudget = async () => {
