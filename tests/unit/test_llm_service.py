@@ -345,3 +345,43 @@ def test_without_count_failed_attempts_errors_do_not_count_against_daily_cap(tmp
     # call does not consume the daily budget, so a second distinct prompt is
     # still allowed to attempt the client (and fails again, same fallback).
     assert second.source == "fallback:local_summary:error"
+
+
+def test_cache_never_leaks_across_provider_labels(tmp_path):
+    """An offline-template answer must not satisfy a real-provider call.
+
+    Both providers share the same cache DB, model, and prompt; only the
+    ``provider`` label differs (as in ``run_rag_answer`` / ``run_web_answer``
+    with call_real_api False vs True). Regression for the live bug where a
+    dry-run dummy answer was returned to a call_real_api=True request.
+    """
+
+    cache = LlmCache(tmp_path / "cache.sqlite")
+    guard = BudgetGuard(
+        tmp_path / "usage.sqlite",
+        BudgetConfig(
+            daily_request_limit=10,
+            monthly_request_limit=100,
+            hard_stop_threshold_ratio=1.0,
+            allowed_tasks=("rag_answer",),
+        ),
+    )
+    offline_client = FakeClient()
+    real_client = FakeClient()
+    offline = LlmService(
+        model="gemini-test", client=offline_client, cache=cache,
+        budget_guard=guard, provider="local_template",
+    )
+    real = LlmService(
+        model="gemini-test", client=real_client, cache=cache,
+        budget_guard=guard, provider="gemini",
+    )
+
+    first = offline.generate(task_type="rag_answer", prompt="hello")
+    second = real.generate(task_type="rag_answer", prompt="hello")
+
+    assert first.source == "local_template"
+    assert second.source == "gemini"  # cache miss: the real client was called
+    assert offline_client.calls == 1
+    assert real_client.calls == 1
+    assert first.cache_key != second.cache_key

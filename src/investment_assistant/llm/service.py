@@ -152,7 +152,11 @@ class LlmService:
         """Generate text through cache, budget guard, and fallback controls."""
 
         _ = priority
-        cache_key = self.cache.make_key(task_type, self.model, prompt)
+        # The provider label is part of the key material: an offline template
+        # client (provider "local_template") and the real Gemini client share
+        # the same cache DB/model/prompt, and a dry-run answer must never be
+        # served to a call_real_api=True caller (or vice versa).
+        cache_key = self.cache.make_key(task_type, self.model, f"{self.provider}\0{prompt}")
         cached = self.cache.get(cache_key)
         if cached is not None:
             if self.enforce_budget:
@@ -340,8 +344,10 @@ class GroundedLlmService:
         _ = priority
         # Freshness: bind today's date into the cache key material so the
         # same query is re-searched daily instead of reusing a stale
-        # (up to ``cache_ttl_days``-old) Web answer.
-        cache_material = f"{self.today_fn()}\0{prompt}"
+        # (up to ``cache_ttl_days``-old) Web answer. The provider label is
+        # included for the same reason as in ``LlmService.generate``: an
+        # offline dummy answer must never satisfy a real grounded call.
+        cache_material = f"{self.provider}\0{self.today_fn()}\0{prompt}"
         cache_key = self.cache.make_key(task_type, self.model, cache_material)
         cached = self.cache.get(cache_key)
         if cached is not None:
