@@ -353,27 +353,35 @@ def test_generator_auto_mode_falls_back_when_answer_lacks_context() -> None:
 
     web_calls: list[dict[str, Any]] = []
 
-    def fake_rag_answer(**kwargs: Any) -> dict[str, Any]:
-        return {
-            "answer": "コンテキスト不足のため回答できません [1][2]",
-            "results": [{"citation": {"source": "irrelevant.md"}}],
-        }
+    # Both the instructed marker and the live-observed Gemini paraphrase.
+    no_context_answers = [
+        "コンテキスト不足のため回答できません [1][2]",
+        "提供されたローカル文書コンテキストには情報が含まれていないため、質問に回答できません [1]",
+    ]
+    for no_context_answer in no_context_answers:
+        web_calls: list[dict[str, Any]] = []
 
-    def fake_web_answer(**kwargs: Any) -> dict[str, Any]:
-        web_calls.append(kwargs)
-        return {"answer": "web answer", "results": [], "web": True}
+        def fake_rag_answer(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "answer": no_context_answer,  # noqa: B023 - read before loop advances
+                "results": [{"citation": {"source": "irrelevant.md"}}],
+            }
 
-    generator = Generator(rag_answer_fn=fake_rag_answer, web_answer_fn=fake_web_answer)
-    resolver = ContextResolver()
-    request = _request([{"role": "user", "content": "米国の直近のCPIは"}], source_mode="auto")
-    resolved = resolver.resolve(request)
-    route = RouteDecision(route="gemini_chain", allow_context_rewrite=False, reason="test")
+        def fake_web_answer(**kwargs: Any) -> dict[str, Any]:
+            web_calls.append(kwargs)  # noqa: B023 - read before loop advances
+            return {"answer": "web answer", "results": [], "web": True}
 
-    attempt = generator.generate(request=request, resolved=resolved, route=route)
+        generator = Generator(rag_answer_fn=fake_rag_answer, web_answer_fn=fake_web_answer)
+        resolver = ContextResolver()
+        request = _request([{"role": "user", "content": "米国の直近のCPIは"}], source_mode="auto")
+        resolved = resolver.resolve(request)
+        route = RouteDecision(route="gemini_chain", allow_context_rewrite=False, reason="test")
 
-    assert len(web_calls) == 1
-    assert attempt.raw["auto_fallback"] is True
-    assert attempt.raw["answer"] == "web answer"
+        attempt = generator.generate(request=request, resolved=resolved, route=route)
+
+        assert len(web_calls) == 1
+        assert attempt.raw["auto_fallback"] is True
+        assert attempt.raw["answer"] == "web answer"
 
 
 def test_generator_auto_mode_with_rag_results_never_calls_web() -> None:

@@ -125,8 +125,12 @@ class Generator:
 # 「コンテキスト不足のため回答できません」 when the local chunks cannot answer
 # the question. In practice the local corpus returns a handful of loosely
 # related chunks for almost any query, so "zero results" alone almost never
-# fires -- the marker in the answer text is the reliable no-evidence signal.
-_NO_CONTEXT_MARKER = "コンテキスト不足"
+# fires -- the marker in the answer text is the no-evidence signal. Gemini
+# sometimes paraphrases the instructed phrase (observed live:
+# 「情報が含まれていないため、質問に回答できません」), so several markers are
+# checked; in auto mode an over-eager fallback just costs one web call and
+# usually yields a better answer, so erring toward fallback is the safe side.
+_NO_CONTEXT_MARKERS = ("コンテキスト不足", "回答できません")
 
 
 def _rag_lacks_evidence(raw: Mapping[str, Any]) -> bool:
@@ -134,4 +138,5 @@ def _rag_lacks_evidence(raw: Mapping[str, Any]) -> bool:
 
     if not raw.get("results"):
         return True
-    return _NO_CONTEXT_MARKER in str(raw.get("answer", ""))
+    answer = str(raw.get("answer", ""))
+    return any(marker in answer for marker in _NO_CONTEXT_MARKERS)
