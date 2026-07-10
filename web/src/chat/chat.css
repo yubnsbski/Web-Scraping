@@ -286,6 +286,10 @@
   display: grid;
   gap: 8px;
   min-width: 0;
+  /* Long unbroken strings (file paths, URLs, full-width runs) in answers or
+     evidence must wrap instead of forcing a horizontal scrollbar on the
+     thread at narrow widths. */
+  overflow-wrap: anywhere;
 }
 
 .chat-search-chip {

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from investment_assistant.llm.gemini_client import WebSource
 from investment_assistant.llm.service import GroundedLlmResponse
-from investment_assistant.rag.answer import DISCLAIMER
 from investment_assistant.websearch.answer import (
     WEB_ANSWER_TASK_TYPE,
+    WEB_DISCLAIMER,
     LocalWebAnswerClient,
     build_web_answer_prompt,
     generate_web_answer,
@@ -45,7 +45,8 @@ def test_generate_web_answer_returns_rag_like_shape_with_web_marker():
     assert result["query"] == "KDDIの最新ニュースは？"
     assert result["answer"] == "回答本文"
     assert result["web"] is True
-    assert result["disclaimer"] == DISCLAIMER
+    assert result["disclaimer"] == WEB_DISCLAIMER
+    assert "Web検索結果" in WEB_DISCLAIMER
     assert result["llm"] == {
         "source": "gemini_web",
         "warning": False,
@@ -120,7 +121,7 @@ def test_build_web_answer_prompt_includes_query_and_disclaimer():
     prompt = build_web_answer_prompt("トヨタの配当方針は？")
 
     assert "トヨタの配当方針は？" in prompt
-    assert DISCLAIMER in prompt
+    assert WEB_DISCLAIMER in prompt
     assert "個別商品の売買を断定的に推奨しない" in prompt
 
 
@@ -130,7 +131,7 @@ def test_local_web_answer_client_offline_path_returns_template_and_two_sources()
     result = LocalWebAnswerClient().generate_grounded(prompt, model="gemini-test")
 
     assert "トヨタの配当方針は？" in result.text
-    assert DISCLAIMER in result.text
+    assert WEB_DISCLAIMER in result.text
     assert len(result.sources) == 2
     assert all(source.url and source.title for source in result.sources)
 

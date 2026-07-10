@@ -11,9 +11,16 @@ from __future__ import annotations
 
 from investment_assistant.llm.gemini_client import GroundedGeneration, WebSource
 from investment_assistant.llm.service import GroundedLlmResponse, GroundedLlmService
-from investment_assistant.rag.answer import DISCLAIMER
 
 WEB_ANSWER_TASK_TYPE = "web_answer"
+
+# Web answers must not claim to be based on local documents (the RAG
+# disclaimer wording) -- they are grounded in live Google Search results.
+WEB_DISCLAIMER = (
+    "これは投資助言ではなく、Web検索結果に基づく調査メモの下書きです。"
+    "情報の正確性は出典元をご確認ください。"
+    "最終的な投資判断はユーザー本人が行ってください。"
+)
 
 
 class LocalWebAnswerClient:
@@ -29,7 +36,7 @@ class LocalWebAnswerClient:
                 "根拠: オフラインのためWeb検索は実行していません（ダミー情報源2件）。",
                 "不確実性: 実際のWeb検索結果に基づく回答ではありません。",
                 "信頼度: 低",
-                f"免責: {DISCLAIMER}",
+                f"免責: {WEB_DISCLAIMER}",
             )
         )
         sources = (
@@ -59,7 +66,7 @@ def build_web_answer_prompt(query: str) -> str:
             "- 要点（検索結果に基づく事実と解釈を分けて記述）",
             "- 不確実性（検索結果で確認できない点）",
             "- 信頼度: 高 / 中 / 低",
-            f"- 免責: {DISCLAIMER}",
+            f"- 免責: {WEB_DISCLAIMER}",
         )
     )
 
@@ -87,7 +94,7 @@ def generate_web_answer(*, service: GroundedLlmService, query: str) -> dict[str,
         "answer": answer,
         "results": results,
         "llm": _response_to_dict(response),
-        "disclaimer": DISCLAIMER,
+        "disclaimer": WEB_DISCLAIMER,
         "web": True,
     }
 
