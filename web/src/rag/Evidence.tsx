@@ -151,6 +151,7 @@ export function CitationLinkedText(props: { text: string; citationCount: number;
 
 function evidenceSummary(result: Json, index: number) {
   const citation = asJson(result.citation) ?? {};
+  const url = typeof citation.url === "string" && citation.url ? citation.url : null;
   return {
     number: index + 1,
     label: String(citation.label ?? shortPath(String(result.source ?? ""))),
@@ -159,6 +160,7 @@ function evidenceSummary(result: Json, index: number) {
     chunk_index: String(citation.chunk_index ?? result.chunk_index ?? "-"),
     score: formatScore(citation.score ?? result.score),
     source: shortPath(String(citation.source ?? result.source ?? "")),
+    url,
   };
 }
 
@@ -176,7 +178,16 @@ export function RagEvidenceCards({ title, results, idPrefix }: { title: string; 
               key={ragResultKey(result, index)}
             >
               <header>
-                <b>[{citation.number}] {citation.label}</b>
+                <b>
+                  [{citation.number}]{" "}
+                  {citation.url ? (
+                    <a href={citation.url} target="_blank" rel="noopener noreferrer">
+                      {citation.label}
+                    </a>
+                  ) : (
+                    citation.label
+                  )}
+                </b>
                 <span>{citation.score}</span>
               </header>
               <p>{previewText(result.text, 240)}</p>

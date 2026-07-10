@@ -126,6 +126,59 @@ def test_chat_turn_zero_evidence_skips_llm(tmp_path: Path) -> None:
     assert meta["retrieval"]["result_count"] == 0
 
 
+def test_chat_turn_source_mode_web_returns_web_answer_with_fake_sources(tmp_path: Path) -> None:
+    """source_mode="web", offline (call_real_api defaults False): the guarded
+    path resolves to the deterministic LocalWebAnswerClient (no network), and
+    the response is normalized to kind "web_answer" with URL citations.
+
+    The query embeds a random token so its guarded-service cache key (which
+    binds today's date + prompt, see GroundedLlmService) never collides with
+    another test run's cached entry in the shared on-disk LLM cache -- this
+    keeps the "local_template" (never "cache") assertion below deterministic.
+    """
+
+    import uuid
+
+    db = tmp_path / "rag.sqlite"
+    RagStore(db)  # unused by the web route, but keep db_path harmless
+
+    status, payload = handle_api(
+        "POST",
+        "/api/chat/turn",
+        {
+            "messages": [
+                {"role": "user", "content": f"KDDIの最新ニュースは？ ({uuid.uuid4()})"}
+            ],
+            "db_path": str(db),
+            "source_mode": "web",
+        },
+    )
+
+    assert status == 200
+    message = payload["message"]
+    assert message["kind"] == "web_answer"
+    assert message["content"]
+    assert message["citations"]
+    assert all(citation.get("url") for citation in message["citations"])
+    assert message["evidence"]
+
+    meta = message["meta"]
+    assert meta["disclaimer"]
+    assert meta["llm"] is not None
+    assert meta["llm"]["source"] == "local_template"
+
+
+def test_chat_turn_invalid_source_mode_returns_400() -> None:
+    status, payload = handle_api(
+        "POST",
+        "/api/chat/turn",
+        {"messages": [{"role": "user", "content": "hi"}], "source_mode": "bogus"},
+    )
+
+    assert status == 400
+    assert "source_mode" in str(payload)
+
+
 def test_chat_turn_limit_is_hard_capped(tmp_path: Path) -> None:
     db = tmp_path / "rag.sqlite"
     _index_kddi_doc(db, tmp_path)

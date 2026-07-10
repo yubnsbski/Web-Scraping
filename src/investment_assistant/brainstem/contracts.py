@@ -1,9 +1,8 @@
 """Frozen data contracts shared by every brainstem pipeline stage.
 
 These mirror ``docs/brainstem.md`` section 2's stage diagram. Fields model
-only what :mod:`investment_assistant.webapi.chat` actually uses today
-(Sprint B0 is a pure refactor); ``source_mode`` and the ``local_ollama``
-route are reserved literals for O1/O3, not yet reachable in v0.
+only what :mod:`investment_assistant.webapi.chat` actually uses today; the
+``local_ollama`` route remains a reserved literal for O1, not yet reachable.
 """
 
 from __future__ import annotations
@@ -15,15 +14,20 @@ from typing import Any, Literal
 # answer: single-shot guarded RAG answer. detailed: multi-model orchestration.
 AnswerMode = Literal["answer", "detailed"]
 
-# rag: local accumulated-data search (the only mode implemented in v0).
-# web/auto are reserved literals for O3 (per blueprint section 2/6).
+# rag: local accumulated-data search (the default, and the only mode before
+# this sprint). web: Gemini's official Google Search grounding tool, no
+# local RAG search at all (see router.py). auto: rag first, falling back to
+# a single web call only when rag returns zero results (see generation.py).
 SourceMode = Literal["rag", "web", "auto"]
 
 # gemini_chain: guarded single-shot RAG answer (cli.run_rag_answer).
 # orchestrate: multi-model orchestration (cli.run_orchestrate_answer).
+# web_grounded: guarded Web-grounded answer via Gemini Google Search
+# grounding (cli.run_web_answer) -- selected by source_mode "web", and
+# entered as an "auto" fallback when the rag path finds no evidence.
 # small_talk: local, no-search, no-LLM reply to greetings/thanks/acks.
 # local_ollama is reserved for O1; unreachable until QueryRouter grows it.
-RouteName = Literal["gemini_chain", "orchestrate", "small_talk", "local_ollama"]
+RouteName = Literal["gemini_chain", "orchestrate", "web_grounded", "small_talk", "local_ollama"]
 
 
 @dataclass(frozen=True)

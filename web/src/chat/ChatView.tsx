@@ -8,7 +8,27 @@ import { useConversations } from "./chatStore";
 import { ChatThread } from "./ChatThread";
 import { Composer } from "./Composer";
 import { WelcomeScreen } from "./WelcomeScreen";
-import { genId, toApiMessages, type ApiChatMessage, type BudgetInfo, type ChatMessage, type ChatMode } from "./types";
+import {
+  genId,
+  toApiMessages,
+  type ApiChatMessage,
+  type BudgetInfo,
+  type ChatMessage,
+  type ChatMode,
+  type SourceMode,
+} from "./types";
+
+const SOURCE_MODE_STORAGE_KEY = "ia.chat.sourceMode";
+
+function loadSourceMode(): SourceMode {
+  try {
+    const stored = localStorage.getItem(SOURCE_MODE_STORAGE_KEY);
+    if (stored === "rag" || stored === "web" || stored === "auto") return stored;
+  } catch {
+    // localStorage unavailable: fall through to the default.
+  }
+  return "rag";
+}
 
 const DEFAULT_RAG_DB_PATH = ".cache/investment_assistant/rag.sqlite";
 const DEFAULT_LIMIT = 6;
@@ -44,6 +64,7 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
   const [draftText, setDraftText] = useState("");
   const [sending, setSending] = useState(false);
   const [mode, setMode] = useState<ChatMode>("answer");
+  const [sourceMode, setSourceMode] = useState<SourceMode>(() => loadSourceMode());
   // v2 key: real AI defaults ON. The old "ia.realAi" key was auto-written "0"
   // on mount for every visitor, so it cannot tell an explicit opt-out from the
   // old default — ignore it and only honor an explicit "0" on the v2 key.
@@ -59,6 +80,14 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
   useEffect(() => {
     localStorage.setItem("ia.realAi.v2", realAi ? "1" : "0");
   }, [realAi]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SOURCE_MODE_STORAGE_KEY, sourceMode);
+    } catch {
+      // Storage full/unavailable is not fatal for the in-memory session.
+    }
+  }, [sourceMode]);
 
   const refreshBudget = async () => {
     setBudgetInfo(await fetchBudget());
@@ -90,6 +119,7 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
         callRealApi: realAi,
         mode,
         hybrid: true,
+        sourceMode,
       });
       const reply: ChatMessage = {
         id: genId(),
@@ -275,6 +305,8 @@ export function ChatView(props: { onNavigate: (tabId: string) => void }) {
           sending={sending}
           mode={mode}
           onModeChange={setMode}
+          sourceMode={sourceMode}
+          onSourceModeChange={setSourceMode}
           realAi={realAi}
           onRealAiChange={setRealAi}
           budgetInfo={budgetInfo}

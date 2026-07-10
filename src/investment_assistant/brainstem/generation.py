@@ -1,17 +1,23 @@
 """Stage 5 (generate): run the routed generation call.
 
-Wraps the two existing entry points ``chat.py`` called directly before this
-refactor -- ``cli.run_rag_answer`` (gemini_chain route) and
-``cli.run_orchestrate_answer`` (orchestrate route). Behavior is untouched:
-same keyword arguments, same fused retrieval+generation call (see
-``retrieval.py`` module docstring for why retrieval is not split out of
-these calls yet).
+Wraps the entry points ``chat.py`` called directly before the B0 refactor --
+``cli.run_rag_answer`` (gemini_chain route), ``cli.run_orchestrate_answer``
+(orchestrate route) -- plus ``cli.run_web_answer`` (web_grounded route, added
+for the Web-search sprint). Behavior for the first two is untouched: same
+keyword arguments, same fused retrieval+generation call (see ``retrieval.py``
+module docstring for why retrieval is not split out of these calls yet).
 
-Injection seams (``rag_answer_fn`` / ``orchestrate_answer_fn``) exist for
-tests to supply fakes. When not given, the ``cli`` module attribute is
-looked up at call time (not bound at construction time) so
-``monkeypatch.setattr(cli, "run_orchestrate_answer", ...)`` -- used by
-existing chat tests -- keeps working unchanged.
+``source_mode == "auto"`` is handled here rather than in ``router.py``:
+the rag path (gemini_chain route) always runs first, and only when it comes
+back with zero results does this stage make one ``run_web_answer`` call and
+return that raw payload instead (with ``raw["auto_fallback"] = True``), so
+the extra Web call only happens when local evidence is truly absent.
+
+Injection seams (``rag_answer_fn`` / ``orchestrate_answer_fn`` /
+``web_answer_fn``) exist for tests to supply fakes. When not given, the
+``cli`` module attribute is looked up at call time (not bound at
+construction time) so ``monkeypatch.setattr(cli, "run_orchestrate_answer",
+...)`` -- used by existing chat tests -- keeps working unchanged.
 """
 
 from __future__ import annotations
@@ -42,9 +48,11 @@ class Generator:
         *,
         rag_answer_fn: _AnswerFn | None = None,
         orchestrate_answer_fn: _AnswerFn | None = None,
+        web_answer_fn: _AnswerFn | None = None,
     ) -> None:
         self._rag_answer_fn = rag_answer_fn
         self._orchestrate_answer_fn = orchestrate_answer_fn
+        self._web_answer_fn = web_answer_fn
 
     def generate(
         self,
@@ -68,6 +76,13 @@ class Generator:
                 },
             }
             return GenerationAttempt(route=route.route, raw=raw)
+        if route.route == "web_grounded":
+            web_fn = self._web_answer_fn or cli.run_web_answer
+            raw = web_fn(
+                query=resolved.prompt_question,
+                call_real_api=request.call_real_api,
+            )
+            return GenerationAttempt(route=route.route, raw=raw)
         if route.route == "orchestrate":
             orchestrate_fn = self._orchestrate_answer_fn or cli.run_orchestrate_answer
             raw = orchestrate_fn(
@@ -90,4 +105,14 @@ class Generator:
                 hybrid=request.hybrid,
                 alpha=request.alpha,
             )
+            if request.source_mode == "auto" and not raw.get("results"):
+                web_fn = self._web_answer_fn or cli.run_web_answer
+                web_raw = dict(
+                    web_fn(
+                        query=resolved.prompt_question,
+                        call_real_api=request.call_real_api,
+                    )
+                )
+                web_raw["auto_fallback"] = True
+                return GenerationAttempt(route=route.route, raw=web_raw)
         return GenerationAttempt(route=route.route, raw=raw)

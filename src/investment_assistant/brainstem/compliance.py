@@ -71,8 +71,20 @@ def _normalize(
     no_evidence = result_count == 0
 
     llm_meta: JsonDict | None
+    highlights: list[Any]
     if raw.get("small_talk"):
         kind = "small_talk"
+        content = str(raw.get("answer", ""))
+        llm_meta = _llm_meta(raw.get("llm"))
+        highlights = []
+    elif raw.get("web"):
+        # A Web-grounded answer (``websearch.answer.generate_web_answer``,
+        # via the web_grounded route or an "auto" rag-fallback) is never
+        # "no evidence" even when ``results`` is empty (e.g. Gemini answered
+        # without a grounding hit) -- it is its own kind, checked before the
+        # no_evidence/synthesis branches below. ``no_evidence`` in
+        # meta.retrieval still reflects the actual result count either way.
+        kind = "web_answer"
         content = str(raw.get("answer", ""))
         llm_meta = _llm_meta(raw.get("llm"))
         highlights = []

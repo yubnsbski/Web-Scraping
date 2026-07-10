@@ -6,7 +6,10 @@ export type Json = Record<string, any>;
 
 export type ChatRole = "user" | "assistant";
 export type ChatMode = "answer" | "detailed";
-export type ChatKind = "rag_answer" | "orchestrate" | "no_evidence";
+export type ChatKind = "rag_answer" | "orchestrate" | "web_answer" | "no_evidence" | "small_talk";
+/** Which evidence source the next turn should use: local RAG search, Web
+ * search (Gemini's Google Search grounding), or rag-first-then-web-fallback. */
+export type SourceMode = "rag" | "web" | "auto";
 
 /** The minimal shape sent as conversation history to POST /api/chat/turn. */
 export interface ApiChatMessage {
@@ -31,6 +34,30 @@ export interface ChatLlmMeta {
   cache_key: string | null;
 }
 
+/** One "thought" surfaced during a pipeline stage (see thinking.py). */
+export interface ThinkingItem {
+  t: string;
+  w: number;
+  note: string | null;
+}
+
+/** One stage of the thinking trace, e.g. context/route/retrieve/generate. */
+export interface ThinkingStep {
+  stage: string;
+  label: string;
+  ms: number;
+  items: ThinkingItem[];
+}
+
+/** Full "thinking popup" trace attached to an assistant turn's meta, matching
+ * thinking.v1 emitted by src/investment_assistant/brainstem/thinking.py. May
+ * be absent entirely (older stored conversations, trace failure). */
+export interface ThinkingTrace {
+  version: string;
+  total_ms: number;
+  steps: ThinkingStep[];
+}
+
 export interface ChatTurnMeta {
   mode: string;
   disclaimer: string;
@@ -41,6 +68,7 @@ export interface ChatTurnMeta {
   retrieval: ChatRetrievalMeta;
   budget: BudgetInfo | null;
   simulation: unknown;
+  thinking?: ThinkingTrace | null;
 }
 
 export interface ChatTurnResponse {

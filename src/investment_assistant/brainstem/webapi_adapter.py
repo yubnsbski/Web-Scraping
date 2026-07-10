@@ -23,6 +23,7 @@ _MAX_LIMIT = 16
 _MAX_MESSAGES = 200
 _DEFAULT_ALPHA = 0.5
 _VALID_ANSWER_MODES = ("answer", "detailed")
+_VALID_SOURCE_MODES = ("rag", "web", "auto")
 
 
 def chat_turn(body: JsonDict) -> JsonDict:
@@ -41,10 +42,16 @@ def _to_request(body: JsonDict) -> BrainstemRequest:
     if answer_mode not in _VALID_ANSWER_MODES:
         raise ApiError(f"invalid mode: {answer_mode!r}, expected one of {_VALID_ANSWER_MODES}")
 
+    source_mode = str(body.get("source_mode") or "rag")
+    if source_mode not in _VALID_SOURCE_MODES:
+        raise ApiError(
+            f"invalid source_mode: {source_mode!r}, expected one of {_VALID_SOURCE_MODES}"
+        )
+
     return BrainstemRequest(
         messages=tuple(dict(message) for message in messages),
         answer_mode=answer_mode,  # type: ignore[arg-type]  # validated above
-        source_mode="rag",
+        source_mode=source_mode,  # type: ignore[arg-type]  # validated above
         db_path=str(body.get("db_path") or DEFAULT_RAG_DB_PATH),
         limit=_clamp_limit(body.get("limit")),
         call_real_api=_as_bool(body.get("call_real_api"), False),

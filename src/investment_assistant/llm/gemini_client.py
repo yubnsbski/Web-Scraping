@@ -22,6 +22,34 @@ class TextGenerationClient(Protocol):
         """Generate text for ``prompt`` with ``model``."""
 
 
+@dataclass(frozen=True)
+class WebSource:
+    """One Web citation surfaced by Gemini's Google Search grounding."""
+
+    url: str
+    title: str
+
+
+@dataclass(frozen=True)
+class GroundedGeneration:
+    """Text plus the Web sources Gemini grounded it in."""
+
+    text: str
+    sources: tuple[WebSource, ...] = ()
+
+
+class GroundedGenerationClient(Protocol):
+    """Protocol implemented by concrete or fake grounded-generation clients.
+
+    Kept separate from :class:`TextGenerationClient` (rather than adding an
+    optional method to it) so fakes for the plain RAG path do not need to
+    grow an unused ``generate_grounded`` stub.
+    """
+
+    def generate_grounded(self, prompt: str, *, model: str) -> GroundedGeneration:
+        """Generate Web-grounded text (with sources) for ``prompt``."""
+
+
 class GeminiApiError(RuntimeError):
     """Raised when a Gemini API call fails, with a classified ``reason``.
 
@@ -90,3 +118,68 @@ class GeminiClient:
             msg = "Gemini API response did not include non-empty text"
             raise GeminiApiError(msg, reason="empty_response")
         return text
+
+    def generate_grounded(self, prompt: str, *, model: str) -> GroundedGeneration:
+        """Generate Web-grounded text using Gemini's official Google Search tool.
+
+        Uses the same lazy-import / key-check / error-classification path as
+        :meth:`generate`, plus ``tools=[{"google_search": {}}]`` in the
+        generation config (the ToS-clean "Grounding with Google Search"
+        feature -- no scraping). Like ``generate``, this is intentionally
+        reached only through a guarded service (``GroundedLlmService``).
+        """
+
+        key = self.api_key or os.getenv("GEMINI_API_KEY")
+        if not key:
+            msg = "GEMINI_API_KEY is not configured"
+            raise RuntimeError(msg)
+        if importlib.util.find_spec("google.genai") is None:
+            msg = "Install the optional Gemini SDK with: pip install -e '.[gemini]'"
+            raise RuntimeError(msg)
+
+        genai = importlib.import_module("google.genai")
+        client = genai.Client(api_key=key)
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config={"tools": [{"google_search": {}}]},
+            )
+        except Exception as exc:  # noqa: BLE001 - reclassified as GeminiApiError below
+            reason = _classify_gemini_error(exc)
+            raise GeminiApiError(str(exc), reason=reason) from exc
+
+        text = getattr(response, "text", None)
+        if not isinstance(text, str) or not text.strip():
+            msg = "Gemini API response did not include non-empty text"
+            raise GeminiApiError(msg, reason="empty_response")
+        return GroundedGeneration(text=text, sources=_extract_web_sources(response))
+
+
+def _extract_web_sources(response: object) -> tuple[WebSource, ...]:
+    """Extract ``WebSource`` citations from a grounded generation response.
+
+    Tolerant of any missing attribute along the
+    ``candidates[0].grounding_metadata.grounding_chunks[].web`` path (real
+    responses without a grounding hit, and minimal fakes in tests) --
+    returns an empty tuple rather than raising.
+    """
+
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return ()
+    metadata = getattr(candidates[0], "grounding_metadata", None)
+    if metadata is None:
+        return ()
+    chunks = getattr(metadata, "grounding_chunks", None) or []
+    sources: list[WebSource] = []
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        if web is None:
+            continue
+        uri = getattr(web, "uri", None)
+        if not uri:
+            continue
+        title = getattr(web, "title", None)
+        sources.append(WebSource(url=str(uri), title=str(title) if title else ""))
+    return tuple(sources)

@@ -4,7 +4,7 @@
 // Speech API, feature-detected so it degrades to no mic button everywhere
 // else -- entirely client-side, no backend involvement.
 import { forwardRef, useEffect, useRef, useState, type MutableRefObject } from "react";
-import type { BudgetInfo, ChatMode } from "./types";
+import type { BudgetInfo, ChatMode, SourceMode } from "./types";
 
 // Minimal local typing for the Web Speech API: it is not part of the
 // standard DOM lib, so we declare just enough surface here rather than
@@ -43,6 +43,8 @@ export interface ComposerProps {
   sending: boolean;
   mode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
+  sourceMode: SourceMode;
+  onSourceModeChange: (mode: SourceMode) => void;
   realAi: boolean;
   onRealAiChange: (value: boolean) => void;
   budgetInfo: BudgetInfo | null;
@@ -144,6 +146,32 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
             title="3案生成→批評→統合の多段処理（通常より時間がかかります）"
           >
             詳細分析
+          </button>
+        </div>
+        <div className="composer-source-toggle" role="tablist" aria-label="検索範囲">
+          <button
+            type="button"
+            className={props.sourceMode === "rag" ? "composer-source-btn active" : "composer-source-btn"}
+            onClick={() => props.onSourceModeChange("rag")}
+            title="蓄積したローカル文書だけを根拠に回答します"
+          >
+            ローカル
+          </button>
+          <button
+            type="button"
+            className={props.sourceMode === "web" ? "composer-source-btn active" : "composer-source-btn"}
+            onClick={() => props.onSourceModeChange("web")}
+            title="Gemini の Google 検索グラウンディングでWeb情報を根拠に回答します"
+          >
+            Web
+          </button>
+          <button
+            type="button"
+            className={props.sourceMode === "auto" ? "composer-source-btn active" : "composer-source-btn"}
+            onClick={() => props.onSourceModeChange("auto")}
+            title="まずローカル文書を検索し、根拠が見つからない場合のみWeb検索します"
+          >
+            自動
           </button>
         </div>
         <label className="composer-realai">

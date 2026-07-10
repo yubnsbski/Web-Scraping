@@ -64,10 +64,11 @@ from investment_assistant.ingestion.source_registry import (
 from investment_assistant.llm.cache import LlmCache
 from investment_assistant.llm.factory import (
     DEFAULT_GEMINI_CONFIG_PATH,
+    build_grounded_llm_service,
     build_llm_service,
     load_gemini_runtime_config,
 )
-from investment_assistant.llm.gemini_client import TextGenerationClient
+from investment_assistant.llm.gemini_client import GroundedGenerationClient, TextGenerationClient
 from investment_assistant.observability import configure_logging
 from investment_assistant.orchestration.factory import build_orchestrator
 from investment_assistant.orchestration.orchestrator import OrchestrationConfig
@@ -94,6 +95,7 @@ from investment_assistant.rag.tokenize import tokenize
 from investment_assistant.scoring.models import ScoreWeights
 from investment_assistant.scoring.report import build_scoring_report
 from investment_assistant.scoring.scorer import validate_scoring_csv
+from investment_assistant.websearch.answer import LocalWebAnswerClient, generate_web_answer
 
 
 @dataclass(frozen=True)
@@ -892,6 +894,37 @@ def run_rag_answer(
         hybrid=hybrid,
         alpha=alpha,
     )
+    result["call_real_api"] = call_real_api
+    return result
+
+
+def run_web_answer(
+    *,
+    query: str,
+    config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
+    call_real_api: bool = False,
+    client: GroundedGenerationClient | None = None,
+) -> dict[str, object]:
+    """Generate a Web-grounded, citation-aware answer through Gemini's official
+    Google Search grounding tool (no scraping -- see ``websearch/answer.py``).
+
+    Mirrors ``run_rag_answer``'s client-selection pattern: an explicitly
+    injected ``client`` is used as-is (default "gemini_web" provider label);
+    ``call_real_api`` with no injected client reaches the real
+    ``GeminiClient.generate_grounded``; otherwise (the offline default) a
+    deterministic ``LocalWebAnswerClient`` is used, labeled honestly so
+    ``meta.llm.source`` never claims Gemini produced this text.
+    """
+
+    if client is not None:
+        service = build_grounded_llm_service(config_path, client=client)
+    elif call_real_api:
+        service = build_grounded_llm_service(config_path, client=None)
+    else:
+        service = build_grounded_llm_service(
+            config_path, client=LocalWebAnswerClient(), provider="local_template"
+        )
+    result = generate_web_answer(service=service, query=query)
     result["call_real_api"] = call_real_api
     return result
 

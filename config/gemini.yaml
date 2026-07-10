@@ -28,6 +28,7 @@ gemini:
     - rag_answer
     - important_report_summary
     - multimodal_chart_extraction
+    - web_answer
   blocked_tasks:
     - bulk_news_summary
     - repeated_translation

@@ -9,8 +9,12 @@ from typing import Any
 from investment_assistant.config.loader import load_yaml
 from investment_assistant.llm.budget_guard import BudgetConfig, BudgetGuard
 from investment_assistant.llm.cache import LlmCache
-from investment_assistant.llm.gemini_client import GeminiClient, TextGenerationClient
-from investment_assistant.llm.service import FallbackConfig, LlmService
+from investment_assistant.llm.gemini_client import (
+    GeminiClient,
+    GroundedGenerationClient,
+    TextGenerationClient,
+)
+from investment_assistant.llm.service import FallbackConfig, GroundedLlmService, LlmService
 from investment_assistant.observability import get_logger
 
 _logger = get_logger("llm.factory")
@@ -101,6 +105,44 @@ def build_llm_service(
         # Retry transient 5xx failures (free-tier safe: the failed request
         # consumed no quota), and cool down for 15 minutes on a real 429 so
         # the production chat path stops hammering an exhausted quota.
+        max_retries=2,
+        cooldown_minutes=15,
+    )
+
+
+def build_grounded_llm_service(
+    config_path: str | Path = DEFAULT_GEMINI_CONFIG_PATH,
+    *,
+    client: GroundedGenerationClient | None = None,
+    enforce_budget: bool = True,
+    provider: str = "gemini_web",
+) -> GroundedLlmService:
+    """Build the guarded Web-grounded LLM service from ``config/gemini.yaml``.
+
+    Mirrors :func:`build_llm_service`: same cache/budget-guard config,
+    ``client or GeminiClient()`` default, and retry/cooldown defaults. Tests
+    and smoke checks can inject a fake ``client``. Offline callers -- see
+    ``cli.run_web_answer``, which follows the same ``call_real_api`` branch
+    ``run_rag_answer`` uses -- explicitly inject the deterministic
+    ``websearch.answer.LocalWebAnswerClient`` (a fixed template + 2 fake
+    sources, like ``rag.answer.LocalRagAnswerClient``) instead of relying on
+    this factory's default.
+    """
+
+    config = load_gemini_runtime_config(config_path)
+    chosen_client = client or GeminiClient()
+    return GroundedLlmService(
+        model=config.model,
+        client=chosen_client,
+        cache=LlmCache(
+            config.cache_db_path,
+            ttl_days=config.cache_ttl_days,
+            enabled=config.cache_enabled,
+        ),
+        budget_guard=BudgetGuard(config.usage_db_path, config.budget),
+        fallback=config.fallback,
+        enforce_budget=enforce_budget,
+        provider=provider,
         max_retries=2,
         cooldown_minutes=15,
     )

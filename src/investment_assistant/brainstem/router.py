@@ -33,6 +33,12 @@ class QueryRouter:
                 allow_context_rewrite=False,
                 reason="挨拶・相づちと判定したため、検索とLLMを使わずローカルで即答します",
             )
+        if request.source_mode == "web":
+            return RouteDecision(
+                route="web_grounded",
+                allow_context_rewrite=False,
+                reason="Web検索モードが指定されたため、Google検索グラウンディングで回答します",
+            )
         if request.answer_mode == "detailed":
             return RouteDecision(
                 route="orchestrate",

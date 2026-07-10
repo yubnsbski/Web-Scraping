@@ -1,7 +1,7 @@
 // Typed client for the chat.turn.v1 contract (POST /api/chat/turn) and
 // GET /api/budget. Uses the same same-origin fetch conventions as ../api.ts.
 import { api } from "../api";
-import type { ApiChatMessage, BudgetInfo, ChatMode, ChatTurnResponse } from "./types";
+import type { ApiChatMessage, BudgetInfo, ChatMode, ChatTurnResponse, SourceMode } from "./types";
 
 export interface PostChatTurnOptions {
   dbPath?: string;
@@ -10,6 +10,7 @@ export interface PostChatTurnOptions {
   mode?: ChatMode;
   hybrid?: boolean;
   alpha?: number;
+  sourceMode?: SourceMode;
 }
 
 export async function postChatTurn(
@@ -23,6 +24,7 @@ export async function postChatTurn(
   if (opts.mode !== undefined) body.mode = opts.mode;
   if (opts.hybrid !== undefined) body.hybrid = opts.hybrid;
   if (opts.alpha !== undefined) body.alpha = opts.alpha;
+  if (opts.sourceMode !== undefined) body.source_mode = opts.sourceMode;
   return api<ChatTurnResponse>("/api/chat/turn", body);
 }
 
