@@ -9,9 +9,11 @@ module docstring for why retrieval is not split out of these calls yet).
 
 ``source_mode == "auto"`` is handled here rather than in ``router.py``:
 the rag path (gemini_chain route) always runs first, and only when it comes
-back with zero results does this stage make one ``run_web_answer`` call and
-return that raw payload instead (with ``raw["auto_fallback"] = True``), so
-the extra Web call only happens when local evidence is truly absent.
+back without usable evidence -- zero results, or an answer carrying the
+guarded prompt's コンテキスト不足 marker (see ``_rag_lacks_evidence``) -- does
+this stage make one ``run_web_answer`` call and return that raw payload
+instead (with ``raw["auto_fallback"] = True``), so the extra Web call only
+happens when local evidence is truly absent.
 
 Injection seams (``rag_answer_fn`` / ``orchestrate_answer_fn`` /
 ``web_answer_fn``) exist for tests to supply fakes. When not given, the
@@ -22,6 +24,7 @@ construction time) so ``monkeypatch.setattr(cli, "run_orchestrate_answer",
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 from investment_assistant import cli
@@ -105,7 +108,7 @@ class Generator:
                 hybrid=request.hybrid,
                 alpha=request.alpha,
             )
-            if request.source_mode == "auto" and not raw.get("results"):
+            if request.source_mode == "auto" and _rag_lacks_evidence(raw):
                 web_fn = self._web_answer_fn or cli.run_web_answer
                 web_raw = dict(
                     web_fn(
@@ -116,3 +119,19 @@ class Generator:
                 web_raw["auto_fallback"] = True
                 return GenerationAttempt(route=route.route, raw=web_raw)
         return GenerationAttempt(route=route.route, raw=raw)
+
+
+# The guarded RAG prompt (rag/answer.py) instructs the model to say
+# 「コンテキスト不足のため回答できません」 when the local chunks cannot answer
+# the question. In practice the local corpus returns a handful of loosely
+# related chunks for almost any query, so "zero results" alone almost never
+# fires -- the marker in the answer text is the reliable no-evidence signal.
+_NO_CONTEXT_MARKER = "コンテキスト不足"
+
+
+def _rag_lacks_evidence(raw: Mapping[str, Any]) -> bool:
+    """True when the rag answer carries no usable local evidence for "auto"."""
+
+    if not raw.get("results"):
+        return True
+    return _NO_CONTEXT_MARKER in str(raw.get("answer", ""))

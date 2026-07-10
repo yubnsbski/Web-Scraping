@@ -343,6 +343,39 @@ def test_generator_auto_mode_falls_back_to_web_when_rag_returns_zero_results() -
     assert attempt.raw["auto_fallback"] is True
 
 
+def test_generator_auto_mode_falls_back_when_answer_lacks_context() -> None:
+    """結果は返っているが「コンテキスト不足」回答 → Webへフォールバックする。
+
+    実コーパスはほぼ全クエリに数件の緩い一致を返すため、0件条件だけでは
+    auto がまず発火しない（実測: 2026-07-10 の動作確認）。ガード付き
+    プロンプトのマーカー文言が信頼できる無根拠シグナルになる。
+    """
+
+    web_calls: list[dict[str, Any]] = []
+
+    def fake_rag_answer(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "answer": "コンテキスト不足のため回答できません [1][2]",
+            "results": [{"citation": {"source": "irrelevant.md"}}],
+        }
+
+    def fake_web_answer(**kwargs: Any) -> dict[str, Any]:
+        web_calls.append(kwargs)
+        return {"answer": "web answer", "results": [], "web": True}
+
+    generator = Generator(rag_answer_fn=fake_rag_answer, web_answer_fn=fake_web_answer)
+    resolver = ContextResolver()
+    request = _request([{"role": "user", "content": "米国の直近のCPIは"}], source_mode="auto")
+    resolved = resolver.resolve(request)
+    route = RouteDecision(route="gemini_chain", allow_context_rewrite=False, reason="test")
+
+    attempt = generator.generate(request=request, resolved=resolved, route=route)
+
+    assert len(web_calls) == 1
+    assert attempt.raw["auto_fallback"] is True
+    assert attempt.raw["answer"] == "web answer"
+
+
 def test_generator_auto_mode_with_rag_results_never_calls_web() -> None:
     def fake_rag_answer(**kwargs: Any) -> dict[str, Any]:
         return {"answer": "rag answer", "results": [{"citation": {"source": "x.md"}}]}

@@ -154,6 +154,9 @@ def _normalize(
                     "limit": limit,
                     "result_count": result_count,
                     "no_evidence": reported_no_evidence,
+                    # True when "auto" source_mode fell back from local RAG
+                    # to a Web-grounded answer (generation.py sets the flag).
+                    "auto_fallback": bool(raw.get("auto_fallback")),
                 },
                 "budget": budget,
                 "simulation": None,
