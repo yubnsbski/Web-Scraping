@@ -1,0 +1,45 @@
+#cloud-config
+# investment-assistant クラウドVM 初期化設定
+# 対象: Oracle Cloud Always Free / Ubuntu 24.04 (Ampere A1.Flex, arm64)
+#
+# 使い方:
+#   1. Tailscale 管理画面 (https://login.tailscale.com/admin/settings/keys) で
+#      Auth key を発行し、下の TS_AUTHKEY_HERE を実キーに置き換える
+#      (Reusable: off / Pre-approved: on 推奨)
+#   2. OCI のインスタンス作成画面 → 詳細オプション → cloud-init に全文貼り付け
+#
+# セキュリティ方針: 公開ポートは一切開けない。アクセスは Tailscale (WireGuard)
+# 経由のみ。SSH も Tailscale SSH を使う (公開鍵の配布不要・鍵はtailnetが管理)。
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - git
+  - python3-venv
+  - python3-pip
+  - ufw
+  - curl
+  - nodejs
+  - npm
+  - unattended-upgrades
+
+write_files:
+  # セキュリティパッチの自動適用
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+runcmd:
+  # Tailscale: インストールして tailnet に参加 (SSH も tailnet 経由に)
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --authkey=TS_AUTHKEY_HERE --ssh --hostname=invest-vm
+  # ファイアウォール: 受信は tailscale0 経由のみ許可、他は全拒否
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow in on tailscale0
+  - ufw --force enable
+  # アプリ: クローンしてセットアップ (venv / frontend build / systemd / tailscale serve)
+  - sudo -u ubuntu git clone https://github.com/yubnsbski/Web-Scraping.git /home/ubuntu/Web-Scraping
+  - sudo -u ubuntu bash /home/ubuntu/Web-Scraping/ops/cloud/setup-app.sh

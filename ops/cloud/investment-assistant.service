@@ -1,0 +1,16 @@
+[Unit]
+Description=investment-assistant web server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Web-Scraping
+ExecStart=/home/ubuntu/Web-Scraping/.venv/bin/investment-assistant serve
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

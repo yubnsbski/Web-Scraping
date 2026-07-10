@@ -1,0 +1,3 @@
+ops/cloud/*.sh text eol=lf
+ops/cloud/*.yaml text eol=lf
+ops/cloud/*.service text eol=lf
