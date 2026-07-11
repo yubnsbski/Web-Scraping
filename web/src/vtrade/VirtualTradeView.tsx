@@ -155,12 +155,21 @@ function formatPct(n: number, digits = 2): string {
   return `${sign}${n.toFixed(digits)}%`;
 }
 
-function formatManCompact(n: number): string {
+function formatManCompact(n: number, decimals = 0): string {
   const sign = n < 0 ? "-" : "";
   const abs = Math.abs(n);
   if (abs >= 1e8) return `${sign}${(abs / 1e8).toFixed(abs >= 1e9 ? 0 : 1)}億`;
-  if (abs >= 1e4) return `${sign}${Math.round(abs / 1e4).toLocaleString("ja-JP")}万`;
+  if (abs >= 1e4) return `${sign}${(abs / 1e4).toFixed(decimals)}万`;
   return `${sign}${Math.round(abs).toLocaleString("ja-JP")}`;
+}
+
+// Picks enough decimal digits that adjacent axis ticks don't collapse to the
+// same "X万" label when the plotted range is small relative to 10,000.
+function manDecimalsForStep(step: number): number {
+  const stepIn10k = Math.abs(step) / 1e4;
+  if (stepIn10k >= 1) return 0;
+  if (stepIn10k >= 0.1) return 1;
+  return 2;
 }
 
 function formatDateShort(d: string): string {
@@ -358,6 +367,7 @@ function EquityChart({
       : "";
 
   const gridCount = 4;
+  const gridDecimals = manDecimalsForStep(denom / gridCount);
   const gridLines = Array.from({ length: gridCount + 1 }, (_, k) => {
     const v = minV + (denom * k) / gridCount;
     return { v, y: y(v) };
@@ -420,7 +430,7 @@ function EquityChart({
           <g key={idx}>
             <line x1={pad.left} x2={VB_W - pad.right} y1={g.y} y2={g.y} stroke="var(--line)" strokeWidth={1} />
             <text x={pad.left - 8} y={g.y + 4} textAnchor="end" fontSize="11" fill="var(--muted)">
-              {formatManCompact(g.v)}
+              {formatManCompact(g.v, gridDecimals)}
             </text>
           </g>
         ))}
@@ -607,10 +617,10 @@ function PriceMiniChart({
           {n > 0 && (
             <>
               <text x={2} y={11} fontSize="9" fill="var(--muted)">
-                {formatManCompact(maxV)}
+                {formatManCompact(maxV, manDecimalsForStep(maxV - minV))}
               </text>
               <text x={2} y={VB_H - 3} fontSize="9" fill="var(--muted)">
-                {formatManCompact(minV)}
+                {formatManCompact(minV, manDecimalsForStep(maxV - minV))}
               </text>
             </>
           )}
