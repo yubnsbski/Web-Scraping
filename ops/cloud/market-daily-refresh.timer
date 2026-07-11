@@ -1,0 +1,13 @@
+# /etc/systemd/system/market-daily-refresh.timer
+# 毎日 22:00 UTC (07:00 JST, 市場終了後) に market-daily-refresh.service を起動。
+# VMがその時刻に停止していた場合は Persistent=true により起動直後に追いかけ実行する。
+[Unit]
+Description=Daily trigger for investment-assistant market data refresh
+
+[Timer]
+OnCalendar=*-*-* 22:00:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

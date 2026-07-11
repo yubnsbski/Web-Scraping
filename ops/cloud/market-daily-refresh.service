@@ -1,0 +1,17 @@
+# /etc/systemd/system/market-daily-refresh.service
+# 日次の株価/財務データ更新 (investment-assistant market-daily-refresh) を
+# クラウドVM上で実行する oneshot ユニット。実行タイミングは同名の .timer が持つ。
+[Unit]
+Description=investment-assistant daily market data refresh (OHLCV + financials + RAG)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Web-Scraping
+ExecStart=/home/ubuntu/Web-Scraping/.venv/bin/investment-assistant market-daily-refresh
+TimeoutStartSec=10800
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes

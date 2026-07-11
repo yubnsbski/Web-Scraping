@@ -31,6 +31,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable investment-assistant
 sudo systemctl restart investment-assistant
 
+# 日次データ更新タイマー (PCの起動有無に関係なく毎日22:00 UTC=7:00 JSTに実行)
+sudo cp ops/cloud/market-daily-refresh.service /etc/systemd/system/
+sudo cp ops/cloud/market-daily-refresh.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now market-daily-refresh.timer
+
 # tailnet 限定 HTTPS: https://invest-vm.<tailnet>.ts.net -> 127.0.0.1:8000
 # (tailscale のバージョンで serve の構文が違うため両方試す)
 sudo tailscale serve --bg --https=443 http://127.0.0.1:8000 \
