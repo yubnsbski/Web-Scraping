@@ -401,12 +401,10 @@ def catch_up(
 ) -> list[AutopilotCycleSummary]:
     """Run every missed cycle since ``autopilot:last_run_date`` (lazy tick).
 
-    Returns ``[]`` immediately when autopilot is off (``autopilot:auto`` ==
-    ``False``) unless ``force`` is set -- the webapi layer's
-    ``/api/vtrade/autopilot/run`` uses ``force=True`` to let an operator run
-    a cycle on demand even while auto-run is disabled; the ``ai`` read
-    endpoints (``/api/vtrade/ai/portfolio`` / ``/api/vtrade/ai/performance``)
-    call this with ``force=False`` so a disabled autopilot truly stays idle.
+    The AI account's autopilot always runs (``autopilot_auto()`` is always
+    ``True`` -- there is no off switch); ``force`` only exists so
+    ``/api/vtrade/autopilot/run`` reads the same way regardless of future
+    changes to that invariant.
 
     On first-ever activation (no ``last_run_date`` persisted yet), only the
     single latest known bar date is run -- no historical backfill.

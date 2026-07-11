@@ -304,28 +304,10 @@ def test_catch_up_runs_missed_dates_in_order(tmp_path: Path) -> None:
     assert store.autopilot_last_run_date() == more_dates[-1]
 
 
-def test_catch_up_is_noop_when_auto_is_off(tmp_path: Path) -> None:
+def test_autopilot_auto_cannot_be_turned_off(tmp_path: Path) -> None:
+    """The AI account's autopilot always stays on -- there is no persisted off switch."""
     store = VirtualTradingStore(tmp_path / "vt.sqlite")
-    store.set_autopilot_auto(False)
-    dates = _dates("2026-01-01", 35)
-    bars = {"9000": _flat_series("9000", dates, 100.0)}
-
-    summaries = catch_up(store, bars, sectors={})
-
-    assert summaries == []
-    assert store.autopilot_last_run_date() is None
-
-
-def test_catch_up_force_runs_even_when_auto_is_off(tmp_path: Path) -> None:
-    store = VirtualTradingStore(tmp_path / "vt.sqlite")
-    store.set_autopilot_auto(False)
-    dates = _dates("2026-01-01", 35)
-    bars = {"9000": _flat_series("9000", dates, 100.0)}
-
-    summaries = catch_up(store, bars, sectors={}, force=True)
-
-    assert [s.date for s in summaries] == [dates[-1]]
-    assert store.autopilot_last_run_date() == dates[-1]
+    assert store.autopilot_auto() is True
 
 
 def test_catch_up_returns_empty_when_no_bars(tmp_path: Path) -> None:

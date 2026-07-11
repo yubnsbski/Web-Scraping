@@ -8,14 +8,18 @@ module at them -- never the real ``local_docs`` data (offline-first, per
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from investment_assistant.webapi import virtual_trade as vtrade_api
 from investment_assistant.webapi.service import available_routes, handle_api
+
+_JST = ZoneInfo("Asia/Tokyo")
 
 _BARS_HEADER = "ticker,date,open,high,low,close,volume\n"
 _JPX_HEADER = (
@@ -76,6 +80,7 @@ def test_all_vtrade_routes_are_registered() -> None:
         "GET /api/vtrade/performance",
         "POST /api/vtrade/reset",
         "POST /api/vtrade/bars",
+        "POST /api/vtrade/live",
         "GET /api/vtrade/ai/portfolio",
         "GET /api/vtrade/ai/performance",
         "POST /api/vtrade/autopilot/run",
@@ -363,22 +368,27 @@ def test_autopilot_run_forces_a_cycle_and_reports_it(tmp_path: Path) -> None:
     assert payload["last_run_date"] == payload["ran"][0]["date"]
 
 
-def test_autopilot_config_updates_preset_and_auto(tmp_path: Path) -> None:
+def test_autopilot_config_updates_preset(tmp_path: Path) -> None:
     _configure(tmp_path, bars_rows=_RICH_BARS, jpx_rows=_RICH_JPX)
 
-    status, payload = handle_api(
-        "POST", "/api/vtrade/autopilot/config", {"preset": "momentum", "auto": False}
-    )
+    status, payload = handle_api("POST", "/api/vtrade/autopilot/config", {"preset": "momentum"})
 
     assert status == 200
-    assert payload == {"ok": True, "preset": "momentum", "auto": False}
+    assert payload == {"ok": True, "preset": "momentum", "auto": True}
 
     status2, payload2 = handle_api("GET", "/api/vtrade/ai/portfolio", {})
     assert status2 == 200
     assert payload2["preset"] == "momentum"
-    assert payload2["auto"] is False
-    assert payload2["last_run_date"] is None  # auto off -> lazy tick is a no-op
-    assert payload2["positions"] == []
+    assert payload2["auto"] is True
+
+
+def test_autopilot_config_rejects_turning_auto_off(tmp_path: Path) -> None:
+    _configure(tmp_path, bars_rows=_RICH_BARS, jpx_rows=_RICH_JPX)
+
+    status, payload = handle_api("POST", "/api/vtrade/autopilot/config", {"auto": False})
+
+    assert status == 400
+    assert "auto" in str(payload).lower()
 
 
 def test_autopilot_config_rejects_unknown_preset(tmp_path: Path) -> None:
@@ -397,3 +407,100 @@ def test_autopilot_config_rejects_non_bool_auto(tmp_path: Path) -> None:
     status, _payload = handle_api("POST", "/api/vtrade/autopilot/config", {"auto": "yes"})
 
     assert status == 400
+
+
+# --- live (intraday) ---------------------------------------------------------
+
+
+def _monday_morning() -> datetime:
+    return datetime(2026, 7, 13, 10, 0, tzinfo=_JST)  # 2026-07-13 is a Monday
+
+
+def _sunday() -> datetime:
+    return datetime(2026, 7, 12, 10, 0, tzinfo=_JST)
+
+
+def _lunch_break() -> datetime:
+    return datetime(2026, 7, 13, 12, 0, tzinfo=_JST)
+
+
+@pytest.mark.parametrize(
+    ("when", "expected"),
+    [
+        (_monday_morning(), True),
+        (datetime(2026, 7, 13, 13, 0, tzinfo=_JST), True),  # afternoon session
+        (_lunch_break(), False),
+        (datetime(2026, 7, 13, 8, 59, tzinfo=_JST), False),
+        (datetime(2026, 7, 13, 15, 1, tzinfo=_JST), False),
+        (_sunday(), False),
+    ],
+)
+def test_is_tse_session_open(when: datetime, expected: bool) -> None:
+    assert vtrade_api._is_tse_session_open(when) is expected
+
+
+def test_live_returns_closed_without_network_when_market_shut(tmp_path: Path) -> None:
+    _configure(tmp_path, bars_rows=_DEFAULT_BARS, jpx_rows=_DEFAULT_JPX)
+
+    def _boom(_url: str) -> str:
+        raise AssertionError("must not fetch while the market is closed")
+
+    vtrade_api.configure(clock=_sunday, intraday_fetch=_boom)
+
+    status, payload = handle_api("POST", "/api/vtrade/live", {"tickers": ["1000"]})
+
+    assert status == 200
+    assert payload["open"] is False
+    assert payload["quotes"] == {}
+
+
+def test_live_returns_empty_without_network_when_no_tickers(tmp_path: Path) -> None:
+    _configure(tmp_path, bars_rows=_DEFAULT_BARS, jpx_rows=_DEFAULT_JPX)
+
+    def _boom(_url: str) -> str:
+        raise AssertionError("must not fetch with an empty ticker list")
+
+    vtrade_api.configure(clock=_monday_morning, intraday_fetch=_boom)
+
+    status, payload = handle_api("POST", "/api/vtrade/live", {"tickers": []})
+
+    assert status == 200
+    assert payload["open"] is True
+    assert payload["quotes"] == {}
+
+
+def _intraday_page(ticks: list[tuple[str, float]]) -> str:
+    histories = [
+        {"baseDatetime": f"2026-07-13T{hm}:00+09:00", "closePrice": price} for hm, price in ticks
+    ]
+    state = {"mainItemDetailChartSetting": {"timeSeriesData": {"histories": histories}}}
+    return (
+        "<html><head><script>window.__PRELOADED_STATE__ = "
+        + json.dumps(state, ensure_ascii=False)
+        + ";\n</script></head></html>"
+    )
+
+
+def test_live_returns_latest_tick_per_ticker_when_market_open(tmp_path: Path) -> None:
+    _configure(tmp_path, bars_rows=_DEFAULT_BARS, jpx_rows=_DEFAULT_JPX)
+
+    pages = {
+        "1000": _intraday_page([("09:00", 1010.0), ("10:00", 1023.5)]),
+        "9999": _intraday_page([]),
+    }
+
+    def _fake_fetch(url: str) -> str:
+        for ticker, page in pages.items():
+            if f"{ticker.lower()}.t" in url.lower():
+                return page
+        raise AssertionError(f"unexpected url: {url}")
+
+    vtrade_api.configure(clock=_monday_morning, intraday_fetch=_fake_fetch)
+
+    status, payload = handle_api(
+        "POST", "/api/vtrade/live", {"tickers": ["1000", "9999"]}
+    )
+
+    assert status == 200
+    assert payload["open"] is True
+    assert payload["quotes"] == {"1000": {"price": 1023.5, "time": "10:00"}}

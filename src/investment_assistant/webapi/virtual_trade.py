@@ -36,10 +36,13 @@ process restart.
 
 from __future__ import annotations
 
+import datetime as dt
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from investment_assistant.papertrade import PAPERTRADE_DISCLAIMER, autopilot
 from investment_assistant.papertrade.mechanics import round_to_tick
@@ -66,6 +69,14 @@ DEFAULT_JPX_MASTER_PATH = Path("local_docs/jpx/data_j_converted.csv")
 _MAX_BARS_TICKERS = 24
 _DEFAULT_BARS_DAYS = 90
 _MAX_BARS_DAYS = 400
+_MAX_LIVE_TICKERS = 24
+
+_JST = ZoneInfo("Asia/Tokyo")
+# TSE regular session, ignoring exchange holidays -- this only gates whether
+# it's worth spending a Yahoo Finance fetch on "is the market moving right
+# now", not a trading-calendar authority.
+_MORNING_SESSION = (dt.time(9, 0), dt.time(11, 30))
+_AFTERNOON_SESSION = (dt.time(12, 30), dt.time(15, 0))
 
 _REASON_MESSAGES: dict[str, str] = {
     "invalid_lot": "株数は100株（単元）の倍数で入力してください",
@@ -91,6 +102,11 @@ _source = _DataSource()
 _bars_cache: dict[tuple[str, float], BarsMap] = {}
 _sectors_cache: dict[tuple[str, float], SectorMap] = {}
 
+# Test-only seams for /api/vtrade/live: real usage never sets these, so the
+# handler calls the real clock and the real Yahoo Finance fetcher.
+_clock_override: Callable[[], dt.datetime] | None = None
+_intraday_fetch_override: Callable[[str], str] | None = None
+
 # The HTTP layer is a ThreadingHTTPServer (see webapi/server.py), so two
 # requests can hit these handlers concurrently -- e.g. the web UI open in two
 # tabs, each triggering the autopilot lazy tick at once. Every path that
@@ -106,10 +122,12 @@ def configure(
     daily_bars_path: str | Path | None = None,
     jpx_master_path: str | Path | None = None,
     store_path: str | Path | None = None,
+    clock: Callable[[], dt.datetime] | None = None,
+    intraday_fetch: Callable[[str], str] | None = None,
 ) -> None:
     """Override this module's data source paths (tests only -- never call in production)."""
 
-    global _source
+    global _source, _clock_override, _intraday_fetch_override
     _source = _DataSource(
         daily_bars_path=(
             Path(daily_bars_path) if daily_bars_path is not None else _source.daily_bars_path
@@ -119,15 +137,21 @@ def configure(
         ),
         store_path=Path(store_path) if store_path is not None else _source.store_path,
     )
+    if clock is not None:
+        _clock_override = clock
+    if intraday_fetch is not None:
+        _intraday_fetch_override = intraday_fetch
 
 
 def reset_data_source() -> None:
     """Restore the default data source paths (test teardown)."""
 
-    global _source
+    global _source, _clock_override, _intraday_fetch_override
     _source = _DataSource()
     _bars_cache.clear()
     _sectors_cache.clear()
+    _clock_override = None
+    _intraday_fetch_override = None
 
 
 def _cache_key(path: Path) -> tuple[str, float]:
@@ -434,6 +458,64 @@ def vtrade_bars(body: JsonDict) -> JsonDict:
     return {"as_of": as_of, "series": series, "missing": missing}
 
 
+def _is_tse_session_open(now: dt.datetime) -> bool:
+    """True during TSE regular trading hours (weekday 9:00-11:30 / 12:30-15:00 JST).
+
+    Ignores exchange holidays -- this is a cheap gate on "is it worth fetching
+    a live price right now", not a trading-calendar authority.
+    """
+
+    local = now.astimezone(_JST)
+    if local.weekday() >= 5:
+        return False
+    t = local.time()
+    in_morning = _MORNING_SESSION[0] <= t <= _MORNING_SESSION[1]
+    in_afternoon = _AFTERNOON_SESSION[0] <= t <= _AFTERNOON_SESSION[1]
+    return in_morning or in_afternoon
+
+
+def vtrade_live(body: JsonDict) -> JsonDict:
+    """``POST /api/vtrade/live`` -- latest intraday tick per ticker, market hours only.
+
+    Outside TSE hours this returns immediately with ``open: false`` and makes
+    no network call. During market hours it re-scrapes each ticker's Yahoo
+    Finance Japan quote page (see ``portfolio/yahoo_intraday.py``) for the most
+    recent minute bar -- a polling snapshot, not a push stream, so the
+    frontend re-calls this every ~30-60s while the 仮想取引 tab is open to get
+    a "live" feel during the trading session.
+    """
+
+    tickers = _ticker_list(body.get("tickers"))[:_MAX_LIVE_TICKERS]
+    now = (_clock_override or (lambda: dt.datetime.now(_JST)))()
+    is_open = _is_tse_session_open(now)
+    if not tickers or not is_open:
+        return {"open": is_open, "as_of": now.isoformat(), "quotes": {}}
+
+    from investment_assistant.portfolio._market_common import DEFAULT_YAHOO_RATE_LIMIT_POLICY
+    from investment_assistant.portfolio.yahoo_intraday import fetch_yahoo_intraday
+
+    result = fetch_yahoo_intraday(
+        tickers, fetch=_intraday_fetch_override, rate_limit=DEFAULT_YAHOO_RATE_LIMIT_POLICY
+    )
+    intraday = result.get("intraday")
+    quotes: JsonDict = {}
+    if isinstance(intraday, dict):
+        for ticker, ticks in intraday.items():
+            if not ticks:
+                continue
+            last = ticks[-1]
+            price = last.get("close")
+            if price is None:
+                continue
+            quotes[ticker] = {"price": price, "time": last.get("time")}
+    return {
+        "open": True,
+        "as_of": now.isoformat(),
+        "quotes": quotes,
+        "notes": result.get("notes", {}),
+    }
+
+
 def vtrade_ai_portfolio(_body: JsonDict) -> JsonDict:
     """``GET /api/vtrade/ai/portfolio`` -- lazily ticks autopilot, then the AI's book."""
 
@@ -477,7 +559,12 @@ def vtrade_autopilot_run(_body: JsonDict) -> JsonDict:
 
 
 def vtrade_autopilot_config(body: JsonDict) -> JsonDict:
-    """``POST /api/vtrade/autopilot/config`` -- update the persisted preset/auto flag."""
+    """``POST /api/vtrade/autopilot/config`` -- update the persisted preset.
+
+    The autopilot's ``auto`` flag is not configurable: the AI account always
+    runs its lazy catch-up tick, so a request that tries to turn it off is
+    rejected rather than silently ignored.
+    """
 
     store = _store()
 
@@ -492,14 +579,12 @@ def vtrade_autopilot_config(body: JsonDict) -> JsonDict:
             )
 
     raw_auto = body.get("auto")
-    if raw_auto is not None and not isinstance(raw_auto, bool):
-        raise ApiError("auto must be a boolean")
+    if raw_auto is not None and raw_auto is not True:
+        raise ApiError("auto cannot be disabled -- the AI account's autopilot always runs")
 
     with _MUTATION_LOCK:
         if preset_name is not None:
             store.set_autopilot_preset(preset_name)
-        if raw_auto is not None:
-            store.set_autopilot_auto(raw_auto)
 
     return {"ok": True, "preset": store.autopilot_preset(), "auto": store.autopilot_auto()}
 

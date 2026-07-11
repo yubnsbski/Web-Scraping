@@ -128,6 +128,10 @@ type BarSeries = {
 };
 type BarsResp = { as_of: string; series: BarSeries[]; missing: string[] };
 
+type LiveQuote = { price: number; time: string };
+type LiveResp = { open: boolean; as_of: string; quotes: Record<string, LiveQuote> };
+const LIVE_POLL_MS = 45_000;
+
 // ---- constants -----------------------------------------------------------
 
 const WATCH_TICKERS_KEY = "ia.vtrade.watchTickers";
@@ -538,11 +542,13 @@ function EquityChart({
 
 function PriceMiniChart({
   series,
+  liveQuote,
   onSelect,
   onRemove,
   removable,
 }: {
   series: BarSeries;
+  liveQuote?: LiveQuote;
   onSelect: () => void;
   onRemove?: () => void;
   removable: boolean;
@@ -609,7 +615,14 @@ function PriceMiniChart({
         </span>
       </div>
       <span className="vt-panel-name">{series.name}</span>
-      <span className="vt-panel-price">{formatYen(series.last_close)}</span>
+      <span className="vt-panel-price">
+        {formatYen(liveQuote?.price ?? series.last_close)}
+        {liveQuote && (
+          <span className="vt-live-badge" title={`ライブ ${liveQuote.time} 時点`}>
+            ライブ {liveQuote.time}
+          </span>
+        )}
+      </span>
       <div className="vt-mini-chart-wrap">
         <svg ref={svgRef} viewBox={`0 0 ${VB_W} ${VB_H}`} style={{ width: "100%", height: "72px", display: "block" }}>
           {areaPath && <path d={areaPath} fill={areaColor} opacity={0.55} stroke="none" />}
@@ -700,7 +713,6 @@ export function VirtualTradeView() {
 
   // AI autopilot controls
   const [presetPending, setPresetPending] = useState(false);
-  const [autoPending, setAutoPending] = useState(false);
   const [runPending, setRunPending] = useState(false);
   const [runSummary, setRunSummary] = useState<string | null>(null);
 
@@ -711,6 +723,9 @@ export function VirtualTradeView() {
   const [bars, setBars] = useState<BarsResp | null>(null);
   const [barsLoading, setBarsLoading] = useState(false);
   const [barsError, setBarsError] = useState<string | null>(null);
+
+  // live (intraday) prices -- polling snapshot while the market is open
+  const [live, setLive] = useState<LiveResp | null>(null);
 
   useEffect(() => {
     try {
@@ -784,6 +799,30 @@ export function VirtualTradeView() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTickersKey, barsDays]);
+
+  useEffect(() => {
+    if (effectiveTickers.length === 0) {
+      setLive(null);
+      return;
+    }
+    let cancelled = false;
+    async function tick() {
+      try {
+        const res = await api<LiveResp>("/api/vtrade/live", { tickers: effectiveTickers });
+        if (!cancelled) setLive(res);
+      } catch {
+        // Live prices are a best-effort overlay on top of the daily close --
+        // a failed poll should never block or error out the rest of the tab.
+      }
+    }
+    void tick();
+    const interval = window.setInterval(() => void tick(), LIVE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTickersKey]);
 
   async function handleQuote(codeArg?: string) {
     const code = (codeArg ?? tickerInput).trim().toUpperCase();
@@ -874,19 +913,6 @@ export function VirtualTradeView() {
       setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
       setPresetPending(false);
-    }
-  }
-
-  async function toggleAuto() {
-    const next = !(aiPortfolio?.auto ?? true);
-    setAutoPending(true);
-    try {
-      await api<AutopilotConfigResp>("/api/vtrade/autopilot/config", { auto: next });
-      await refreshAll();
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setAutoPending(false);
     }
   }
 
@@ -1036,9 +1062,9 @@ export function VirtualTradeView() {
               </button>
             ))}
           </div>
-          <button type="button" className="table-action" disabled={autoPending} onClick={() => void toggleAuto()}>
-            自動: {aiPortfolio?.auto ?? true ? "ON" : "OFF"}
-          </button>
+          <span className="vt-badge ai" title="AI account autopilot always runs">
+            自動: ON
+          </span>
           <button type="button" className="primary" disabled={runPending} onClick={() => void runAutopilotNow()}>
             {runPending ? "実行中..." : "今すぐ運用実行"}
           </button>
@@ -1109,6 +1135,11 @@ export function VirtualTradeView() {
 
       <div className="detail-section">
         <h4>値動き</h4>
+        <p className={`vt-market-status ${live?.open ? "open" : ""}`}>
+          {live?.open
+            ? `取引時間中・ライブ更新中（最終取得 ${new Date(live.as_of).toLocaleTimeString("ja-JP")}）`
+            : "取引時間外（前営業日の終値を表示中。寄り付き後は自動でライブ更新に切り替わります）"}
+        </p>
         <div className="vt-board-head">
           <div className="vt-side-toggle vt-period-toggle">
             {PERIOD_OPTIONS.map((opt) => (
@@ -1152,6 +1183,7 @@ export function VirtualTradeView() {
                 <PriceMiniChart
                   key={s.ticker}
                   series={s}
+                  liveQuote={live?.quotes[s.ticker]}
                   onSelect={() => prefillFromPanel(s.ticker)}
                   onRemove={() => removeWatchTicker(s.ticker)}
                   removable={watchTickers.includes(s.ticker)}
@@ -1193,6 +1225,11 @@ export function VirtualTradeView() {
             <div>
               株価 {formatYen(quote.price)}（{quote.date} 終値）・単元 {quote.lot}株
             </div>
+            {live?.quotes[quote.ticker] && (
+              <div className="vt-live-line">
+                現在値（ライブ） {formatYen(live.quotes[quote.ticker].price)}（{live.quotes[quote.ticker].time} 時点）
+              </div>
+            )}
           </div>
         )}
         {quoteError && <p className="vt-confirm-error">{quoteError}</p>}

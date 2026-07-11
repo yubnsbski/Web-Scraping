@@ -1820,6 +1820,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/vtrade/performance"): vtrade_api.vtrade_performance,
     ("POST", "/api/vtrade/reset"): vtrade_api.vtrade_reset,
     ("POST", "/api/vtrade/bars"): vtrade_api.vtrade_bars,
+    ("POST", "/api/vtrade/live"): vtrade_api.vtrade_live,
     ("GET", "/api/vtrade/ai/portfolio"): vtrade_api.vtrade_ai_portfolio,
     ("GET", "/api/vtrade/ai/performance"): vtrade_api.vtrade_ai_performance,
     ("POST", "/api/vtrade/autopilot/run"): vtrade_api.vtrade_autopilot_run,

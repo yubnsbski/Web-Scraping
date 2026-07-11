@@ -224,10 +224,8 @@ class VirtualTradingStore:
         self._set_meta("autopilot:preset", name)
 
     def autopilot_auto(self) -> bool:
-        return self._meta_str("autopilot:auto") != "false"
-
-    def set_autopilot_auto(self, value: bool) -> None:
-        self._set_meta("autopilot:auto", "true" if value else "false")
+        """Always ``True`` -- the AI account's autopilot cannot be turned off."""
+        return True
 
     def autopilot_last_run_date(self) -> str | None:
         return self._meta_str("autopilot:last_run_date")
