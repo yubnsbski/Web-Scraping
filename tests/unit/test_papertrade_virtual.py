@@ -234,6 +234,56 @@ def test_ai_and_user_accounts_are_isolated(tmp_path: Path) -> None:
     assert ai_portfolio.cash < ai_portfolio.initial_cash
 
 
+def test_realized_pnl_and_tax_do_not_leak_between_accounts(tmp_path: Path) -> None:
+    """A taxable gain booked in one account's book must never surface in the other's."""
+
+    store_path = tmp_path / "vt.sqlite"
+    bars = {
+        "1000": _bars_series(
+            "1000", [("2026-01-05", 1000.0), ("2026-01-06", 2000.0), ("2026-01-07", 2000.0)]
+        )
+    }
+    broker = VirtualBroker(store_path, bars=bars)
+
+    # "ai" books a large realized gain (buy low, sell high); "user" only buys (no realization).
+    ai_buy = broker.submit_order(
+        OrderRequest(
+            ticker="1000", side="buy", shares=100, account="ai", trade_date="2026-01-05"
+        )
+    )
+    assert ai_buy.ok
+    ai_sell = broker.submit_order(
+        OrderRequest(
+            ticker="1000", side="sell", shares=100, account="ai", trade_date="2026-01-06"
+        )
+    )
+    assert ai_sell.ok
+    assert ai_sell.fill is not None
+    assert ai_sell.fill.realized_pnl is not None and ai_sell.fill.realized_pnl > 0
+    assert ai_sell.fill.tax_delta is not None and ai_sell.fill.tax_delta > 0
+
+    user_buy = broker.submit_order(
+        OrderRequest(
+            ticker="1000", side="buy", shares=100, account="user", trade_date="2026-01-07"
+        )
+    )
+    assert user_buy.ok
+
+    user_portfolio = build_portfolio(store_path, bars=bars, account="user")
+    ai_portfolio = build_portfolio(store_path, bars=bars, account="ai")
+
+    assert user_portfolio.realized_pnl == pytest.approx(0.0)
+    assert user_portfolio.tax_withheld == 0
+    assert ai_portfolio.realized_pnl > 0
+    assert ai_portfolio.tax_withheld > 0
+
+    user_performance = build_performance(store_path, bars=bars, account="user")
+    ai_performance = build_performance(store_path, bars=bars, account="ai")
+
+    assert user_performance.realized_pnl == pytest.approx(0.0)
+    assert ai_performance.realized_pnl > 0
+
+
 def test_reset_wipes_both_accounts(tmp_path: Path) -> None:
     store_path = tmp_path / "vt.sqlite"
     bars = {"1000": _bars_series("1000", [("2026-01-05", 1000.0)])}
@@ -250,3 +300,44 @@ def test_reset_wipes_both_accounts(tmp_path: Path) -> None:
     assert store.autopilot_last_run_date() is None
     assert store.autopilot_auto() is True
     assert store.autopilot_preset() == "balanced"
+
+
+# --- replay against a trimmed bars window --------------------------------
+
+
+def test_replay_survives_trade_dates_outside_the_current_bars_window(tmp_path: Path) -> None:
+    """A trade recorded when older bars were loaded must still replay cleanly
+    once ``daily_bars.csv`` no longer carries that date (e.g. a rolling
+    window). The settlement-date lookup this exercises is display-only, but
+    it must not raise and take down the whole portfolio/performance read.
+    """
+
+    store_path = tmp_path / "vt.sqlite"
+    wide_bars = {
+        "1000": _bars_series(
+            "1000", [("2026-01-05", 1000.0), ("2026-01-06", 1000.0), ("2026-01-07", 1000.0)]
+        )
+    }
+    broker = VirtualBroker(store_path, bars=wide_bars)
+    buy = broker.submit_order(
+        OrderRequest(
+            ticker="1000", side="buy", shares=100, account="user", trade_date="2026-01-05"
+        )
+    )
+    assert buy.ok
+
+    # Simulate the bars source trimming away the trade's date (2026-01-05 is gone).
+    trimmed_bars = {
+        "1000": _bars_series("1000", [("2026-01-06", 1000.0), ("2026-01-07", 1000.0)])
+    }
+
+    portfolio = build_portfolio(store_path, bars=trimmed_bars, account="user")
+    assert portfolio.trade_count == 1
+    assert portfolio.positions[0].ticker == "1000"
+
+    performance = build_performance(store_path, bars=trimmed_bars, account="user")
+    assert performance.curve
+
+    trimmed_broker = VirtualBroker(store_path, bars=trimmed_bars)
+    account = trimmed_broker.account_as_of("user", "2026-01-07")
+    assert account.positions["1000"].shares == 100

@@ -57,7 +57,7 @@ approximation never affects cash, positions, or tax correctness.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -347,17 +347,26 @@ def _real_calendar(bars: BarsMap) -> TradingCalendar:
     return TradingCalendar(dates)
 
 
-def _extended_calendar(bars: BarsMap, *, lookahead: int = 10) -> TradingCalendar:
+def _extended_calendar(
+    bars: BarsMap, *, lookahead: int = 10, extra_dates: Iterable[str] = ()
+) -> TradingCalendar:
     """``_real_calendar`` extended with synthetic Mon-Fri dates for T+2 lookups.
 
-    See the module docstring's "Settlement-date approximation" section.
+    ``extra_dates`` folds in trade dates that may no longer be present in the
+    currently loaded ``bars`` window (e.g. if ``daily_bars.csv`` is ever
+    trimmed to a rolling window). Without this, replaying an old trade whose
+    ``trade_date`` fell out of the bars window would make
+    ``TradingCalendar.add_business_days`` raise ``ValueError`` for a
+    settlement-date lookup that is display-only and irrelevant to cash,
+    position, or tax correctness -- see the module docstring's
+    "Settlement-date approximation" section.
     """
 
-    real = _real_calendar(bars)
-    if not real.dates:
-        return real
-    dates = set(real.dates)
-    cursor = _date.fromisoformat(real.dates[-1])
+    dates = {bar.date for ticker_bars in bars.values() for bar in ticker_bars}
+    dates.update(extra_dates)
+    if not dates:
+        return TradingCalendar(dates)
+    cursor = _date.fromisoformat(max(dates))
     added = 0
     while added < lookahead:
         cursor += timedelta(days=1)
@@ -441,10 +450,9 @@ def _replay(
     return account
 
 
-def _load_account(
-    store: VirtualTradingStore, *, account: AccountId, calendar: TradingCalendar
-) -> Account:
+def _load_account(store: VirtualTradingStore, *, account: AccountId, bars: BarsMap) -> Account:
     trades = store.trades(account=account)
+    calendar = _extended_calendar(bars, extra_dates=(t.trade_date for t in trades))
     return _replay(trades, initial_cash=store.initial_cash(account), calendar=calendar)
 
 
@@ -557,7 +565,7 @@ class VirtualBroker:
         trade_date = bar.date
 
         calendar = _extended_calendar(self.bars)
-        account = _load_account(self.store, account=request.account, calendar=calendar)
+        account = _load_account(self.store, account=request.account, bars=self.bars)
 
         order = Order(
             ticker=ticker, side=request.side, shares=request.shares, decision_date=trade_date
@@ -629,8 +637,8 @@ class VirtualBroker:
         prices or trades from a later date.
         """
 
-        calendar = _extended_calendar(self.bars)
         trades = [t for t in self.store.trades(account=account) if t.trade_date <= as_of]
+        calendar = _extended_calendar(self.bars, extra_dates=(t.trade_date for t in trades))
         return _replay(trades, initial_cash=self.store.initial_cash(account), calendar=calendar)
 
     def equity_as_of(self, account: AccountId, as_of: str) -> float:
@@ -684,7 +692,7 @@ def build_portfolio(
     store = VirtualTradingStore(path)
     trades = store.trades(account=account)
     initial_cash = store.initial_cash(account)
-    calendar = _extended_calendar(bars)
+    calendar = _extended_calendar(bars, extra_dates=(t.trade_date for t in trades))
     acct = _replay(trades, initial_cash=initial_cash, calendar=calendar)
     prices, price_dates = _latest_price_map(bars)
     as_of = _latest_overall_date(bars)
@@ -802,7 +810,7 @@ def build_performance(
         )
 
     real_calendar = _real_calendar(bars)
-    extended_calendar = _extended_calendar(bars)
+    extended_calendar = _extended_calendar(bars, extra_dates=(t.trade_date for t in trades))
     first_trade_date = min(t.trade_date for t in trades)
     price_history = _price_history(bars)
 
