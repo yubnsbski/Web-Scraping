@@ -24,6 +24,12 @@ models/
 rag_index/
 local_docs/
 local_data/
+
+# Exception: src/investment_assistant/data/ is a SOURCE package (collectors,
+# scorers, pipeline, store), NOT a runtime data artifact — keep it tracked so
+# fresh clones (VM deploys) can import investment_assistant.data.
+!src/investment_assistant/data/
+!src/investment_assistant/data/**/*.py
 *.sqlite
 *.db
 
