@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "./api";
 import { ChatView } from "./chat/ChatView";
+import { VirtualTradeView } from "./vtrade/VirtualTradeView";
 
 type Json = Record<string, any>;
-type TabId = "watch" | "data" | "holdings" | "screen" | "detail" | "forecast" | "report" | "chat" | "plans";
+type TabId = "watch" | "data" | "holdings" | "vtrade" | "screen" | "detail" | "forecast" | "report" | "chat" | "plans";
 type DetailRequest = { code: string; assetType: "stock" | "fund"; version: number };
 
 const FINANCIALS_PATH = "local_docs/edinet/financials.csv";
@@ -34,6 +35,7 @@ const TABS: Array<{
   // 詳細機能 (advanced) group below.
   { id: "chat", label: "AIアドバイザー", short: "AI", group: "main" },
   { id: "holdings", label: "保有分析", short: "保有", group: "main" },
+  { id: "vtrade", label: "仮想取引", short: "売買", group: "main" },
   { id: "screen", label: "候補抽出", short: "候補", group: "main" },
   { id: "data", label: "データ更新", short: "更新", group: "main" },
   { id: "report", label: "レポート", short: "報告", group: "more" },
@@ -171,6 +173,7 @@ export function App() {
             }}
           />
         )}
+        {tab === "vtrade" && <VirtualTradeView />}
         {tab === "screen" && (
           <ScreenPanel
             fundsCsv={fundsCsv}
