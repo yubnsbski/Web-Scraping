@@ -66,7 +66,11 @@ def _tab_entries(tabs_block: str) -> list[tuple[str, str, str]]:
 
 
 def test_primary_nav_is_the_ai_advisor_workflow() -> None:
-    """Sprint 2: 4 primary tabs, AI advisor first, in this exact order."""
+    """Sprint 2: AI advisor first in the primary nav, in this exact order.
+
+    Sprint V1 (仮想取引) added the virtual-trading tab to the primary group by
+    owner request, growing the post-Sprint-D4 4-tab workflow to 5 tabs.
+    """
     source = _read_app_tsx()
     tabs_block = _tabs_block(source)
     entries = _tab_entries(tabs_block)
@@ -76,9 +80,10 @@ def test_primary_nav_is_the_ai_advisor_workflow() -> None:
     assert main_entries == [
         ("chat", "AIアドバイザー", "main"),
         ("holdings", "保有分析", "main"),
+        ("vtrade", "仮想取引", "main"),
         ("screen", "候補抽出", "main"),
         ("data", "データ更新", "main"),
-    ], f"primary (main) nav group is no longer the 4-tab AI-advisor workflow: {main_entries!r}"
+    ], f"primary (main) nav group is no longer the AI-advisor workflow: {main_entries!r}"
 
 
 def test_advanced_group_holds_the_demoted_tabs() -> None:

@@ -32,6 +32,7 @@ from investment_assistant.webapi import portfolio as portfolio_api
 from investment_assistant.webapi import reports as report_api
 from investment_assistant.webapi import sprint_api
 from investment_assistant.webapi import stock_analysis as stock_analysis_api
+from investment_assistant.webapi import virtual_trade as vtrade_api
 from investment_assistant.webapi.errors import ApiError
 from investment_assistant.webapi.jobs import JOBS
 
@@ -1811,6 +1812,19 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("POST", "/api/knowledge/diff"): _knowledge_diff,
     ("POST", "/api/feedback"): _feedback,
     ("POST", "/api/feedback/stats"): _feedback_stats,
+    # Virtual trading (みんかぶ風仮想取引) + autonomous AI virtual account
+    ("POST", "/api/vtrade/quote"): vtrade_api.vtrade_quote,
+    ("GET", "/api/vtrade/portfolio"): vtrade_api.vtrade_portfolio,
+    ("POST", "/api/vtrade/order"): vtrade_api.vtrade_order,
+    ("GET", "/api/vtrade/history"): vtrade_api.vtrade_history,
+    ("GET", "/api/vtrade/performance"): vtrade_api.vtrade_performance,
+    ("POST", "/api/vtrade/reset"): vtrade_api.vtrade_reset,
+    ("POST", "/api/vtrade/bars"): vtrade_api.vtrade_bars,
+    ("POST", "/api/vtrade/live"): vtrade_api.vtrade_live,
+    ("GET", "/api/vtrade/ai/portfolio"): vtrade_api.vtrade_ai_portfolio,
+    ("GET", "/api/vtrade/ai/performance"): vtrade_api.vtrade_ai_performance,
+    ("POST", "/api/vtrade/autopilot/run"): vtrade_api.vtrade_autopilot_run,
+    ("POST", "/api/vtrade/autopilot/config"): vtrade_api.vtrade_autopilot_config,
     # Investment AI — data pipeline + scoring + LLM analysis
     ("POST", "/api/stocks/collect"): stock_analysis_api.stocks_collect,
     ("POST", "/api/stocks/import"): stock_analysis_api.stocks_import,
