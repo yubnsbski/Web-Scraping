@@ -11,7 +11,11 @@ Type=oneshot
 User=ubuntu
 WorkingDirectory=/home/ubuntu/Web-Scraping
 ExecStart=/home/ubuntu/Web-Scraping/.venv/bin/investment-assistant market-daily-refresh
-TimeoutStartSec=10800
+# 3716銘柄 x Yahooレート制限リトライで実測 3時間超かかることがある一方、
+# フェッチ結果はメモリ上に貯めてから最後に一括で daily_bars.csv へマージするため
+# 途中で殺されると当日分の書き込みがまるごと失われる。時間切れで壊すより
+# 遅くても完走させる方が安全なのでタイムアウトは無効化する。
+TimeoutStartSec=0
 Nice=10
 NoNewPrivileges=yes
 PrivateTmp=yes
