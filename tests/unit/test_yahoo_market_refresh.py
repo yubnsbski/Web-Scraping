@@ -158,6 +158,23 @@ def test_refresh_yahoo_market_saves_bars_prices_and_fundamentals(tmp_path: Path)
     assert "Toyota" in fundamentals_path.read_text(encoding="utf-8-sig")
 
 
+def test_refresh_yahoo_market_uses_default_fetcher(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "investment_assistant.portfolio.yahoo_market.SafeFetcher",
+        lambda **_kwargs: _Fetcher(),
+    )
+
+    result = refresh_yahoo_market(
+        ["7203"],
+        fetch_fundamentals=False,
+        daily_bars_path=tmp_path / "daily_bars.csv",
+        current_prices_path=tmp_path / "current_prices.csv",
+    )
+
+    assert result["status"] == "completed"
+    assert result["ohlcv_ticker_count"] == 1
+
+
 def test_yahoo_routes_are_registered() -> None:
     routes = available_routes()
 

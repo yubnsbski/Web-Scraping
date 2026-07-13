@@ -63,10 +63,17 @@ class YahooMarketError(RuntimeError):
 
 
 class _Document(Protocol):
-    allowed_by_robots: bool
-    status_code: int | None
-    html: str
-    source: str
+    @property
+    def allowed_by_robots(self) -> bool: ...
+
+    @property
+    def status_code(self) -> int | None: ...
+
+    @property
+    def html(self) -> str: ...
+
+    @property
+    def source(self) -> str: ...
 
 
 class _Fetcher(Protocol):
