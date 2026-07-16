@@ -1825,6 +1825,7 @@ _ROUTES: dict[tuple[str, str], Handler] = {
     ("GET", "/api/vtrade/ai/performance"): vtrade_api.vtrade_ai_performance,
     ("POST", "/api/vtrade/autopilot/run"): vtrade_api.vtrade_autopilot_run,
     ("POST", "/api/vtrade/autopilot/config"): vtrade_api.vtrade_autopilot_config,
+    ("POST", "/api/vtrade/advice"): vtrade_api.vtrade_advice,
     # Investment AI — data pipeline + scoring + LLM analysis
     ("POST", "/api/stocks/collect"): stock_analysis_api.stocks_collect,
     ("POST", "/api/stocks/import"): stock_analysis_api.stocks_import,

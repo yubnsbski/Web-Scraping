@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from investment_assistant.papertrade import PAPERTRADE_DISCLAIMER, autopilot
+from investment_assistant.papertrade import PAPERTRADE_DISCLAIMER, advisor, autopilot
 from investment_assistant.papertrade.mechanics import round_to_tick
 from investment_assistant.papertrade.universe import SectorInfo, load_daily_bars, load_sector_map
 from investment_assistant.papertrade.virtual import (
@@ -107,6 +107,10 @@ _sectors_cache: dict[tuple[str, float], SectorMap] = {}
 _clock_override: Callable[[], dt.datetime] | None = None
 _intraday_fetch_override: Callable[[str], str] | None = None
 
+# Test-only seam for /api/vtrade/advice: a fake LlmServiceProtocol so unit
+# tests never construct the real guarded Gemini service (offline-first).
+_llm_service_override: Any | None = None
+
 # The HTTP layer is a ThreadingHTTPServer (see webapi/server.py), so two
 # requests can hit these handlers concurrently -- e.g. the web UI open in two
 # tabs, each triggering the autopilot lazy tick at once. Every path that
@@ -124,10 +128,11 @@ def configure(
     store_path: str | Path | None = None,
     clock: Callable[[], dt.datetime] | None = None,
     intraday_fetch: Callable[[str], str] | None = None,
+    llm_service: Any | None = None,
 ) -> None:
     """Override this module's data source paths (tests only -- never call in production)."""
 
-    global _source, _clock_override, _intraday_fetch_override
+    global _source, _clock_override, _intraday_fetch_override, _llm_service_override
     _source = _DataSource(
         daily_bars_path=(
             Path(daily_bars_path) if daily_bars_path is not None else _source.daily_bars_path
@@ -141,17 +146,20 @@ def configure(
         _clock_override = clock
     if intraday_fetch is not None:
         _intraday_fetch_override = intraday_fetch
+    if llm_service is not None:
+        _llm_service_override = llm_service
 
 
 def reset_data_source() -> None:
     """Restore the default data source paths (test teardown)."""
 
-    global _source, _clock_override, _intraday_fetch_override
+    global _source, _clock_override, _intraday_fetch_override, _llm_service_override
     _source = _DataSource()
     _bars_cache.clear()
     _sectors_cache.clear()
     _clock_override = None
     _intraday_fetch_override = None
+    _llm_service_override = None
 
 
 def _cache_key(path: Path) -> tuple[str, float]:
@@ -587,6 +595,112 @@ def vtrade_autopilot_config(body: JsonDict) -> JsonDict:
             store.set_autopilot_preset(preset_name)
 
     return {"ok": True, "preset": store.autopilot_preset(), "auto": store.autopilot_auto()}
+
+
+def vtrade_advice(body: JsonDict) -> JsonDict:
+    """``POST /api/vtrade/advice`` -- AI trade advice grounded in the virtual book.
+
+    The 仮想取引 × AIアドバイザー bridge: deterministic per-position signals
+    plus a timing review of the account's own past fills (the feedback loop --
+    see :mod:`investment_assistant.papertrade.advisor`) are rendered into a
+    prompt for the guarded LLM. ``call_real_api: false`` (or any LLM
+    failure/skip) falls back to the deterministic local template, so the
+    endpoint always answers. Advice is 情報提供 only, never a 断定的
+    recommendation, and always carries the paper-trade disclaimer.
+    """
+
+    account_raw = str(body.get("account") or "user")
+    if account_raw not in ("user", "ai"):
+        raise ApiError("account must be 'user' or 'ai'")
+    account: AccountId = "user" if account_raw == "user" else "ai"
+    call_real_api = bool(body.get("call_real_api", True))
+
+    store = _store()
+    bars = _bars()
+    sectors = _sectors()
+    if account == "ai":
+        # Same lazy tick the other /api/vtrade/ai/* reads do, so the advice
+        # never describes a stale AI book.
+        with _MUTATION_LOCK:
+            autopilot.catch_up(store, bars, sectors)
+
+    context = advisor.build_advice_context(
+        store.trades(account=account),
+        bars,
+        sectors,
+        store_path=store.path,
+        account=account,
+        preset_name=store.autopilot_preset(),
+    )
+
+    advice_text = ""
+    source = "local_template"
+    if call_real_api:
+        service = _llm_service_override
+        if service is None:
+            from investment_assistant.llm.factory import build_llm_service
+
+            service = build_llm_service()
+        prompt = advisor.build_advice_prompt(context)
+        response = service.generate(task_type="trade_advice", prompt=prompt)
+        # A "fallback:local_summary:*" response echoes the prompt back as its
+        # text -- never show that as advice; use the local template instead.
+        llm_failed = (
+            getattr(response, "skipped", False)
+            or response.source.startswith("fallback:")
+            or not response.text.strip()
+        )
+        if not llm_failed:
+            advice_text = response.text
+            source = response.source
+        else:
+            source = f"local_fallback:{response.source}"
+    if not advice_text:
+        advice_text = advisor.render_local_advice(context)
+
+    timing = context.timing
+    return {
+        "ok": True,
+        "account": account,
+        "as_of": context.as_of,
+        "advice": advice_text,
+        "source": source,
+        "context": {
+            "preset": context.preset.name,
+            "cash": context.cash,
+            "equity": context.equity,
+            "cash_ratio_pct": context.cash_ratio_pct,
+            "total_return_pct": context.total_return_pct,
+            "trade_count": context.trade_count,
+            "positions": [
+                {
+                    "ticker": pos.ticker,
+                    "name": pos.name,
+                    "sector": pos.sector,
+                    "shares": pos.shares,
+                    "avg_cost": pos.avg_cost,
+                    "price": pos.price,
+                    "unrealized_pnl_pct": pos.unrealized_pnl_pct,
+                    "ma20_gap_pct": pos.ma20_gap_pct,
+                    "momentum_60d_pct": pos.momentum_60d_pct,
+                    "volatility_20d_pct": pos.volatility_20d_pct,
+                    "stop_loss_price": pos.stop_loss_price,
+                    "take_profit_price": pos.take_profit_price,
+                }
+                for pos in context.positions
+            ],
+            "timing": {
+                "horizon_bars": timing.horizon_bars,
+                "buys_evaluated": timing.buys_evaluated,
+                "buy_timing_win_rate_pct": timing.buy_timing_win_rate_pct,
+                "avg_move_after_buy_pct": timing.avg_move_after_buy_pct,
+                "sells_evaluated": timing.sells_evaluated,
+                "sell_timing_win_rate_pct": timing.sell_timing_win_rate_pct,
+                "avg_move_after_sell_pct": timing.avg_move_after_sell_pct,
+            },
+        },
+        "disclaimer": PAPERTRADE_DISCLAIMER,
+    }
 
 
 # --- small parsing helpers ----------------------------------------------------

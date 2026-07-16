@@ -418,3 +418,18 @@
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   }
 }
+
+/* --- AIアドバイス card ---------------------------------------------- */
+
+.vt-advice-card .vt-advice-text {
+  white-space: pre-wrap;
+  line-height: 1.7;
+  font-size: 14px;
+  margin: 10px 0;
+}
+
+.vt-advice-card .vt-advice-timing {
+  font-size: 13px;
+  color: var(--text-dim, #7a8699);
+  margin: 8px 0 0;
+}
