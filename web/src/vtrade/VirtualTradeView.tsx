@@ -132,6 +132,48 @@ type LiveQuote = { price: number; time: string };
 type LiveResp = { open: boolean; as_of: string; quotes: Record<string, LiveQuote> };
 const LIVE_POLL_MS = 45_000;
 
+type AdvicePosition = {
+  ticker: string;
+  name: string;
+  sector: string;
+  shares: number;
+  avg_cost: number;
+  price: number | null;
+  unrealized_pnl_pct: number | null;
+  ma20_gap_pct: number | null;
+  momentum_60d_pct: number | null;
+  volatility_20d_pct: number | null;
+  stop_loss_price: number;
+  take_profit_price: number;
+};
+type AdviceTiming = {
+  horizon_bars: number;
+  buys_evaluated: number;
+  buy_timing_win_rate_pct: number | null;
+  avg_move_after_buy_pct: number | null;
+  sells_evaluated: number;
+  sell_timing_win_rate_pct: number | null;
+  avg_move_after_sell_pct: number | null;
+};
+type AdviceResp = {
+  ok: boolean;
+  account: "user" | "ai";
+  as_of: string | null;
+  advice: string;
+  source: string;
+  context: {
+    preset: string;
+    cash: number;
+    equity: number;
+    cash_ratio_pct: number;
+    total_return_pct: number;
+    trade_count: number;
+    positions: AdvicePosition[];
+    timing: AdviceTiming;
+  };
+  disclaimer: string;
+};
+
 // ---- constants -----------------------------------------------------------
 
 const WATCH_TICKERS_KEY = "ia.vtrade.watchTickers";
@@ -727,6 +769,12 @@ export function VirtualTradeView() {
   // live (intraday) prices -- polling snapshot while the market is open
   const [live, setLive] = useState<LiveResp | null>(null);
 
+  // AIアドバイス (trade advice grounded in the virtual book)
+  const [adviceAccount, setAdviceAccount] = useState<"user" | "ai">("user");
+  const [advice, setAdvice] = useState<AdviceResp | null>(null);
+  const [advicePending, setAdvicePending] = useState(false);
+  const [adviceError, setAdviceError] = useState<string | null>(null);
+
   useEffect(() => {
     try {
       localStorage.setItem(WATCH_TICKERS_KEY, JSON.stringify(watchTickers));
@@ -934,6 +982,23 @@ export function VirtualTradeView() {
     }
   }
 
+  async function fetchAdvice(account: "user" | "ai") {
+    setAdviceAccount(account);
+    setAdvicePending(true);
+    setAdviceError(null);
+    try {
+      const res = await api<AdviceResp>("/api/vtrade/advice", {
+        account,
+        call_real_api: true,
+      });
+      setAdvice(res);
+    } catch (err) {
+      setAdviceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAdvicePending(false);
+    }
+  }
+
   function addWatchTicker() {
     const code = watchInput.trim().toUpperCase();
     if (!code) return;
@@ -1131,6 +1196,101 @@ export function VirtualTradeView() {
         <p className="vt-disclaimer">
           銘柄選択は流動性フィルタ＋戦略プリセット＋業種分散ルールで全自動。仮想売買のみで実際の注文は行いません。
         </p>
+      </div>
+
+      <div className="job-card vt-advice-card">
+        <div className="vt-board-head">
+          <b>AIアドバイス（売買タイミング・注文方法）</b>
+          <div className="vt-side-toggle">
+            <button
+              type="button"
+              className={adviceAccount === "user" ? "active" : ""}
+              disabled={advicePending}
+              onClick={() => void fetchAdvice("user")}
+            >
+              あなたの口座
+            </button>
+            <button
+              type="button"
+              className={adviceAccount === "ai" ? "active" : ""}
+              disabled={advicePending}
+              onClick={() => void fetchAdvice("ai")}
+            >
+              AIの口座
+            </button>
+          </div>
+          <button
+            type="button"
+            className="primary"
+            disabled={advicePending}
+            onClick={() => void fetchAdvice(adviceAccount)}
+          >
+            {advicePending ? "分析中..." : "アドバイスを取得"}
+          </button>
+          {advice && (
+            <span className="vt-badge" title={advice.source}>
+              {advice.source === "gemini" || advice.source === "cache" ? "AI生成" : "ルールベース"}
+            </span>
+          )}
+        </div>
+        {adviceError && <p className="vt-confirm-error">取得に失敗しました: {adviceError}</p>}
+        {!advice && !advicePending && !adviceError && (
+          <p className="vt-empty">
+            保有銘柄のシグナル（20日線乖離・損切り/利確ライン）と、過去の売買タイミングの成否実績をもとに、
+            売り時・買い時と注文方法（成行・指値・逆指値）の考え方をAIが助言します。
+          </p>
+        )}
+        {advice && (
+          <>
+            <p className="vt-advice-text">{advice.advice}</p>
+            {advice.context.positions.length > 0 && (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>コード</th>
+                      <th>銘柄名</th>
+                      <th style={{ textAlign: "right" }}>損益率</th>
+                      <th style={{ textAlign: "right" }}>20日線乖離</th>
+                      <th style={{ textAlign: "right" }}>損切りライン</th>
+                      <th style={{ textAlign: "right" }}>利確ライン</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {advice.context.positions.map((pos) => (
+                      <tr key={pos.ticker}>
+                        <td>{pos.ticker}</td>
+                        <td>{pos.name}</td>
+                        <td
+                          style={{ textAlign: "right" }}
+                          className={pos.unrealized_pnl_pct != null ? pnlClass(pos.unrealized_pnl_pct) : ""}
+                        >
+                          {pos.unrealized_pnl_pct != null ? formatPct(pos.unrealized_pnl_pct) : "—"}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          {pos.ma20_gap_pct != null ? formatPct(pos.ma20_gap_pct) : "—"}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{formatYen(pos.stop_loss_price)}</td>
+                        <td style={{ textAlign: "right" }}>{formatYen(pos.take_profit_price)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="vt-advice-timing">
+              タイミング実績（{advice.context.timing.horizon_bars}営業日後で評価）: 買い勝率{" "}
+              {advice.context.timing.buy_timing_win_rate_pct != null
+                ? `${advice.context.timing.buy_timing_win_rate_pct.toFixed(0)}%（${advice.context.timing.buys_evaluated}件）`
+                : "評価対象なし"}
+              ・売り勝率{" "}
+              {advice.context.timing.sell_timing_win_rate_pct != null
+                ? `${advice.context.timing.sell_timing_win_rate_pct.toFixed(0)}%（${advice.context.timing.sells_evaluated}件）`
+                : "評価対象なし"}
+            </p>
+            <p className="vt-disclaimer">{advice.disclaimer}</p>
+          </>
+        )}
       </div>
 
       <div className="detail-section">
